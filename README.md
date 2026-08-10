@@ -14,6 +14,7 @@ Backend API for a multi-tenant MOT/garage management SaaS.
 - Docker
 
 ## Local setup
+Only have to do the first 2 lines on your first time coding
 
 ```bash
 cp .env.example .env
