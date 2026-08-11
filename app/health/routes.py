@@ -1,8 +1,13 @@
-from flask import Blueprint, jsonify
+from flask_smorest import Blueprint
 
-health_bp = Blueprint("health", __name__)
+health_blp = Blueprint(
+    "health",
+    "health",
+    url_prefix="/api/health",
+    description="Health check endpoints",
+)
 
 
-@health_bp.get("")
+@health_blp.route("/")
 def health():
-    return jsonify({"status": "ok"})
+    return {"status": "ok"}
