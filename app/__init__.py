@@ -15,9 +15,11 @@ def create_app(config_class=Config):
 
     from .health.routes import health_blp
     from .customers.routes import customers_blp
+    from .auth.routes import auth_blp
 
     api.register_blueprint(health_blp)
     api.register_blueprint(customers_blp)
+    api.register_blueprint(auth_blp)
 
     from .models import appointment, customer, garage, reminder, user, vehicle
 

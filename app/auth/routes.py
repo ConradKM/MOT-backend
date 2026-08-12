@@ -1,0 +1,131 @@
+from flask import abort
+from flask_jwt_extended import (
+    create_access_token,
+    create_refresh_token,
+    get_jwt_identity,
+    jwt_required,
+)
+from flask_smorest import Blueprint
+from werkzeug.security import check_password_hash, generate_password_hash
+from flask.views import MethodView
+
+from app.extensions import db
+from app.models.garage import Garage
+from app.models.user import User
+
+from .schemas import LoginSchema, RegisterSchema, TokenSchema
+
+
+auth_blp = Blueprint(
+    "auth",
+    "auth",
+    url_prefix="/api/auth",
+    description="Authentication",
+)
+
+
+@auth_blp.route("/register")
+class Register(MethodView):
+
+    @auth_blp.arguments(RegisterSchema)
+    @auth_blp.response(201, TokenSchema)
+    def post(self, data):
+
+        existing_user = User.query.filter_by(
+            email=data["email"]
+        ).first()
+
+        if existing_user:
+            abort(
+                409,
+                description="A user with this email already exists.",
+            )
+
+        garage = Garage(
+            name=data["garage_name"]
+        )
+
+        db.session.add(garage)
+        db.session.flush()
+
+        user = User(
+            garage_id=garage.id,
+            email=data["email"],
+            password_hash=generate_password_hash(
+                data["password"]
+            ),
+            role="OWNER",
+        )
+
+        db.session.add(user)
+        db.session.commit()
+
+        access_token = create_access_token(
+            identity=str(user.id),
+        )
+
+        refresh_token = create_refresh_token(
+            identity=str(user.id),
+        )
+
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+        }
+
+
+@auth_blp.route("/login")
+class Login(MethodView):
+
+    @auth_blp.arguments(LoginSchema)
+    @auth_blp.response(200, TokenSchema)
+    def post(self, data):
+
+        user = User.query.filter_by(
+            email=data["email"]
+        ).first()
+
+        if not user:
+            abort(
+                401,
+                description="Invalid email or password.",
+            )
+
+        if not check_password_hash(
+            user.password_hash,
+            data["password"],
+        ):
+            abort(
+                401,
+                description="Invalid email or password.",
+            )
+
+        access_token = create_access_token(
+            identity=str(user.id),
+        )
+
+        refresh_token = create_refresh_token(
+            identity=str(user.id),
+        )
+
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+        }
+
+@auth_blp.route("/refresh")
+class Refresh(MethodView):
+
+    @jwt_required(refresh=True)
+    @auth_blp.response(200, TokenSchema)
+    def post(self):
+
+        user_id = get_jwt_identity()
+
+        access_token = create_access_token(
+            identity=user_id,
+        )
+
+        return {
+            "access_token": access_token,
+        }
