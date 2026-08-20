@@ -1,7 +1,7 @@
 """Database-level multi-tenancy isolation tests.
 
-Builds two independent tenants (Garage A / User A / Customer A / Vehicle A and
-Garage B / User B / Customer B / Vehicle B) and verifies that every
+Builds two independent tenants (Garage A / Employee A / Customer A / Vehicle A and
+Garage B / Employee B / Customer B / Vehicle B) and verifies that every
 relationship correctly associates records with their own garage, with no
 cross-tenant leakage at the ORM/DB level.
 """
@@ -53,13 +53,13 @@ def test_full_tenant_tree_is_isolated(
     second_mot_record,
 ):
     # Garage A's tree only contains Garage A's records.
-    assert {u.id for u in garage.users} == {user.id}
+    assert {e.id for e in garage.employees} == {user.id}
     assert {c.id for c in garage.customers} == {customer.id}
     assert {v.id for v in garage.vehicles} == {vehicle.id}
     assert {r.id for r in garage.mot_records} == {mot_record.id}
 
     # Garage B's tree only contains Garage B's records.
-    assert {u.id for u in second_garage.users} == {second_user.id}
+    assert {e.id for e in second_garage.employees} == {second_user.id}
     assert {c.id for c in second_garage.customers} == {second_customer.id}
     assert {v.id for v in second_garage.vehicles} == {second_vehicle.id}
     assert {r.id for r in second_garage.mot_records} == {second_mot_record.id}

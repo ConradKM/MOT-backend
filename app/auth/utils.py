@@ -1,13 +1,13 @@
 from flask_jwt_extended import get_jwt_identity
 
 from app.extensions import db
-from app.models.user import User
+from app.models.employee import Employee
 
 
-def get_current_user() -> User | None:
-    user_id = get_jwt_identity()
+def get_current_employee() -> Employee | None:
+    employee_id = get_jwt_identity()
 
-    if user_id is None:
+    if employee_id is None:
         return None
 
-    return db.session.get(User, int(user_id))
+    return db.session.get(Employee, int(employee_id))

@@ -15,8 +15,8 @@ class Garage(db.Model, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(40))
     address: Mapped[str | None] = mapped_column(String(500))
 
-    users = relationship(
-        "User", back_populates="garage", cascade="all, delete-orphan"
+    employees = relationship(
+        "Employee", back_populates="garage", cascade="all, delete-orphan"
     )
     customers = relationship(
         "Customer", back_populates="garage", cascade="all, delete-orphan"

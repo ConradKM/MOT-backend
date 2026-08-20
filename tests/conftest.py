@@ -22,9 +22,9 @@ from app import create_app
 from app.config import TestConfig
 from app.extensions import db
 from app.models.customer import Customer
+from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.mot_record import MOTRecord
-from app.models.user import User
 from app.models.vehicle import Vehicle
 
 DEFAULT_PASSWORD = "CorrectHorse123!"
@@ -144,7 +144,7 @@ class AuthenticatedClient:
 
 
 # --------------------------------------------------------------------------
-# Domain fixtures - Garage A / User A (the "primary" tenant)
+# Domain fixtures - Garage A / Employee A (the "primary" tenant)
 # --------------------------------------------------------------------------
 
 
@@ -163,7 +163,7 @@ def garage(session):
 
 @pytest.fixture()
 def user(session, garage):
-    u = User(
+    u = Employee(
         garage_id=garage.id,
         email="owner-a@garage-a.example",
         password_hash=generate_password_hash(DEFAULT_PASSWORD),
@@ -248,7 +248,7 @@ def mot_record(session, garage, vehicle):
 
 
 # --------------------------------------------------------------------------
-# Domain fixtures - Garage B / User B (the "other" tenant, for isolation tests)
+# Domain fixtures - Garage B / Employee B (the "other" tenant, for isolation tests)
 # --------------------------------------------------------------------------
 
 
@@ -267,7 +267,7 @@ def second_garage(session):
 
 @pytest.fixture()
 def second_user(session, second_garage):
-    u = User(
+    u = Employee(
         garage_id=second_garage.id,
         email="owner-b@garage-b.example",
         password_hash=generate_password_hash(DEFAULT_PASSWORD),
@@ -346,7 +346,7 @@ RESULTS_DIR = Path(__file__).parent / "test-results"
 
 _SECTION_BY_SUFFIX = [
     ("database/test_garage.py", "Database Tests"),
-    ("database/test_user.py", "Database Tests"),
+    ("database/test_employee.py", "Database Tests"),
     ("database/test_customer.py", "Database Tests"),
     ("database/test_vehicle.py", "Database Tests"),
     ("database/test_mot_record.py", "Database Tests"),

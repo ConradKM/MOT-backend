@@ -13,6 +13,11 @@ def create_app(config_class=Config):
     jwt.init_app(app)
     api.init_app(app)
 
+    api.spec.components.security_scheme(
+        "bearerAuth", {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
+    )
+
+    from .appointments.routes import appointments_blp
     from .auth.routes import auth_blp
     from .customers.routes import customers_blp
     from .garages.routes import garages_blp
@@ -26,7 +31,16 @@ def create_app(config_class=Config):
     api.register_blueprint(customers_blp)
     api.register_blueprint(vehicles_blp)
     api.register_blueprint(mot_records_blp)
+    api.register_blueprint(appointments_blp)
 
-    from .models import appointment, customer, garage, mot_record, reminder, user, vehicle
+    from .models import (  # noqa: F401
+        appointment,
+        customer,
+        employee,
+        garage,
+        mot_record,
+        reminder,
+        vehicle,
+    )
 
     return app

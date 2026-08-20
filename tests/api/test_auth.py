@@ -1,7 +1,7 @@
 """API tests for POST /api/auth/register, /api/auth/login, /api/auth/refresh."""
 
+from app.models.employee import Employee
 from app.models.garage import Garage
-from app.models.user import User
 
 VALID_PAYLOAD = {
     "garage_name": "New Garage",
@@ -38,14 +38,14 @@ def test_register_creates_a_garage(client, session):
 def test_register_creates_a_user(client, session):
     client.post("/api/auth/register", json=VALID_PAYLOAD)
 
-    user = User.query.filter_by(email=VALID_PAYLOAD["email"]).first()
+    user = Employee.query.filter_by(email=VALID_PAYLOAD["email"]).first()
     assert user is not None
 
 
 def test_register_user_belongs_to_the_newly_created_garage(client, session):
     client.post("/api/auth/register", json=VALID_PAYLOAD)
 
-    user = User.query.filter_by(email=VALID_PAYLOAD["email"]).first()
+    user = Employee.query.filter_by(email=VALID_PAYLOAD["email"]).first()
     garage = Garage.query.filter_by(name="New Garage").first()
 
     assert user.garage_id == garage.id
@@ -54,7 +54,7 @@ def test_register_user_belongs_to_the_newly_created_garage(client, session):
 def test_register_password_is_hashed(client, session):
     client.post("/api/auth/register", json=VALID_PAYLOAD)
 
-    user = User.query.filter_by(email=VALID_PAYLOAD["email"]).first()
+    user = Employee.query.filter_by(email=VALID_PAYLOAD["email"]).first()
 
     assert user.password_hash != VALID_PAYLOAD["password"]
     assert VALID_PAYLOAD["password"] not in user.password_hash

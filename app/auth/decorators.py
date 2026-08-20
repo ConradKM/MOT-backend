@@ -2,7 +2,7 @@ from functools import wraps
 
 from flask import abort
 
-from .utils import get_current_user
+from .utils import get_current_employee
 
 
 def owner_required(fn):
@@ -10,9 +10,9 @@ def owner_required(fn):
 
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        user = get_current_user()
+        employee = get_current_employee()
 
-        if user is None or not user.has_role("OWNER"):
+        if employee is None or not employee.has_role("OWNER"):
             abort(403, description="Owner role required.")
 
         return fn(*args, **kwargs)

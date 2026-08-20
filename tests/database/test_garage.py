@@ -4,9 +4,9 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.models.customer import Customer
+from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.mot_record import MOTRecord
-from app.models.user import User
 from app.models.vehicle import Vehicle
 
 
@@ -46,14 +46,14 @@ def test_garage_updated_at_changes_on_update(session, garage):
     assert garage.updated_at >= original_updated_at
 
 
-def test_garage_can_have_users(session, garage):
-    u1 = User(garage_id=garage.id, email="a@example.com", password_hash="x", role="OWNER")
-    u2 = User(garage_id=garage.id, email="b@example.com", password_hash="x", role="STAFF")
-    session.add_all([u1, u2])
+def test_garage_can_have_employees(session, garage):
+    e1 = Employee(garage_id=garage.id, email="a@example.com", password_hash="x", role="OWNER")
+    e2 = Employee(garage_id=garage.id, email="b@example.com", password_hash="x", role="STAFF")
+    session.add_all([e1, e2])
     session.commit()
 
     session.refresh(garage)
-    assert {u.id for u in garage.users} == {u1.id, u2.id}
+    assert {e.id for e in garage.employees} == {e1.id, e2.id}
 
 
 def test_garage_can_have_customers(session, garage):

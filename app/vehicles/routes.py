@@ -4,7 +4,7 @@ from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint
 from sqlalchemy.exc import IntegrityError
 
-from app.auth.utils import get_current_user
+from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.customer import Customer
 from app.models.vehicle import Vehicle
@@ -35,7 +35,7 @@ class VehicleList(MethodView):
     @vehicles_blp.arguments(VehicleQueryArgsSchema, location="query")
     @vehicles_blp.response(200, VehicleSchema(many=True))
     def get(self, args):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
 
         query = Vehicle.query.filter_by(garage_id=garage_id)
 
@@ -55,7 +55,7 @@ class VehicleList(MethodView):
     @vehicles_blp.arguments(VehicleSchema)
     @vehicles_blp.response(201, VehicleSchema)
     def post(self, data):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
 
         _get_owned_customer(data["customer_id"], garage_id)
 
@@ -87,7 +87,7 @@ class VehicleResource(MethodView):
     @jwt_required()
     @vehicles_blp.response(200, VehicleSchema)
     def get(self, vehicle_id):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
 
         vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
@@ -100,7 +100,7 @@ class VehicleResource(MethodView):
     @vehicles_blp.arguments(VehicleUpdateSchema)
     @vehicles_blp.response(200, VehicleSchema)
     def patch(self, data, vehicle_id):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
 
         vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
@@ -124,7 +124,7 @@ class VehicleResource(MethodView):
     @jwt_required()
     @vehicles_blp.response(204)
     def delete(self, vehicle_id):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
 
         vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 

@@ -24,4 +24,6 @@ class Customer(db.Model, TimestampMixin):
     vehicles = relationship(
         "Vehicle", back_populates="customer", cascade="all, delete-orphan"
     )
-    appointments = relationship("Appointment", back_populates="customer")
+    appointments = relationship(
+        "Appointment", back_populates="customer", cascade="all, delete-orphan"
+    )

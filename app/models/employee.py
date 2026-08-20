@@ -8,8 +8,8 @@ from .mixins import TimestampMixin
 ROLES = ("OWNER", "STAFF")
 
 
-class User(db.Model, TimestampMixin):
-    __tablename__ = "users"
+class Employee(db.Model, TimestampMixin):
+    __tablename__ = "employees"
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
@@ -38,7 +38,12 @@ class User(db.Model, TimestampMixin):
 
     garage = relationship(
         "Garage",
-        back_populates="users",
+        back_populates="employees",
+    )
+    appointments = relationship(
+        "Appointment",
+        back_populates="employee",
+        cascade="all, delete-orphan",
     )
 
     def has_role(self, *role_names: str) -> bool:

@@ -3,7 +3,7 @@ from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint
 
-from app.auth.utils import get_current_user
+from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.mot_record import MOTRecord
 from app.models.vehicle import Vehicle
@@ -42,7 +42,7 @@ class MOTRecordList(MethodView):
     @jwt_required()
     @mot_records_blp.response(200, MOTRecordSchema(many=True))
     def get(self, vehicle_id):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
         vehicle = _get_owned_vehicle(vehicle_id, garage_id)
 
         return (
@@ -55,7 +55,7 @@ class MOTRecordList(MethodView):
     @mot_records_blp.arguments(MOTRecordSchema)
     @mot_records_blp.response(201, MOTRecordSchema)
     def post(self, data, vehicle_id):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
         vehicle = _get_owned_vehicle(vehicle_id, garage_id)
 
         record = MOTRecord(
@@ -83,7 +83,7 @@ class MOTRecordResource(MethodView):
     @jwt_required()
     @mot_records_blp.response(200, MOTRecordSchema)
     def get(self, vehicle_id, record_id):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
         vehicle = _get_owned_vehicle(vehicle_id, garage_id)
 
         record = MOTRecord.query.filter_by(id=record_id, vehicle_id=vehicle.id).first()
@@ -97,7 +97,7 @@ class MOTRecordResource(MethodView):
     @mot_records_blp.arguments(MOTRecordUpdateSchema)
     @mot_records_blp.response(200, MOTRecordSchema)
     def patch(self, data, vehicle_id, record_id):
-        garage_id = get_current_user().garage_id
+        garage_id = get_current_employee().garage_id
         vehicle = _get_owned_vehicle(vehicle_id, garage_id)
 
         record = MOTRecord.query.filter_by(id=record_id, vehicle_id=vehicle.id).first()

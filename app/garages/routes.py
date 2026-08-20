@@ -3,7 +3,7 @@ from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint
 
 from app.auth.decorators import owner_required
-from app.auth.utils import get_current_user
+from app.auth.utils import get_current_employee
 from app.extensions import db
 
 from .schemas import GarageSchema, GarageUpdateSchema
@@ -22,14 +22,14 @@ class GarageResource(MethodView):
     @jwt_required()
     @garages_blp.response(200, GarageSchema)
     def get(self):
-        return get_current_user().garage
+        return get_current_employee().garage
 
     @jwt_required()
     @owner_required
     @garages_blp.arguments(GarageUpdateSchema)
     @garages_blp.response(200, GarageSchema)
     def patch(self, data):
-        garage = get_current_user().garage
+        garage = get_current_employee().garage
 
         for field, value in data.items():
             setattr(garage, field, value)

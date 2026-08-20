@@ -10,8 +10,8 @@ from flask_smorest import Blueprint
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
+from app.models.employee import Employee
 from app.models.garage import Garage
-from app.models.user import User
 
 from .schemas import LoginSchema, RefreshTokenSchema, RegisterSchema, TokenSchema
 
@@ -30,11 +30,11 @@ class Register(MethodView):
     @auth_blp.response(201, TokenSchema)
     def post(self, data):
 
-        existing_user = User.query.filter_by(
+        existing_employee = Employee.query.filter_by(
             email=data["email"]
         ).first()
 
-        if existing_user:
+        if existing_employee:
             abort(
                 409,
                 description="A user with this email already exists.",
@@ -47,7 +47,7 @@ class Register(MethodView):
         db.session.add(garage)
         db.session.flush()
 
-        user = User(
+        employee = Employee(
             garage_id=garage.id,
             email=data["email"],
             password_hash=generate_password_hash(
@@ -56,15 +56,15 @@ class Register(MethodView):
             role="OWNER",
         )
 
-        db.session.add(user)
+        db.session.add(employee)
         db.session.commit()
 
         access_token = create_access_token(
-            identity=str(user.id),
+            identity=str(employee.id),
         )
 
         refresh_token = create_refresh_token(
-            identity=str(user.id),
+            identity=str(employee.id),
         )
 
         return {
@@ -80,18 +80,18 @@ class Login(MethodView):
     @auth_blp.response(200, TokenSchema)
     def post(self, data):
 
-        user = User.query.filter_by(
+        employee = Employee.query.filter_by(
             email=data["email"]
         ).first()
 
-        if not user:
+        if not employee:
             abort(
                 401,
                 description="Invalid email or password.",
             )
 
         if not check_password_hash(
-            user.password_hash,
+            employee.password_hash,
             data["password"],
         ):
             abort(
@@ -100,11 +100,11 @@ class Login(MethodView):
             )
 
         access_token = create_access_token(
-            identity=str(user.id),
+            identity=str(employee.id),
         )
 
         refresh_token = create_refresh_token(
-            identity=str(user.id),
+            identity=str(employee.id),
         )
 
         return {
@@ -119,10 +119,10 @@ class Refresh(MethodView):
     @auth_blp.response(200, RefreshTokenSchema)
     def post(self):
 
-        user_id = get_jwt_identity()
+        employee_id = get_jwt_identity()
 
         access_token = create_access_token(
-            identity=user_id,
+            identity=employee_id,
         )
 
         return {
