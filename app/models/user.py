@@ -3,14 +3,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
 
+from .mixins import TimestampMixin
 
-class User(db.Model):
+ROLES = ("OWNER", "STAFF")
+
+
+class User(db.Model, TimestampMixin):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
     garage_id: Mapped[int] = mapped_column(
-        ForeignKey("garages.id"),
+        ForeignKey("garages.id", ondelete="CASCADE"),
         nullable=False,
     )
 
@@ -36,3 +40,6 @@ class User(db.Model):
         "Garage",
         back_populates="users",
     )
+
+    def has_role(self, *role_names: str) -> bool:
+        return self.role in role_names

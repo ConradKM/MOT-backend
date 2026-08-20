@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+tests/test-results/
 .env
 .mypy_cache/
 .idea/
@@ -11,3 +12,4 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+.DS_Store

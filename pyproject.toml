@@ -1,5 +1,7 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-v --durations=10"
+console_output_style = "count"
 
 [tool.ruff]
 line-length = 100

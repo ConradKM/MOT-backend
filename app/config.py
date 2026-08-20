@@ -19,3 +19,16 @@ class Config:
     OPENAPI_SWAGGER_UI_URL = (
         "https://cdn.jsdelivr.net/npm/swagger-ui-dist/"
     )
+
+
+class TestConfig(Config):
+    """Config for the automated test suite. Always targets a dedicated
+    test database, independent of DATABASE_URL, so the developer's dev
+    database is never touched by a test run."""
+
+    TESTING = True
+    SQLALCHEMY_DATABASE_URI = os.getenv(
+        "TEST_DATABASE_URL",
+        "postgresql+psycopg://mot:mot@localhost:5432/mot_garage_test",
+    )
+    PROPAGATE_EXCEPTIONS = True

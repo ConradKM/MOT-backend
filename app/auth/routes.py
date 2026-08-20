@@ -1,4 +1,5 @@
 from flask import abort
+from flask.views import MethodView
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
@@ -7,14 +8,12 @@ from flask_jwt_extended import (
 )
 from flask_smorest import Blueprint
 from werkzeug.security import check_password_hash, generate_password_hash
-from flask.views import MethodView
 
 from app.extensions import db
 from app.models.garage import Garage
 from app.models.user import User
 
-from .schemas import LoginSchema, RegisterSchema, TokenSchema
-
+from .schemas import LoginSchema, RefreshTokenSchema, RegisterSchema, TokenSchema
 
 auth_blp = Blueprint(
     "auth",
@@ -117,7 +116,7 @@ class Login(MethodView):
 class Refresh(MethodView):
 
     @jwt_required(refresh=True)
-    @auth_blp.response(200, TokenSchema)
+    @auth_blp.response(200, RefreshTokenSchema)
     def post(self):
 
         user_id = get_jwt_identity()
