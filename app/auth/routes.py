@@ -1,4 +1,3 @@
-from flask import abort
 from flask.views import MethodView
 from flask_jwt_extended import (
     create_access_token,
@@ -6,7 +5,7 @@ from flask_jwt_extended import (
     get_jwt_identity,
     jwt_required,
 )
-from flask_smorest import Blueprint
+from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
@@ -37,7 +36,7 @@ class Register(MethodView):
         if existing_employee:
             abort(
                 409,
-                description="A user with this email already exists.",
+                message="A user with this email already exists.",
             )
 
         garage = Garage(
@@ -87,7 +86,7 @@ class Login(MethodView):
         if not employee:
             abort(
                 401,
-                description="Invalid email or password.",
+                message="Invalid email or password.",
             )
 
         if not check_password_hash(
@@ -96,7 +95,7 @@ class Login(MethodView):
         ):
             abort(
                 401,
-                description="Invalid email or password.",
+                message="Invalid email or password.",
             )
 
         access_token = create_access_token(

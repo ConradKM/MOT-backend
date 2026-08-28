@@ -1,7 +1,6 @@
-from flask import abort
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
-from flask_smorest import Blueprint
+from flask_smorest import Blueprint, abort
 
 from app.auth.utils import get_current_employee
 from app.extensions import db
@@ -22,7 +21,7 @@ def _get_owned_vehicle(vehicle_id, garage_id):
     vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
     if not vehicle:
-        abort(404, description="Vehicle not found")
+        abort(404, message="Vehicle not found")
 
     return vehicle
 
@@ -89,7 +88,7 @@ class MOTRecordResource(MethodView):
         record = MOTRecord.query.filter_by(id=record_id, vehicle_id=vehicle.id).first()
 
         if not record:
-            abort(404, description="MOT record not found")
+            abort(404, message="MOT record not found")
 
         return record
 
@@ -103,7 +102,7 @@ class MOTRecordResource(MethodView):
         record = MOTRecord.query.filter_by(id=record_id, vehicle_id=vehicle.id).first()
 
         if not record:
-            abort(404, description="MOT record not found")
+            abort(404, message="MOT record not found")
 
         for field, value in data.items():
             setattr(record, field, value)

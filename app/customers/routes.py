@@ -1,7 +1,6 @@
-from flask import abort
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
-from flask_smorest import Blueprint
+from flask_smorest import Blueprint, abort
 
 from app.auth.utils import get_current_employee
 from app.extensions import db
@@ -75,7 +74,7 @@ class CustomerResource(MethodView):
         ).first()
 
         if not customer:
-            abort(404, description="Customer not found")
+            abort(404, message="Customer not found")
 
         return customer
 
@@ -91,7 +90,7 @@ class CustomerResource(MethodView):
         ).first()
 
         if not customer:
-            abort(404, description="Customer not found")
+            abort(404, message="Customer not found")
 
         for field, value in data.items():
             setattr(customer, field, value)
@@ -111,7 +110,7 @@ class CustomerResource(MethodView):
         ).first()
 
         if not customer:
-            abort(404, description="Customer not found")
+            abort(404, message="Customer not found")
 
         db.session.delete(customer)
         db.session.commit()

@@ -1,7 +1,6 @@
-from flask import abort
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
-from flask_smorest import Blueprint
+from flask_smorest import Blueprint, abort
 from sqlalchemy.exc import IntegrityError
 
 from app.auth.utils import get_current_employee
@@ -23,7 +22,7 @@ def _get_owned_customer(customer_id, garage_id):
     customer = Customer.query.filter_by(id=customer_id, garage_id=garage_id).first()
 
     if not customer:
-        abort(422, description="customer_id does not belong to your garage.")
+        abort(422, message="customer_id does not belong to your garage.")
 
     return customer
 
@@ -76,7 +75,7 @@ class VehicleList(MethodView):
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            abort(409, description="A vehicle with this registration number already exists.")
+            abort(409, message="A vehicle with this registration number already exists.")
 
         return vehicle
 
@@ -92,7 +91,7 @@ class VehicleResource(MethodView):
         vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
         if not vehicle:
-            abort(404, description="Vehicle not found")
+            abort(404, message="Vehicle not found")
 
         return vehicle
 
@@ -105,7 +104,7 @@ class VehicleResource(MethodView):
         vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
         if not vehicle:
-            abort(404, description="Vehicle not found")
+            abort(404, message="Vehicle not found")
 
         if "customer_id" in data:
             _get_owned_customer(data["customer_id"], garage_id)
@@ -117,7 +116,7 @@ class VehicleResource(MethodView):
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            abort(409, description="A vehicle with this registration number already exists.")
+            abort(409, message="A vehicle with this registration number already exists.")
 
         return vehicle
 
@@ -129,7 +128,7 @@ class VehicleResource(MethodView):
         vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
         if not vehicle:
-            abort(404, description="Vehicle not found")
+            abort(404, message="Vehicle not found")
 
         db.session.delete(vehicle)
         db.session.commit()

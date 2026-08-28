@@ -1,9 +1,8 @@
 from datetime import UTC, datetime, time
 
-from flask import abort
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
-from flask_smorest import Blueprint
+from flask_smorest import Blueprint, abort
 
 from app.auth.utils import get_current_employee
 from app.extensions import db
@@ -31,7 +30,7 @@ def _get_owned_employee(employee_id, garage_id):
     employee = Employee.query.filter_by(id=employee_id, garage_id=garage_id).first()
 
     if not employee:
-        abort(422, description="employee_id does not belong to your garage.")
+        abort(422, message="employee_id does not belong to your garage.")
 
     return employee
 
@@ -40,7 +39,7 @@ def _get_owned_customer(customer_id, garage_id):
     customer = Customer.query.filter_by(id=customer_id, garage_id=garage_id).first()
 
     if not customer:
-        abort(422, description="customer_id does not belong to your garage.")
+        abort(422, message="customer_id does not belong to your garage.")
 
     return customer
 
@@ -49,17 +48,17 @@ def _get_owned_vehicle(vehicle_id, garage_id, customer_id):
     vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
     if not vehicle:
-        abort(422, description="vehicle_id does not belong to your garage.")
+        abort(422, message="vehicle_id does not belong to your garage.")
 
     if vehicle.customer_id != customer_id:
-        abort(422, description="vehicle_id does not belong to the specified customer.")
+        abort(422, message="vehicle_id does not belong to the specified customer.")
 
     return vehicle
 
 
 def _validate_time_range(start_time, end_time):
     if start_time >= end_time:
-        abort(422, description="start_time must be before end_time.")
+        abort(422, message="start_time must be before end_time.")
 
 
 def _check_for_conflict(employee_id, start_time, end_time, exclude_appointment_id=None):
@@ -76,7 +75,7 @@ def _check_for_conflict(employee_id, start_time, end_time, exclude_appointment_i
     if query.first() is not None:
         abort(
             409,
-            description="The selected employee already has an appointment during this time.",
+            message="The selected employee already has an appointment during this time.",
         )
 
 
@@ -174,7 +173,7 @@ class AppointmentResource(MethodView):
         appointment = Appointment.query.filter_by(id=appointment_id, garage_id=garage_id).first()
 
         if not appointment:
-            abort(404, description="Appointment not found")
+            abort(404, message="Appointment not found")
 
         return appointment
 
@@ -188,7 +187,7 @@ class AppointmentResource(MethodView):
         appointment = Appointment.query.filter_by(id=appointment_id, garage_id=garage_id).first()
 
         if not appointment:
-            abort(404, description="Appointment not found")
+            abort(404, message="Appointment not found")
 
         if "employee_id" in data:
             _get_owned_employee(data["employee_id"], garage_id)
@@ -229,7 +228,7 @@ class AppointmentResource(MethodView):
         appointment = Appointment.query.filter_by(id=appointment_id, garage_id=garage_id).first()
 
         if not appointment:
-            abort(404, description="Appointment not found")
+            abort(404, message="Appointment not found")
 
         # Appointments are historical scheduling records, so deletion cancels
         # rather than hard-deletes - the booking stays visible in the
