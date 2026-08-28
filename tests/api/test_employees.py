@@ -23,7 +23,7 @@ def test_owner_can_create_an_employee(authenticated_user):
     assert resp.status_code == 201
     body = resp.get_json()
     assert body["email"] == "staff@garage-a.example"
-    assert body["garage_id"] == authenticated_user.garage.id
+    assert body["garage_id"] == str(authenticated_user.garage.id)
     assert "id" in body
     assert "created_at" in body
     assert "updated_at" in body
@@ -206,7 +206,7 @@ def test_employee_created_in_garage_a_belongs_to_garage_a(authenticated_user):
         json={"email": "scoped@garage-a.example", "password": "password123"},
     )
 
-    assert resp.get_json()["garage_id"] == authenticated_user.garage.id
+    assert resp.get_json()["garage_id"] == str(authenticated_user.garage.id)
 
 
 def test_user_b_cannot_create_employee_in_garage_a(
@@ -220,4 +220,4 @@ def test_user_b_cannot_create_employee_in_garage_a(
     )
 
     assert resp.status_code == 201
-    assert resp.get_json()["garage_id"] != authenticated_user.garage.id
+    assert resp.get_json()["garage_id"] != str(authenticated_user.garage.id)

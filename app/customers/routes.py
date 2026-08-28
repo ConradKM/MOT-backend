@@ -60,7 +60,7 @@ class CustomerList(MethodView):
         return customer
 
 
-@customers_blp.route("/<int:customer_id>")
+@customers_blp.route("/<uuid:customer_id>")
 class CustomerResource(MethodView):
 
     @jwt_required()

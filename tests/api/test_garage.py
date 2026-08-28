@@ -1,11 +1,13 @@
 """API tests for GET /api/garage, PATCH /api/garage."""
 
+import uuid
+
 
 def test_authenticated_user_can_retrieve_their_garage(authenticated_user):
     resp = authenticated_user.client.get("/api/garage")
 
     assert resp.status_code == 200
-    assert resp.get_json()["id"] == authenticated_user.garage.id
+    assert resp.get_json()["id"] == str(authenticated_user.garage.id)
     assert resp.get_json()["name"] == authenticated_user.garage.name
 
 
@@ -39,7 +41,7 @@ def test_patch_rejects_unknown_identity_fields(authenticated_user):
     # validation error rather than a silent no-op.
     resp = authenticated_user.client.patch(
         "/api/garage",
-        json={"id": authenticated_user.garage.id + 999, "name": "Still Mine"},
+        json={"id": str(uuid.uuid4()), "name": "Still Mine"},
     )
 
     assert resp.status_code == 422
@@ -66,8 +68,8 @@ def test_user_from_garage_a_only_ever_sees_their_own_garage(
     resp_a = authenticated_user.client.get("/api/garage")
     resp_b = second_authenticated_client.get("/api/garage")
 
-    assert resp_a.get_json()["id"] == authenticated_user.garage.id
-    assert resp_b.get_json()["id"] == second_garage.id
+    assert resp_a.get_json()["id"] == str(authenticated_user.garage.id)
+    assert resp_b.get_json()["id"] == str(second_garage.id)
     assert resp_a.get_json()["id"] != resp_b.get_json()["id"]
 
 

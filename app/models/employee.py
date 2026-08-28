@@ -1,19 +1,20 @@
-from sqlalchemy import ForeignKey, String
+import uuid
+
+from sqlalchemy import ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
 
-from .mixins import TimestampMixin
+from .mixins import PrimaryKeyMixin, TimestampMixin
 
 ROLES = ("OWNER", "STAFF")
 
 
-class Employee(db.Model, TimestampMixin):
+class Employee(db.Model, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "employees"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-
-    garage_id: Mapped[int] = mapped_column(
+    garage_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("garages.id", ondelete="CASCADE"),
         nullable=False,
     )

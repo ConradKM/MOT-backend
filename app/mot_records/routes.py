@@ -12,7 +12,7 @@ from .schemas import MOTRecordSchema, MOTRecordUpdateSchema
 mot_records_blp = Blueprint(
     "mot-records",
     "mot-records",
-    url_prefix="/api/vehicles/<int:vehicle_id>/mot-records",
+    url_prefix="/api/vehicles/<uuid:vehicle_id>/mot-records",
     description="MOT test history for a vehicle",
 )
 
@@ -76,7 +76,7 @@ class MOTRecordList(MethodView):
         return record
 
 
-@mot_records_blp.route("/<int:record_id>")
+@mot_records_blp.route("/<uuid:record_id>")
 class MOTRecordResource(MethodView):
 
     @jwt_required()

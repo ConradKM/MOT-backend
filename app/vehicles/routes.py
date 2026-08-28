@@ -80,7 +80,7 @@ class VehicleList(MethodView):
         return vehicle
 
 
-@vehicles_blp.route("/<int:vehicle_id>")
+@vehicles_blp.route("/<uuid:vehicle_id>")
 class VehicleResource(MethodView):
 
     @jwt_required()

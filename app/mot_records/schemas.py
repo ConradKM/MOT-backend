@@ -4,9 +4,9 @@ RESULTS = ("PASS", "FAIL")
 
 
 class MOTRecordSchema(Schema):
-    id = fields.Int(dump_only=True)
-    garage_id = fields.Int(dump_only=True)
-    vehicle_id = fields.Int(dump_only=True)
+    id = fields.UUID(dump_only=True)
+    garage_id = fields.UUID(dump_only=True)
+    vehicle_id = fields.UUID(dump_only=True)
 
     mot_date = fields.Date(required=True)
     expiry_date = fields.Date(required=True)

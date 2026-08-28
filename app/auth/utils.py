@@ -1,3 +1,5 @@
+import uuid
+
 from flask_jwt_extended import get_jwt_identity
 
 from app.extensions import db
@@ -10,4 +12,4 @@ def get_current_employee() -> Employee | None:
     if employee_id is None:
         return None
 
-    return db.session.get(Employee, int(employee_id))
+    return db.session.get(Employee, uuid.UUID(employee_id))

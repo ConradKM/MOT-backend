@@ -1,5 +1,7 @@
 """Model-level tests for Garage (app/models/garage.py)."""
 
+import uuid
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
@@ -27,8 +29,7 @@ def test_garage_requires_name(session):
 
 
 def test_garage_receives_an_id(garage):
-    assert isinstance(garage.id, int)
-    assert garage.id > 0
+    assert isinstance(garage.id, uuid.UUID)
 
 
 def test_garage_timestamps_are_populated(garage):

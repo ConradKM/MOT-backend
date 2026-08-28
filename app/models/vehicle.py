@@ -1,14 +1,15 @@
+import uuid
 from datetime import date
 
-from sqlalchemy import Date, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Date, ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.extensions import db
 
-from .mixins import TimestampMixin
+from .mixins import PrimaryKeyMixin, TimestampMixin
 
 
-class Vehicle(db.Model, TimestampMixin):
+class Vehicle(db.Model, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "vehicles"
     __table_args__ = (
         UniqueConstraint(
@@ -16,13 +17,14 @@ class Vehicle(db.Model, TimestampMixin):
         ),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    garage_id: Mapped[int] = mapped_column(
+    garage_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("garages.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    customer_id: Mapped[int] = mapped_column(
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("customers.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

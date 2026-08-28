@@ -1,16 +1,18 @@
-from sqlalchemy import ForeignKey, String
+import uuid
+
+from sqlalchemy import ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
 
-from .mixins import TimestampMixin
+from .mixins import PrimaryKeyMixin, TimestampMixin
 
 
-class Customer(db.Model, TimestampMixin):
+class Customer(db.Model, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "customers"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    garage_id: Mapped[int] = mapped_column(
+    garage_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("garages.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

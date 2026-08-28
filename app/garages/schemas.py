@@ -2,7 +2,7 @@ from marshmallow import Schema, fields, validate
 
 
 class GarageSchema(Schema):
-    id = fields.Int(dump_only=True)
+    id = fields.UUID(dump_only=True)
 
     name = fields.Str(dump_only=True)
     email = fields.Email(dump_only=True)

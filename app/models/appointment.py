@@ -1,35 +1,37 @@
+import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
 
-from .mixins import TimestampMixin
+from .mixins import PrimaryKeyMixin, TimestampMixin
 
 APPOINTMENT_TYPES = ("MOT", "SERVICE", "MOT_AND_SERVICE", "REPAIR", "OTHER")
 APPOINTMENT_STATUSES = ("BOOKED", "COMPLETED", "CANCELLED", "NO_SHOW")
 
 
-class Appointment(db.Model, TimestampMixin):
+class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "appointments"
     __table_args__ = (
         Index("ix_appointments_garage_id_start_time", "garage_id", "start_time"),
     )
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-
-    garage_id: Mapped[int] = mapped_column(
+    garage_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("garages.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    employee_id: Mapped[int] = mapped_column(
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("employees.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    customer_id: Mapped[int] = mapped_column(
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("customers.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
@@ -37,7 +39,8 @@ class Appointment(db.Model, TimestampMixin):
     # Optional: an appointment doesn't have to be tied to a specific vehicle.
     # If the vehicle is later removed, keep the appointment and just drop the
     # reference rather than losing the booking.
-    vehicle_id: Mapped[int | None] = mapped_column(
+    vehicle_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
         ForeignKey("vehicles.id", ondelete="SET NULL"),
         index=True,
     )

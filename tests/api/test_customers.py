@@ -1,5 +1,6 @@
 """API tests for /api/customers/ and /api/customers/{id}."""
 
+import uuid
 
 # --------------------------------------------------------------------------
 # Success cases
@@ -28,7 +29,7 @@ def test_list_customers(authenticated_user, customer):
     assert resp.status_code == 200
     body = resp.get_json()
     assert isinstance(body, list)
-    assert any(c["id"] == customer.id for c in body)
+    assert any(c["id"] == str(customer.id) for c in body)
 
 
 def test_list_customers_search_filters_by_name(authenticated_user, session, garage):
@@ -54,7 +55,7 @@ def test_retrieve_customer(authenticated_user, customer):
     resp = authenticated_user.client.get(f"/api/customers/{customer.id}")
 
     assert resp.status_code == 200
-    assert resp.get_json()["id"] == customer.id
+    assert resp.get_json()["id"] == str(customer.id)
 
 
 def test_update_customer(authenticated_user, customer):
@@ -107,12 +108,13 @@ def test_create_customer_invalid_data_types(authenticated_user):
     assert resp.status_code == 422
 
 
-def test_retrieve_customer_invalid_id_returns_404(authenticated_user):
-    resp = authenticated_user.client.get("/api/customers/999999")
+def test_retrieve_customer_nonexistent_id_returns_404(authenticated_user):
+    resp = authenticated_user.client.get(f"/api/customers/{uuid.uuid4()}")
     assert resp.status_code == 404
+    assert resp.get_json()["message"] == "Customer not found"
 
 
-def test_retrieve_customer_non_integer_id_returns_404(authenticated_user):
+def test_retrieve_customer_malformed_id_returns_404(authenticated_user):
     resp = authenticated_user.client.get("/api/customers/not-an-id")
     assert resp.status_code == 404
 
@@ -168,8 +170,8 @@ def test_user_a_sees_only_garage_a_customers(
     resp = authenticated_user.client.get("/api/customers/")
     ids = {c["id"] for c in resp.get_json()}
 
-    assert customer.id in ids
-    assert second_customer.id not in ids
+    assert str(customer.id) in ids
+    assert str(second_customer.id) not in ids
 
 
 def test_user_b_sees_only_garage_b_customers(
@@ -178,8 +180,8 @@ def test_user_b_sees_only_garage_b_customers(
     resp = second_authenticated_client.get("/api/customers/")
     ids = {c["id"] for c in resp.get_json()}
 
-    assert second_customer.id in ids
-    assert customer.id not in ids
+    assert str(second_customer.id) in ids
+    assert str(customer.id) not in ids
 
 
 def test_user_a_cannot_retrieve_garage_b_customer(authenticated_user, second_customer):

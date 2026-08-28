@@ -2,7 +2,6 @@ import os
 
 from celery import Celery
 
-
 celery = Celery(
     "mot_garage",
     broker=os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1"),

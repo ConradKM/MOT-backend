@@ -4,12 +4,12 @@ from app.models.appointment import APPOINTMENT_STATUSES, APPOINTMENT_TYPES
 
 
 class AppointmentSchema(Schema):
-    id = fields.Int(dump_only=True)
-    garage_id = fields.Int(dump_only=True)
+    id = fields.UUID(dump_only=True)
+    garage_id = fields.UUID(dump_only=True)
 
-    employee_id = fields.Int(required=True)
-    customer_id = fields.Int(required=True)
-    vehicle_id = fields.Int(allow_none=True, load_default=None)
+    employee_id = fields.UUID(required=True)
+    customer_id = fields.UUID(required=True)
+    vehicle_id = fields.UUID(allow_none=True, load_default=None)
 
     start_time = fields.DateTime(required=True)
     end_time = fields.DateTime(required=True)
@@ -23,9 +23,9 @@ class AppointmentSchema(Schema):
 
 
 class AppointmentUpdateSchema(Schema):
-    employee_id = fields.Int()
-    customer_id = fields.Int()
-    vehicle_id = fields.Int(allow_none=True)
+    employee_id = fields.UUID()
+    customer_id = fields.UUID()
+    vehicle_id = fields.UUID(allow_none=True)
 
     start_time = fields.DateTime()
     end_time = fields.DateTime()
@@ -39,8 +39,8 @@ class AppointmentQueryArgsSchema(Schema):
     date = fields.Date(load_default=None)
     start_date = fields.Date(load_default=None)
     end_date = fields.Date(load_default=None)
-    employee_id = fields.Int(load_default=None)
-    customer_id = fields.Int(load_default=None)
-    vehicle_id = fields.Int(load_default=None)
+    employee_id = fields.UUID(load_default=None)
+    customer_id = fields.UUID(load_default=None)
+    vehicle_id = fields.UUID(load_default=None)
     status = fields.Str(load_default=None, validate=validate.OneOf(APPOINTMENT_STATUSES))
     appointment_type = fields.Str(load_default=None, validate=validate.OneOf(APPOINTMENT_TYPES))

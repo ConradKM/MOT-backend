@@ -1,25 +1,27 @@
+import uuid
 from datetime import date
 
-from sqlalchemy import Date, ForeignKey, String, Text
+from sqlalchemy import Date, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
 
-from .mixins import TimestampMixin
+from .mixins import PrimaryKeyMixin, TimestampMixin
 
 RESULTS = ("PASS", "FAIL")
 
 
-class MOTRecord(db.Model, TimestampMixin):
+class MOTRecord(db.Model, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "mot_records"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
-    garage_id: Mapped[int] = mapped_column(
+    garage_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("garages.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    vehicle_id: Mapped[int] = mapped_column(
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
         ForeignKey("vehicles.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

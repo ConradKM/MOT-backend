@@ -161,7 +161,7 @@ class AppointmentList(MethodView):
         return appointment
 
 
-@appointments_blp.route("/<int:appointment_id>")
+@appointments_blp.route("/<uuid:appointment_id>")
 class AppointmentResource(MethodView):
 
     @jwt_required()

@@ -4,6 +4,7 @@ Note: the implementation only exposes GET (list), POST, GET (single), and
 PATCH for MOT records - there is no DELETE endpoint, so none is tested here.
 """
 
+import uuid
 
 # --------------------------------------------------------------------------
 # Success cases
@@ -21,14 +22,14 @@ def test_create_mot_record(authenticated_user, vehicle):
     assert body["mot_date"] == "2026-01-01"
     assert body["expiry_date"] == "2027-01-01"
     assert body["result"] == "PASS"
-    assert body["vehicle_id"] == vehicle.id
+    assert body["vehicle_id"] == str(vehicle.id)
 
 
 def test_retrieve_mot_record(authenticated_user, vehicle, mot_record):
     resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}/mot-records/{mot_record.id}")
 
     assert resp.status_code == 200
-    assert resp.get_json()["id"] == mot_record.id
+    assert resp.get_json()["id"] == str(mot_record.id)
 
 
 def test_list_mot_records(authenticated_user, vehicle, mot_record):
@@ -36,7 +37,7 @@ def test_list_mot_records(authenticated_user, vehicle, mot_record):
 
     assert resp.status_code == 200
     ids = {r["id"] for r in resp.get_json()}
-    assert mot_record.id in ids
+    assert str(mot_record.id) in ids
 
 
 def test_update_mot_record(authenticated_user, vehicle, mot_record):
@@ -68,12 +69,12 @@ def test_multiple_mot_records_for_one_vehicle(authenticated_user, vehicle):
 
 def test_mot_record_vehicle_relationship(authenticated_user, vehicle, mot_record):
     resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}/mot-records/{mot_record.id}")
-    assert resp.get_json()["vehicle_id"] == vehicle.id
+    assert resp.get_json()["vehicle_id"] == str(vehicle.id)
 
 
 def test_mot_record_garage_relationship(authenticated_user, vehicle, mot_record, garage):
     resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}/mot-records/{mot_record.id}")
-    assert resp.get_json()["garage_id"] == garage.id
+    assert resp.get_json()["garage_id"] == str(garage.id)
 
 
 def test_mot_expiry_date_persistence(authenticated_user, vehicle):
@@ -133,16 +134,16 @@ def test_vehicle_current_mot_expiry_reflects_latest_of_multiple_records(
 # --------------------------------------------------------------------------
 
 
-def test_create_mot_record_invalid_vehicle_id_returns_404(authenticated_user):
+def test_create_mot_record_nonexistent_vehicle_id_returns_404(authenticated_user):
     resp = authenticated_user.client.post(
-        "/api/vehicles/999999/mot-records/",
+        f"/api/vehicles/{uuid.uuid4()}/mot-records/",
         json={"mot_date": "2026-01-01", "expiry_date": "2027-01-01", "result": "PASS"},
     )
     assert resp.status_code == 404
 
 
-def test_retrieve_mot_record_invalid_record_id_returns_404(authenticated_user, vehicle):
-    resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}/mot-records/999999")
+def test_retrieve_mot_record_nonexistent_record_id_returns_404(authenticated_user, vehicle):
+    resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}/mot-records/{uuid.uuid4()}")
     assert resp.status_code == 404
 
 

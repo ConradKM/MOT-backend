@@ -4,8 +4,8 @@ from app.models.employee import ROLES
 
 
 class EmployeeSchema(Schema):
-    id = fields.Int(dump_only=True)
-    garage_id = fields.Int(dump_only=True)
+    id = fields.UUID(dump_only=True)
+    garage_id = fields.UUID(dump_only=True)
 
     email = fields.Email(required=True)
     password = fields.Str(
