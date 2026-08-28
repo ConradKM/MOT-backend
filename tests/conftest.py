@@ -115,7 +115,14 @@ def session(app):
 
 
 class AuthenticatedClient:
-    """Thin wrapper around the Flask test client that injects a Bearer token."""
+    """Thin wrapper around the Flask test client that injects a Bearer token.
+
+    Its own bound token always wins over any `headers=` passed to a call -
+    it merges the caller's headers first, then overlays its Authorization
+    header on top. That means it can't be used to act as a different
+    identity for one call; use the plain `client` fixture with an explicit
+    Authorization header for that instead.
+    """
 
     def __init__(self, client, token):
         self._client = client
@@ -353,6 +360,7 @@ _SECTION_BY_SUFFIX = [
     ("database/test_isolation.py", "Database Tests"),
     ("api/test_auth.py", "Authentication"),
     ("api/test_garage.py", "Garage API"),
+    ("api/test_employees.py", "Employee API"),
     ("api/test_customers.py", "Customer API"),
     ("api/test_vehicles.py", "Vehicle API"),
     ("api/test_mot_records.py", "MOT API"),
