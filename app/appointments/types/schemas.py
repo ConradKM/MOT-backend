@@ -11,6 +11,7 @@ class AppointmentTypeSchema(Schema):
     description = fields.Str(allow_none=True, validate=validate.Length(max=500))
     base_price = fields.Decimal(allow_none=True, as_string=True, places=2)
     status = fields.Str(load_default="ACTIVE", validate=validate.OneOf(APPOINTMENT_TYPE_STATUSES))
+    default_duration_minutes = fields.Int(allow_none=True, validate=validate.Range(min=1))
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
@@ -21,6 +22,7 @@ class AppointmentTypeUpdateSchema(Schema):
     description = fields.Str(allow_none=True, validate=validate.Length(max=500))
     base_price = fields.Decimal(allow_none=True, as_string=True, places=2)
     status = fields.Str(validate=validate.OneOf(APPOINTMENT_TYPE_STATUSES))
+    default_duration_minutes = fields.Int(allow_none=True, validate=validate.Range(min=1))
 
 
 class AppointmentTypeQueryArgsSchema(Schema):

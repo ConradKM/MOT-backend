@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
@@ -83,6 +83,20 @@ def _validate_time_range(start_time, end_time):
         abort(422, message="start_time must be before end_time.")
 
 
+def _resolve_end_time(start_time, end_time, appointment_type):
+    if end_time is not None:
+        return end_time
+
+    if appointment_type.default_duration_minutes is None:
+        abort(
+            422,
+            message="end_time is required - this appointment type has no default "
+            "duration set.",
+        )
+
+    return start_time + timedelta(minutes=appointment_type.default_duration_minutes)
+
+
 def _check_for_conflict(employee_id, start_time, end_time, exclude_appointment_id=None):
     query = Appointment.query.filter(
         Appointment.employee_id == employee_id,
@@ -157,14 +171,16 @@ class AppointmentList(MethodView):
 
         _get_owned_employee(data["employee_id"], garage_id)
         _get_owned_customer(data["customer_id"], garage_id)
-        _get_owned_appointment_type(data["appointment_type_id"], garage_id)
+        appointment_type = _get_owned_appointment_type(data["appointment_type_id"], garage_id)
 
         vehicle_id = data.get("vehicle_id")
         if vehicle_id is not None:
             _get_owned_vehicle(vehicle_id, garage_id, data["customer_id"])
 
-        _validate_time_range(data["start_time"], data["end_time"])
-        _check_for_conflict(data["employee_id"], data["start_time"], data["end_time"])
+        end_time = _resolve_end_time(data["start_time"], data["end_time"], appointment_type)
+
+        _validate_time_range(data["start_time"], end_time)
+        _check_for_conflict(data["employee_id"], data["start_time"], end_time)
 
         appointment = Appointment(
             garage_id=garage_id,
@@ -172,7 +188,7 @@ class AppointmentList(MethodView):
             customer_id=data["customer_id"],
             vehicle_id=vehicle_id,
             start_time=data["start_time"],
-            end_time=data["end_time"],
+            end_time=end_time,
             appointment_type_id=data["appointment_type_id"],
             status=data.get("status") or "BOOKED",
             notes=data.get("notes"),

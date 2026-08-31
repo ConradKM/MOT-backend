@@ -27,7 +27,16 @@ auth_blp = Blueprint(
 # way to build their own list from scratch. Tracked for removal in a
 # follow-up issue once that exists - see migration 46c9ee69459d's successor
 # for the equivalent one-time backfill for garages that already existed.
-_DEFAULT_APPOINTMENT_TYPE_NAMES = ("MOT", "Service", "MOT + Service", "Repair", "Other")
+# (name, default_duration_minutes) - Repair/Other are too variable to guess
+# a duration for, so they're left unset (still bookable, just requires an
+# explicit end_time).
+_DEFAULT_APPOINTMENT_TYPES = (
+    ("MOT", 45),
+    ("Service", 60),
+    ("MOT + Service", 105),
+    ("Repair", None),
+    ("Other", None),
+)
 
 
 @auth_blp.route("/register")
@@ -54,8 +63,12 @@ class Register(MethodView):
         db.session.add(garage)
         db.session.flush()
 
-        for name in _DEFAULT_APPOINTMENT_TYPE_NAMES:
-            db.session.add(GarageAppointmentType(garage_id=garage.id, name=name))
+        for name, duration_minutes in _DEFAULT_APPOINTMENT_TYPES:
+            db.session.add(
+                GarageAppointmentType(
+                    garage_id=garage.id, name=name, default_duration_minutes=duration_minutes
+                )
+            )
 
         employee = Employee(
             garage_id=garage.id,

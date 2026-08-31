@@ -64,6 +64,7 @@ class AppointmentTypeList(MethodView):
             name=data["name"],
             description=data.get("description"),
             base_price=data.get("base_price"),
+            default_duration_minutes=data.get("default_duration_minutes"),
             status=data.get("status") or "ACTIVE",
         )
 

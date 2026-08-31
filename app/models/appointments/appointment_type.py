@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Numeric, String, Uuid
+from sqlalchemy import ForeignKey, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -38,6 +38,10 @@ class GarageAppointmentType(db.Model, PrimaryKeyMixin, TimestampMixin):
     description: Mapped[str | None] = mapped_column(String(500))
     base_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    # How long this kind of appointment normally takes. Optional - when set,
+    # creating an appointment of this type can omit end_time and have it
+    # derived from start_time + this duration (see appointments/routes.py).
+    default_duration_minutes: Mapped[int | None] = mapped_column(Integer)
 
     garage = relationship("Garage", back_populates="appointment_types")
     checklist_template = relationship(

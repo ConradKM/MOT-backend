@@ -12,7 +12,9 @@ class AppointmentSchema(Schema):
     vehicle_id = fields.UUID(allow_none=True, load_default=None)
 
     start_time = fields.DateTime(required=True)
-    end_time = fields.DateTime(required=True)
+    # Optional on create: if omitted, derived from the appointment type's
+    # default_duration_minutes (422 if the type has none set either).
+    end_time = fields.DateTime(allow_none=True, load_default=None)
 
     appointment_type_id = fields.UUID(required=True)
     status = fields.Str(dump_default="BOOKED", validate=validate.OneOf(APPOINTMENT_STATUSES))
