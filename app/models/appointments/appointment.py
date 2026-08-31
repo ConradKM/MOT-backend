@@ -6,9 +6,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
 
-from .mixins import PrimaryKeyMixin, TimestampMixin
+from ..mixins import PrimaryKeyMixin, TimestampMixin
 
-APPOINTMENT_TYPES = ("MOT", "SERVICE", "MOT_AND_SERVICE", "REPAIR", "OTHER")
 APPOINTMENT_STATUSES = ("BOOKED", "COMPLETED", "CANCELLED", "NO_SHOW")
 
 
@@ -44,11 +43,19 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):
         ForeignKey("vehicles.id", ondelete="SET NULL"),
         index=True,
     )
+    # No ondelete clause (blocks deletion while in use, the default) - an
+    # appointment type in use by real bookings shouldn't be deletable out
+    # from under them; see appointment_types routes for the 409 this causes.
+    appointment_type_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid,
+        ForeignKey("garage_appointment_types.id"),
+        nullable=False,
+        index=True,
+    )
 
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    appointment_type: Mapped[str] = mapped_column(String(40), nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="BOOKED", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -56,3 +63,10 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):
     employee = relationship("Employee", back_populates="appointments")
     customer = relationship("Customer", back_populates="appointments")
     vehicle = relationship("Vehicle", back_populates="appointments")
+    appointment_type = relationship("GarageAppointmentType", back_populates="appointments")
+    checklist = relationship(
+        "AppointmentChecklist",
+        back_populates="appointment",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )

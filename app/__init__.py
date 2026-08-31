@@ -17,7 +17,10 @@ def create_app(config_class=Config):
         "bearerAuth", {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
     )
 
+    from .appointments.checklist_templates.routes import checklist_templates_blp
+    from .appointments.checklists.routes import appointment_checklists_blp
     from .appointments.routes import appointments_blp
+    from .appointments.types.routes import appointment_types_blp
     from .auth.routes import auth_blp
     from .customers.routes import customers_blp
     from .employees.routes import employees_blp
@@ -33,16 +36,20 @@ def create_app(config_class=Config):
     api.register_blueprint(employees_blp)
     api.register_blueprint(vehicles_blp)
     api.register_blueprint(mot_records_blp)
+    api.register_blueprint(appointment_types_blp)
+    api.register_blueprint(checklist_templates_blp)
     api.register_blueprint(appointments_blp)
+    api.register_blueprint(appointment_checklists_blp)
 
-    from .models import (  # noqa: F401
+    from .models import customer, employee, garage, mot_record, reminder, vehicle  # noqa: F401
+    from .models.appointments import (  # noqa: F401
         appointment,
-        customer,
-        employee,
-        garage,
-        mot_record,
-        reminder,
-        vehicle,
+        appointment_checklist,
+        appointment_checklist_item,
+        appointment_type,
+        checklist_item_media,
+        checklist_template,
+        checklist_template_item,
     )
 
     return app

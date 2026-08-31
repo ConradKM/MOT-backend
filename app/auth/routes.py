@@ -9,6 +9,7 @@ from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.employee import Employee
 from app.models.garage import Garage
 
@@ -20,6 +21,13 @@ auth_blp = Blueprint(
     url_prefix="/api/auth",
     description="Authentication",
 )
+
+# Temporary stopgap so a brand-new garage isn't left with zero appointment
+# types (and therefore unable to book anything) before owners have a real
+# way to build their own list from scratch. Tracked for removal in a
+# follow-up issue once that exists - see migration 46c9ee69459d's successor
+# for the equivalent one-time backfill for garages that already existed.
+_DEFAULT_APPOINTMENT_TYPE_NAMES = ("MOT", "Service", "MOT + Service", "Repair", "Other")
 
 
 @auth_blp.route("/register")
@@ -45,6 +53,9 @@ class Register(MethodView):
 
         db.session.add(garage)
         db.session.flush()
+
+        for name in _DEFAULT_APPOINTMENT_TYPE_NAMES:
+            db.session.add(GarageAppointmentType(garage_id=garage.id, name=name))
 
         employee = Employee(
             garage_id=garage.id,

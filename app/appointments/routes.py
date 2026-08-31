@@ -6,7 +6,8 @@ from flask_smorest import Blueprint, abort
 
 from app.auth.utils import get_current_employee
 from app.extensions import db
-from app.models.appointment import Appointment
+from app.models.appointments.appointment import Appointment
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.vehicle import Vehicle
@@ -42,6 +43,27 @@ def _get_owned_customer(customer_id, garage_id):
         abort(422, message="customer_id does not belong to your garage.")
 
     return customer
+
+
+def _get_owned_appointment_type(appointment_type_id, garage_id):
+    appointment_type = GarageAppointmentType.query.filter_by(
+        id=appointment_type_id, garage_id=garage_id
+    ).first()
+
+    if not appointment_type:
+        abort(422, message="appointment_type_id does not belong to your garage.")
+
+    # Only blocks *assigning* a hidden/deprecated type to an appointment
+    # (here, on create or on an explicit type change) - an appointment that
+    # already uses a type before it was hidden/deprecated is unaffected,
+    # since this is only called when appointment_type_id is being set.
+    if appointment_type.status != "ACTIVE":
+        abort(
+            422,
+            message="This appointment type is not active and cannot be used for new bookings.",
+        )
+
+    return appointment_type
 
 
 def _get_owned_vehicle(vehicle_id, garage_id, customer_id):
@@ -110,8 +132,8 @@ class AppointmentList(MethodView):
         if args.get("status") is not None:
             query = query.filter(Appointment.status == args["status"])
 
-        if args.get("appointment_type") is not None:
-            query = query.filter(Appointment.appointment_type == args["appointment_type"])
+        if args.get("appointment_type_id") is not None:
+            query = query.filter(Appointment.appointment_type_id == args["appointment_type_id"])
 
         # Calendar-day filters compare against UTC day boundaries, since
         # start_time is always stored and compared as an absolute instant.
@@ -135,6 +157,7 @@ class AppointmentList(MethodView):
 
         _get_owned_employee(data["employee_id"], garage_id)
         _get_owned_customer(data["customer_id"], garage_id)
+        _get_owned_appointment_type(data["appointment_type_id"], garage_id)
 
         vehicle_id = data.get("vehicle_id")
         if vehicle_id is not None:
@@ -150,7 +173,7 @@ class AppointmentList(MethodView):
             vehicle_id=vehicle_id,
             start_time=data["start_time"],
             end_time=data["end_time"],
-            appointment_type=data["appointment_type"],
+            appointment_type_id=data["appointment_type_id"],
             status=data.get("status") or "BOOKED",
             notes=data.get("notes"),
         )
@@ -191,6 +214,9 @@ class AppointmentResource(MethodView):
 
         if "employee_id" in data:
             _get_owned_employee(data["employee_id"], garage_id)
+
+        if "appointment_type_id" in data:
+            _get_owned_appointment_type(data["appointment_type_id"], garage_id)
 
         effective_customer_id = data.get("customer_id", appointment.customer_id)
         if "customer_id" in data:

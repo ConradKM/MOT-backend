@@ -1,6 +1,6 @@
 from marshmallow import Schema, fields, validate
 
-from app.models.appointment import APPOINTMENT_STATUSES, APPOINTMENT_TYPES
+from app.models.appointments.appointment import APPOINTMENT_STATUSES
 
 
 class AppointmentSchema(Schema):
@@ -14,7 +14,7 @@ class AppointmentSchema(Schema):
     start_time = fields.DateTime(required=True)
     end_time = fields.DateTime(required=True)
 
-    appointment_type = fields.Str(required=True, validate=validate.OneOf(APPOINTMENT_TYPES))
+    appointment_type_id = fields.UUID(required=True)
     status = fields.Str(dump_default="BOOKED", validate=validate.OneOf(APPOINTMENT_STATUSES))
     notes = fields.Str(allow_none=True)
 
@@ -30,7 +30,7 @@ class AppointmentUpdateSchema(Schema):
     start_time = fields.DateTime()
     end_time = fields.DateTime()
 
-    appointment_type = fields.Str(validate=validate.OneOf(APPOINTMENT_TYPES))
+    appointment_type_id = fields.UUID()
     status = fields.Str(validate=validate.OneOf(APPOINTMENT_STATUSES))
     notes = fields.Str(allow_none=True)
 
@@ -43,4 +43,4 @@ class AppointmentQueryArgsSchema(Schema):
     customer_id = fields.UUID(load_default=None)
     vehicle_id = fields.UUID(load_default=None)
     status = fields.Str(load_default=None, validate=validate.OneOf(APPOINTMENT_STATUSES))
-    appointment_type = fields.Str(load_default=None, validate=validate.OneOf(APPOINTMENT_TYPES))
+    appointment_type_id = fields.UUID(load_default=None)

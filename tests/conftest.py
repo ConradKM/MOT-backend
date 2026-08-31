@@ -364,6 +364,9 @@ _SECTION_BY_SUFFIX = [
     ("api/test_customers.py", "Customer API"),
     ("api/test_vehicles.py", "Vehicle API"),
     ("api/test_mot_records.py", "MOT API"),
+    ("api/test_appointment_types.py", "Appointment Type API"),
+    ("api/test_checklist_templates.py", "Checklist Template API"),
+    ("api/test_appointment_checklists.py", "Appointment Checklist API"),
     ("test_health.py", "Health Check"),
 ]
 
