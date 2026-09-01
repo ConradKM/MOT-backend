@@ -24,7 +24,7 @@ def create_app(config_class=Config):
     from .auth.routes import auth_blp
     from .customers.routes import customers_blp
     from .employees.routes import employees_blp
-    from .garages.routes import garages_blp
+    from .garages.routes import garages_blp, public_garages_blp
     from .health.routes import health_blp
     from .mot_records.routes import mot_records_blp
     from .vehicles.routes import vehicles_blp
@@ -32,6 +32,7 @@ def create_app(config_class=Config):
     api.register_blueprint(health_blp)
     api.register_blueprint(auth_blp)
     api.register_blueprint(garages_blp)
+    api.register_blueprint(public_garages_blp)
     api.register_blueprint(customers_blp)
     api.register_blueprint(employees_blp)
     api.register_blueprint(vehicles_blp)

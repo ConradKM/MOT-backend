@@ -18,3 +18,10 @@ class GarageUpdateSchema(Schema):
     email = fields.Email(allow_none=True)
     phone = fields.Str(allow_none=True, validate=validate.Length(max=40))
     address = fields.Str(allow_none=True, validate=validate.Length(max=500))
+
+
+class PublicGarageSchema(Schema):
+    """Garage fields safe to expose without auth, for the public booking flow."""
+
+    id = fields.UUID(dump_only=True)
+    name = fields.Str(dump_only=True)
