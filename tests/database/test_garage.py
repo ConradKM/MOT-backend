@@ -48,8 +48,8 @@ def test_garage_updated_at_changes_on_update(session, garage):
 
 
 def test_garage_can_have_employees(session, garage):
-    e1 = Employee(garage_id=garage.id, email="a@example.com", password_hash="x", role="OWNER")
-    e2 = Employee(garage_id=garage.id, email="b@example.com", password_hash="x", role="STAFF")
+    e1 = Employee(garage_id=garage.id, email="a@example.com", password_hash="x")
+    e2 = Employee(garage_id=garage.id, email="b@example.com", password_hash="x")
     session.add_all([e1, e2])
     session.commit()
 

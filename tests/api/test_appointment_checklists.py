@@ -287,7 +287,6 @@ def test_user_a_cannot_retrieve_garage_bs_appointment_checklist(
         garage_id=second_garage.id,
         email="b-tech@garage-b.example",
         password_hash=generate_password_hash("password123"),
-        role="OWNER",
     )
     b_customer = Customer(garage_id=second_garage.id, first_name="Bob", last_name="B")
     session.add_all([b_employee, b_customer])

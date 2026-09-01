@@ -25,6 +25,7 @@ from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.mot_record import MOTRecord
+from app.models.role import Role
 from app.models.vehicle import Vehicle
 
 DEFAULT_PASSWORD = "CorrectHorse123!"
@@ -169,12 +170,28 @@ def garage(session):
 
 
 @pytest.fixture()
-def user(session, garage):
+def owner_role(session, garage):
+    r = Role(garage_id=garage.id, name="OWNER")
+    session.add(r)
+    session.commit()
+    return r
+
+
+@pytest.fixture()
+def staff_role(session, garage):
+    r = Role(garage_id=garage.id, name="STAFF")
+    session.add(r)
+    session.commit()
+    return r
+
+
+@pytest.fixture()
+def user(session, garage, owner_role):
     u = Employee(
         garage_id=garage.id,
         email="owner-a@garage-a.example",
         password_hash=generate_password_hash(DEFAULT_PASSWORD),
-        role="OWNER",
+        roles=[owner_role],
     )
     session.add(u)
     session.commit()
@@ -273,12 +290,20 @@ def second_garage(session):
 
 
 @pytest.fixture()
-def second_user(session, second_garage):
+def second_owner_role(session, second_garage):
+    r = Role(garage_id=second_garage.id, name="OWNER")
+    session.add(r)
+    session.commit()
+    return r
+
+
+@pytest.fixture()
+def second_user(session, second_garage, second_owner_role):
     u = Employee(
         garage_id=second_garage.id,
         email="owner-b@garage-b.example",
         password_hash=generate_password_hash(DEFAULT_PASSWORD),
-        role="OWNER",
+        roles=[second_owner_role],
     )
     session.add(u)
     session.commit()

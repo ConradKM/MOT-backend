@@ -6,8 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
-
-ROLES = ("OWNER", "STAFF")
+from .role import employee_roles
 
 
 class Employee(db.Model, PrimaryKeyMixin, TimestampMixin):
@@ -26,14 +25,11 @@ class Employee(db.Model, PrimaryKeyMixin, TimestampMixin):
         index=True,
     )
 
+    first_name: Mapped[str | None] = mapped_column(String(100))
+    last_name: Mapped[str | None] = mapped_column(String(100))
+
     password_hash: Mapped[str] = mapped_column(
         String(255),
-        nullable=False,
-    )
-
-    role: Mapped[str] = mapped_column(
-        String(30),
-        default="OWNER",
         nullable=False,
     )
 
@@ -46,6 +42,12 @@ class Employee(db.Model, PrimaryKeyMixin, TimestampMixin):
         back_populates="employee",
         cascade="all, delete-orphan",
     )
+    roles = relationship(
+        "Role",
+        secondary=employee_roles,
+        back_populates="employees",
+    )
 
     def has_role(self, *role_names: str) -> bool:
-        return self.role in role_names
+        names = {role.name for role in self.roles}
+        return any(name in names for name in role_names)

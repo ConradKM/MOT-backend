@@ -27,6 +27,7 @@ def create_app(config_class=Config):
     from .garages.routes import garages_blp, public_garages_blp
     from .health.routes import health_blp
     from .mot_records.routes import mot_records_blp
+    from .roles.routes import roles_blp
     from .vehicles.routes import vehicles_blp
 
     api.register_blueprint(health_blp)
@@ -35,6 +36,7 @@ def create_app(config_class=Config):
     api.register_blueprint(public_garages_blp)
     api.register_blueprint(customers_blp)
     api.register_blueprint(employees_blp)
+    api.register_blueprint(roles_blp)
     api.register_blueprint(vehicles_blp)
     api.register_blueprint(mot_records_blp)
     api.register_blueprint(appointment_types_blp)
@@ -42,7 +44,15 @@ def create_app(config_class=Config):
     api.register_blueprint(appointments_blp)
     api.register_blueprint(appointment_checklists_blp)
 
-    from .models import customer, employee, garage, mot_record, reminder, vehicle  # noqa: F401
+    from .models import (  # noqa: F401
+        customer,
+        employee,
+        garage,
+        mot_record,
+        reminder,
+        role,
+        vehicle,
+    )
     from .models.appointments import (  # noqa: F401
         appointment,
         appointment_checklist,

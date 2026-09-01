@@ -12,7 +12,6 @@ def test_employee_can_be_created(session, garage):
         garage_id=garage.id,
         email="new-employee@example.com",
         password_hash=generate_password_hash("password123"),
-        role="OWNER",
     )
     session.add(e)
     session.commit()
@@ -89,12 +88,25 @@ def test_employee_timestamps_are_populated(user):
     assert user.updated_at is not None
 
 
-def test_employee_default_role_is_owner(session, garage):
+def test_employee_has_no_roles_by_default(session, garage):
     e = Employee(garage_id=garage.id, email="default-role@example.com", password_hash="x")
     session.add(e)
     session.commit()
 
-    assert e.role == "OWNER"
+    assert e.roles == []
+
+
+def test_employee_can_have_multiple_roles(session, garage, owner_role, staff_role):
+    e = Employee(
+        garage_id=garage.id,
+        email="multi-role@example.com",
+        password_hash="x",
+        roles=[owner_role, staff_role],
+    )
+    session.add(e)
+    session.commit()
+
+    assert {r.name for r in e.roles} == {"OWNER", "STAFF"}
 
 
 def test_employee_has_role_helper(user):

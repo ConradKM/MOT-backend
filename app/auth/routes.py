@@ -12,6 +12,7 @@ from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.employee import Employee
 from app.models.garage import Garage
+from app.models.role import Role
 
 from .schemas import LoginSchema, RefreshTokenSchema, RegisterSchema, TokenSchema
 
@@ -70,13 +71,17 @@ class Register(MethodView):
                 )
             )
 
+        owner_role = Role(garage_id=garage.id, name="OWNER")
+        db.session.add(owner_role)
+        db.session.add(Role(garage_id=garage.id, name="STAFF"))
+
         employee = Employee(
             garage_id=garage.id,
             email=data["email"],
             password_hash=generate_password_hash(
                 data["password"]
             ),
-            role="OWNER",
+            roles=[owner_role],
         )
 
         db.session.add(employee)

@@ -32,3 +32,6 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
     appointment_types = relationship(
         "GarageAppointmentType", back_populates="garage", cascade="all, delete-orphan"
     )
+    roles = relationship(
+        "Role", back_populates="garage", cascade="all, delete-orphan"
+    )

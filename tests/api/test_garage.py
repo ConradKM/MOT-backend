@@ -54,7 +54,7 @@ def test_patch_unauthenticated_fails(client):
 
 
 def test_staff_role_cannot_update_garage(authenticated_user, session):
-    authenticated_user.user.role = "STAFF"
+    authenticated_user.user.roles = []
     session.commit()
 
     resp = authenticated_user.client.patch("/api/garage", json={"name": "Staff Update"})

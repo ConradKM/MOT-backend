@@ -372,7 +372,7 @@ def test_create_appointment_type_requires_auth(client):
 
 
 def test_staff_cannot_create_appointment_type(authenticated_user, session):
-    authenticated_user.user.role = "STAFF"
+    authenticated_user.user.roles = []
     session.commit()
 
     resp = authenticated_user.client.post("/api/appointment-types/", json={"name": "MOT"})
@@ -382,7 +382,7 @@ def test_staff_cannot_create_appointment_type(authenticated_user, session):
 def test_staff_can_list_appointment_types(authenticated_user, session):
     authenticated_user.client.post("/api/appointment-types/", json={"name": "MOT"})
 
-    authenticated_user.user.role = "STAFF"
+    authenticated_user.user.roles = []
     session.commit()
 
     resp = authenticated_user.client.get("/api/appointment-types/")
@@ -394,7 +394,7 @@ def test_staff_cannot_update_appointment_type(authenticated_user, session):
         "/api/appointment-types/", json={"name": "MOT"}
     ).get_json()
 
-    authenticated_user.user.role = "STAFF"
+    authenticated_user.user.roles = []
     session.commit()
 
     resp = authenticated_user.client.patch(
@@ -408,7 +408,7 @@ def test_staff_cannot_delete_appointment_type(authenticated_user, session):
         "/api/appointment-types/", json={"name": "MOT"}
     ).get_json()
 
-    authenticated_user.user.role = "STAFF"
+    authenticated_user.user.roles = []
     session.commit()
 
     resp = authenticated_user.client.delete(f"/api/appointment-types/{created['id']}")

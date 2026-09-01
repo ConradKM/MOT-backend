@@ -1,6 +1,6 @@
 from marshmallow import Schema, fields, validate
 
-from app.models.employee import ROLES
+from app.roles.schemas import RoleSchema
 
 
 class EmployeeSchema(Schema):
@@ -8,10 +8,21 @@ class EmployeeSchema(Schema):
     garage_id = fields.UUID(dump_only=True)
 
     email = fields.Email(required=True)
+    first_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    last_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
     password = fields.Str(
         required=True, load_only=True, validate=validate.Length(min=8)
     )
-    role = fields.Str(load_default="STAFF", validate=validate.OneOf(ROLES))
+    role_ids = fields.List(fields.UUID(), load_only=True, load_default=list)
+
+    roles = fields.List(fields.Nested(RoleSchema), dump_only=True)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
+
+
+class EmployeeUpdateSchema(Schema):
+    email = fields.Email()
+    first_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    last_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    role_ids = fields.List(fields.UUID())

@@ -202,7 +202,7 @@ def test_create_template_requires_auth(client):
 def test_staff_cannot_create_checklist_template(authenticated_user, session):
     appt_type = _create_type(authenticated_user.client)
 
-    authenticated_user.user.role = "STAFF"
+    authenticated_user.user.roles = []
     session.commit()
 
     resp = authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
@@ -213,7 +213,7 @@ def test_staff_cannot_add_checklist_template_item(authenticated_user, session):
     appt_type = _create_type(authenticated_user.client)
     authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
 
-    authenticated_user.user.role = "STAFF"
+    authenticated_user.user.roles = []
     session.commit()
 
     resp = authenticated_user.client.post(
