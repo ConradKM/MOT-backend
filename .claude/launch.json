@@ -8,8 +8,20 @@
       "port": 5055
     },
     {
+      "name": "flask-win",
+      "runtimeExecutable": ".venv/Scripts/flask.exe",
+      "runtimeArgs": ["--app", "app:create_app", "run", "--debug", "--port", "5055"],
+      "port": 5055
+    },
+    {
       "name": "flask-5001",
       "runtimeExecutable": ".venv/bin/flask",
+      "runtimeArgs": ["--app", "app:create_app", "run", "--debug", "--port", "5001"],
+      "port": 5001
+    },
+    {
+      "name": "flask-5001-win",
+      "runtimeExecutable": ".venv/Scripts/flask.exe",
       "runtimeArgs": ["--app", "app:create_app", "run", "--debug", "--port", "5001"],
       "port": 5001
     }
