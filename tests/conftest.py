@@ -271,6 +271,26 @@ def mot_record(session, garage, vehicle):
     return r
 
 
+@pytest.fixture()
+def customer_access_token(app, customer):
+    return create_access_token(
+        identity=str(customer.id), additional_claims={"account_type": "customer"}
+    )
+
+
+@pytest.fixture()
+def customer_refresh_token(app, customer):
+    return create_refresh_token(
+        identity=str(customer.id), additional_claims={"account_type": "customer"}
+    )
+
+
+@pytest.fixture()
+def customer_client(client, customer_access_token):
+    """Flask test client with a customer (not employee) Bearer token attached."""
+    return AuthenticatedClient(client, customer_access_token)
+
+
 # --------------------------------------------------------------------------
 # Domain fixtures - Garage B / Employee B (the "other" tenant, for isolation tests)
 # --------------------------------------------------------------------------
@@ -384,6 +404,8 @@ _SECTION_BY_SUFFIX = [
     ("database/test_mot_record.py", "Database Tests"),
     ("database/test_isolation.py", "Database Tests"),
     ("api/test_auth.py", "Authentication"),
+    ("api/test_customer_auth.py", "Customer Auth"),
+    ("api/test_customer_portal.py", "Customer Portal"),
     ("api/test_garage.py", "Garage API"),
     ("api/test_employees.py", "Employee API"),
     ("api/test_customers.py", "Customer API"),
