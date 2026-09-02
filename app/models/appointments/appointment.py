@@ -8,7 +8,19 @@ from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
-APPOINTMENT_STATUSES = ("BOOKED", "COMPLETED", "CANCELLED", "NO_SHOW")
+# REQUESTED/IN_PROGRESS/ACTION_NEEDED cover the appointment's day-to-day lifecycle in
+# the staff app; CANCELLED/NO_SHOW are terminal states. Default stays BOOKED rather than
+# REQUESTED - appointments are currently only ever created by staff (already confirmed),
+# not submitted by customers - REQUESTED is for once public booking exists.
+APPOINTMENT_STATUSES = (
+    "REQUESTED",
+    "BOOKED",
+    "IN_PROGRESS",
+    "COMPLETED",
+    "ACTION_NEEDED",
+    "CANCELLED",
+    "NO_SHOW",
+)
 
 
 class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):
