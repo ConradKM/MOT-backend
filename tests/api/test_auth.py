@@ -214,3 +214,49 @@ def test_refresh_rejects_an_access_token(client, access_token):
     )
 
     assert resp.status_code != 200
+
+
+# --------------------------------------------------------------------------
+# GET /api/auth/me
+# --------------------------------------------------------------------------
+
+
+def test_me_returns_the_current_employee(authenticated_client, user, garage):
+    resp = authenticated_client.get("/api/auth/me")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["id"] == str(user.id)
+    assert body["email"] == user.email
+    assert body["garage_id"] == str(garage.id)
+
+
+def test_me_includes_the_employees_roles(authenticated_client):
+    body = authenticated_client.get("/api/auth/me").get_json()
+
+    role_names = {r["name"] for r in body["roles"]}
+    assert "OWNER" in role_names
+
+
+def test_me_requires_authentication(client):
+    resp = client.get("/api/auth/me")
+    assert resp.status_code == 401
+
+
+def test_me_rejects_an_invalid_token(client):
+    resp = client.get(
+        "/api/auth/me", headers={"Authorization": "Bearer not-a-real-token"}
+    )
+    assert resp.status_code in (401, 422)
+
+
+def test_me_rejects_a_customer_token(customer_client):
+    resp = customer_client.get("/api/auth/me")
+    assert resp.status_code == 401
+
+
+def test_me_does_not_leak_password(authenticated_client):
+    body = authenticated_client.get("/api/auth/me").get_json()
+
+    assert "password" not in body
+    assert "password_hash" not in body
