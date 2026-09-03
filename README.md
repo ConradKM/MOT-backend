@@ -48,6 +48,25 @@ This runs the full suite (model/relationship tests, API tests, multi-tenant
 isolation tests) and writes a plain-text pass/fail summary to
 `tests/test-results/test.log`. No manual cleanup is required between runs.
 
+## Public booking
+
+Logged-out customers book through `POST /api/public/<slug>/booking-requests`,
+where `<slug>` is a `Garage.slug` (auto-generated from the garage name at
+registration; look it up via `GET /api/public/<slug>`, which also returns the
+garage's active appointment types). Submissions are held in `booking_requests`
+as `PENDING` — they never create `customers` / `vehicles` / `appointments`
+directly. Staff review them (`GET /api/booking-requests/`) and
+`POST /api/booking-requests/<id>/approve` (creates + links the real records) or
+`.../reject`.
+
+The public endpoint is protected by:
+
+- **CAPTCHA** — set `CAPTCHA_PROVIDER` (`recaptcha` | `hcaptcha` | `turnstile`)
+  and `CAPTCHA_SECRET`. Defaults to `none` (no check) for local dev.
+- **Rate limiting** — Flask-Limiter, `PUBLIC_BOOKING_RATELIMIT`
+  (default `5 per hour;20 per day`), counters in `RATELIMIT_STORAGE_URI`
+  (defaults to `REDIS_URL`, then in-memory).
+
 ## Project structure
 
 ```text
@@ -57,11 +76,15 @@ app/
 ├── extensions.py
 ├── models/
 ├── auth/
+├── customer_auth/      # email + registration login for the customer portal
+├── customer_portal/    # read-only customer account API
 ├── garages/
 ├── customers/
 ├── vehicles/
 ├── mot_records/
-├── appointments/       # model only, not yet exposed via API
+├── appointments/
+├── public_booking/     # unauthenticated garage lookup + booking-request submit
+├── booking_requests/   # staff review / approve / reject of booking requests
 ├── reminders/          # model only, not yet exposed via API
 ├── notifications/      # not yet implemented
 ├── tasks/

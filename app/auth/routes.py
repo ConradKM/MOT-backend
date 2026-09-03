@@ -9,6 +9,7 @@ from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.extensions import db
+from app.garages.slug import slugify_unique
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.employee import Employee
 from app.models.garage import Garage
@@ -58,7 +59,8 @@ class Register(MethodView):
             )
 
         garage = Garage(
-            name=data["garage_name"]
+            name=data["garage_name"],
+            slug=slugify_unique(data["garage_name"], db.session),
         )
 
         db.session.add(garage)

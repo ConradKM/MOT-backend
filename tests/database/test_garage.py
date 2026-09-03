@@ -13,7 +13,13 @@ from app.models.vehicle import Vehicle
 
 
 def test_garage_can_be_created(session):
-    g = Garage(name="Acme Motors", email="hi@acme.example", phone="0123", address="1 Road")
+    g = Garage(
+        name="Acme Motors",
+        slug="acme-motors",
+        email="hi@acme.example",
+        phone="0123",
+        address="1 Road",
+    )
     session.add(g)
     session.commit()
 
@@ -21,7 +27,15 @@ def test_garage_can_be_created(session):
 
 
 def test_garage_requires_name(session):
-    g = Garage()
+    g = Garage(slug="no-name")
+    session.add(g)
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_garage_requires_slug(session):
+    g = Garage(name="Slugless Motors")
     session.add(g)
 
     with pytest.raises(IntegrityError):

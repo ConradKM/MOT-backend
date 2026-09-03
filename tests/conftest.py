@@ -21,6 +21,7 @@ from werkzeug.security import generate_password_hash
 from app import create_app
 from app.config import TestConfig
 from app.extensions import db
+from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.garage import Garage
@@ -160,6 +161,7 @@ class AuthenticatedClient:
 def garage(session):
     g = Garage(
         name="Garage A",
+        slug="garage-a",
         email="contact@garage-a.example",
         phone="+44 20 7946 0001",
         address="1 Test Street, London",
@@ -291,6 +293,30 @@ def customer_client(client, customer_access_token):
     return AuthenticatedClient(client, customer_access_token)
 
 
+@pytest.fixture()
+def booking_request(session, garage):
+    """A PENDING public booking request in the primary garage."""
+    br = BookingRequest(
+        garage_id=garage.id,
+        status="PENDING",
+        customer_first_name="Pat",
+        customer_last_name="Rivera",
+        customer_email="pat.rivera@example.com",
+        customer_phone="+44 7700 900900",
+        vehicle_registration="BK11REQ",
+        vehicle_make="Honda",
+        vehicle_model="Civic",
+        vehicle_year=2018,
+        vehicle_mileage=61000,
+        preferred_date=datetime.date.today() + datetime.timedelta(days=3),
+        preferred_time=datetime.time(10, 0),
+        notes="Please call before 5pm.",
+    )
+    session.add(br)
+    session.commit()
+    return br
+
+
 # --------------------------------------------------------------------------
 # Domain fixtures - Garage B / Employee B (the "other" tenant, for isolation tests)
 # --------------------------------------------------------------------------
@@ -300,6 +326,7 @@ def customer_client(client, customer_access_token):
 def second_garage(session):
     g = Garage(
         name="Garage B",
+        slug="garage-b",
         email="contact@garage-b.example",
         phone="+44 20 7946 0002",
         address="2 Test Street, Manchester",
@@ -406,6 +433,8 @@ _SECTION_BY_SUFFIX = [
     ("api/test_auth.py", "Authentication"),
     ("api/test_customer_auth.py", "Customer Auth"),
     ("api/test_customer_portal.py", "Customer Portal"),
+    ("api/test_public_booking.py", "Public Booking"),
+    ("api/test_booking_requests.py", "Booking Requests"),
     ("api/test_garage.py", "Garage API"),
     ("api/test_employees.py", "Employee API"),
     ("api/test_customers.py", "Customer API"),

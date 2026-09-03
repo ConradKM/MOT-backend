@@ -10,6 +10,12 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "garages"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # URL-safe public identifier for the unauthenticated booking flow
+    # (POST /api/public/<slug>/booking-requests). Auto-generated from the name
+    # at creation (see app/garages/slug.py); not owner-editable yet.
+    slug: Mapped[str] = mapped_column(
+        String(120), unique=True, nullable=False, index=True
+    )
     email: Mapped[str | None] = mapped_column(String(320))
     phone: Mapped[str | None] = mapped_column(String(40))
     address: Mapped[str | None] = mapped_column(String(500))
