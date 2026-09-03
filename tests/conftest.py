@@ -21,10 +21,14 @@ from werkzeug.security import generate_password_hash
 from app import create_app
 from app.config import TestConfig
 from app.extensions import db
+from app.garages.schedule.defaults import seed_default_schedule
+from app.models.appointments.appointment import Appointment
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.garage import Garage
+from app.models.garage_schedule import GarageScheduleSettings
 from app.models.mot_record import MOTRecord
 from app.models.role import Role
 from app.models.vehicle import Vehicle
@@ -300,6 +304,50 @@ def seeded_statuses(session, garage):
 
     seed_default_statuses(garage.id, session)
     session.commit()
+
+
+@pytest.fixture()
+def appointment_type(session, garage):
+    """An active appointment type on the primary garage, 60-minute default."""
+    t = GarageAppointmentType(
+        garage_id=garage.id,
+        name="MOT",
+        status="ACTIVE",
+        default_duration_minutes=60,
+    )
+    session.add(t)
+    session.commit()
+    return t
+
+
+@pytest.fixture()
+def garage_schedule(session, garage):
+    """Seed the primary garage's default schedule rows and return the settings
+    row (Mon-Fri 09:00-17:00, 30-min slots, 24h lead, 60-day window)."""
+    seed_default_schedule(garage.id, session)
+    session.commit()
+    return GarageScheduleSettings.query.filter_by(garage_id=garage.id).first()
+
+
+@pytest.fixture()
+def make_appointment(session, garage, appointment_type, user, customer):
+    """Factory: create a non-cancelled appointment starting at `start`."""
+
+    def _make(start, minutes=60, status="BOOKED", employee=None):
+        appt = Appointment(
+            garage_id=garage.id,
+            employee_id=(employee or user).id,
+            customer_id=customer.id,
+            appointment_type_id=appointment_type.id,
+            start_time=start,
+            end_time=start + datetime.timedelta(minutes=minutes),
+            status=status,
+        )
+        session.add(appt)
+        session.commit()
+        return appt
+
+    return _make
 
 
 @pytest.fixture()

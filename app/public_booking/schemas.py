@@ -97,3 +97,69 @@ class BookingRequestCreateSchema(Schema):
 class BookingRequestCreatedSchema(Schema):
     id = fields.UUID(dump_only=True)
     status = fields.Str(dump_only=True)
+
+
+# --- Availability calendar -------------------------------------------------
+
+
+class AvailabilityQueryArgsSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    # `from` is a Python keyword, so bind it to `from_` but keep the query name.
+    from_ = fields.Date(data_key="from", load_default=None)
+    to = fields.Date(load_default=None)
+
+
+class _GarageRefSchema(Schema):
+    slug = fields.Str(dump_only=True)
+    name = fields.Str(dump_only=True)
+
+
+class AvailabilityRulesSchema(Schema):
+    slot_interval_minutes = fields.Int(dump_only=True)
+    min_lead_time_hours = fields.Int(dump_only=True)
+    max_advance_days = fields.Int(dump_only=True)
+    booking_window_start = fields.Date(dump_only=True)
+    booking_window_end = fields.Date(dump_only=True)
+
+
+class PublicOpeningHoursEntrySchema(Schema):
+    weekday = fields.Int(dump_only=True)
+    opens_at = fields.Str(dump_only=True)
+    closes_at = fields.Str(dump_only=True)
+    is_closed = fields.Bool(dump_only=True)
+
+
+class DaySummarySchema(Schema):
+    date = fields.Date(dump_only=True)
+    weekday = fields.Int(dump_only=True)
+    is_open = fields.Bool(dump_only=True)
+    # available | limited | full | closed | past
+    level = fields.Str(dump_only=True)
+    open_slots = fields.Int(dump_only=True)
+    total_slots = fields.Int(dump_only=True)
+
+
+class AvailabilityRangeSchema(Schema):
+    garage = fields.Nested(_GarageRefSchema, dump_only=True)
+    rules = fields.Nested(AvailabilityRulesSchema, dump_only=True)
+    opening_hours = fields.List(
+        fields.Nested(PublicOpeningHoursEntrySchema), dump_only=True
+    )
+    days = fields.List(fields.Nested(DaySummarySchema), dump_only=True)
+
+
+class SlotSchema(Schema):
+    start = fields.Str(dump_only=True)  # "HH:MM"
+    # available | limited | booked
+    status = fields.Str(dump_only=True)
+    remaining = fields.Int(dump_only=True)
+    capacity = fields.Int(dump_only=True)
+
+
+class DaySlotsSchema(Schema):
+    date = fields.Date(dump_only=True)
+    is_open = fields.Bool(dump_only=True)
+    level = fields.Str(dump_only=True)
+    slots = fields.List(fields.Nested(SlotSchema), dump_only=True)

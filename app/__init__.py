@@ -31,6 +31,7 @@ def create_app(config_class=Config):
     from .customers.routes import customers_blp
     from .employees.routes import employees_blp
     from .garages.routes import garages_blp, public_garages_blp
+    from .garages.schedule.routes import garage_schedule_blp
     from .health.routes import health_blp
     from .mot_records.routes import mot_records_blp
     from .public_booking.routes import public_booking_blp
@@ -42,6 +43,7 @@ def create_app(config_class=Config):
     api.register_blueprint(customer_auth_blp)
     api.register_blueprint(customer_portal_blp)
     api.register_blueprint(garages_blp)
+    api.register_blueprint(garage_schedule_blp)
     api.register_blueprint(public_garages_blp)
     api.register_blueprint(public_booking_blp)
     api.register_blueprint(booking_requests_blp)
@@ -62,6 +64,7 @@ def create_app(config_class=Config):
         customer,
         employee,
         garage,
+        garage_schedule,
         mot_record,
         reminder,
         role,

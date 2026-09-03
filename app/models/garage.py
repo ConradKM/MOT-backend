@@ -41,3 +41,19 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
     roles = relationship(
         "Role", back_populates="garage", cascade="all, delete-orphan"
     )
+    schedule_settings = relationship(
+        "GarageScheduleSettings",
+        back_populates="garage",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    opening_hours = relationship(
+        "GarageOpeningHours",
+        back_populates="garage",
+        cascade="all, delete-orphan",
+    )
+    schedule_exceptions = relationship(
+        "GarageScheduleException",
+        back_populates="garage",
+        cascade="all, delete-orphan",
+    )

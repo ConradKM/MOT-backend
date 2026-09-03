@@ -12,6 +12,7 @@ from app.appointments.statuses.defaults import seed_default_statuses
 from app.auth.utils import get_current_employee
 from app.employees.schemas import EmployeeSchema
 from app.extensions import db
+from app.garages.schedule.defaults import seed_default_schedule
 from app.garages.slug import slugify_unique
 from app.models.employee import Employee
 from app.models.garage import Garage
@@ -59,6 +60,12 @@ class Register(MethodView):
         # Appointment statuses, on the other hand, ship with the built-in set
         # (the owner can then rename / recolour / extend them).
         seed_default_statuses(garage.id, db.session)
+
+        # Scheduling rules for the public availability calendar: default
+        # settings + Mon-Fri 09:00-17:00 opening hours (see
+        # app/garages/schedule/defaults.py). The owner tunes these from
+        # Settings > Availability.
+        seed_default_schedule(garage.id, db.session)
 
         owner_role = Role(garage_id=garage.id, name="OWNER")
         db.session.add(owner_role)

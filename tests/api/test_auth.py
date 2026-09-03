@@ -2,6 +2,7 @@
 
 from app.models.employee import Employee
 from app.models.garage import Garage
+from app.models.garage_schedule import GarageOpeningHours, GarageScheduleSettings
 
 VALID_PAYLOAD = {
     "garage_name": "New Garage",
@@ -40,6 +41,17 @@ def test_register_creates_a_user(client, session):
 
     user = Employee.query.filter_by(email=VALID_PAYLOAD["email"]).first()
     assert user is not None
+
+
+def test_register_seeds_the_default_schedule(client, session):
+    client.post("/api/auth/register", json=VALID_PAYLOAD)
+    garage = Garage.query.filter_by(name="New Garage").first()
+
+    settings = GarageScheduleSettings.query.filter_by(garage_id=garage.id).first()
+    assert settings is not None and settings.slot_interval_minutes == 30
+    hours = GarageOpeningHours.query.filter_by(garage_id=garage.id).all()
+    assert len(hours) == 7
+    assert {h.weekday for h in hours if h.is_closed} == {5, 6}
 
 
 def test_register_user_belongs_to_the_newly_created_garage(client, session):

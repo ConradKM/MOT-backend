@@ -36,6 +36,11 @@ class Config:
     PUBLIC_BOOKING_RATELIMIT = os.getenv(
         "PUBLIC_BOOKING_RATELIMIT", "5 per hour;20 per day"
     )
+    # The availability calendar is a read endpoint the wizard polls as the
+    # customer clicks around - a much looser limit than the write path.
+    PUBLIC_AVAILABILITY_RATELIMIT = os.getenv(
+        "PUBLIC_AVAILABILITY_RATELIMIT", "60 per minute"
+    )
 
     # --- Checklist evidence storage (see app/storage) --------------------
     # "s3" for any S3-compatible bucket (AWS / Cloudflare R2 / MinIO), "none"
