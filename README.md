@@ -67,6 +67,25 @@ The public endpoint is protected by:
   (default `5 per hour;20 per day`), counters in `RATELIMIT_STORAGE_URI`
   (defaults to `REDIS_URL`, then in-memory).
 
+## Checklist evidence storage
+
+Photos / videos attached to checklist items are held in S3-compatible object
+storage (`app/storage`); the API never streams bytes, it only issues
+short-lived presigned URLs:
+
+1. `POST /api/appointment-checklist-items/<id>/media` → a presigned **PUT**
+   URL + a `PENDING` `checklist_item_media` row.
+2. client uploads straight to storage, then
+   `POST /api/checklist-item-media/<id>/finalize` confirms it landed.
+3. `GET /api/checklist-item-media/<id>` → a presigned **GET** URL for display;
+   `DELETE` removes the object + row.
+
+`STORAGE_BACKEND=none` (default) uses stand-in URLs for local dev / tests.
+`STORAGE_BACKEND=s3` targets a real bucket — production is designed around
+Cloudflare R2, MinIO works locally. Objects are keyed
+`garages/<garage_id>/checklist-items/<item_id>/<uuid>` and every endpoint is
+scoped to the caller's garage.
+
 ## Project structure
 
 ```text
@@ -74,6 +93,7 @@ app/
 ├── __init__.py
 ├── config.py
 ├── extensions.py
+├── storage/            # pluggable object storage (S3 / R2 / MinIO / none)
 ├── models/
 ├── auth/
 ├── customer_auth/      # email + registration login for the customer portal
@@ -83,6 +103,7 @@ app/
 ├── vehicles/
 ├── mot_records/
 ├── appointments/
+│   └── media/          # presigned upload/download for checklist evidence
 ├── public_booking/     # unauthenticated garage lookup + booking-request submit
 ├── booking_requests/   # staff review / approve / reject of booking requests
 ├── reminders/          # model only, not yet exposed via API

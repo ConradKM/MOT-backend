@@ -443,6 +443,7 @@ _SECTION_BY_SUFFIX = [
     ("api/test_appointment_types.py", "Appointment Type API"),
     ("api/test_checklist_templates.py", "Checklist Template API"),
     ("api/test_appointment_checklists.py", "Appointment Checklist API"),
+    ("api/test_checklist_item_media.py", "Checklist Media API"),
     ("test_health.py", "Health Check"),
 ]
 
