@@ -48,6 +48,44 @@ This runs the full suite (model/relationship tests, API tests, multi-tenant
 isolation tests) and writes a plain-text pass/fail summary to
 `tests/test-results/test.log`. No manual cleanup is required between runs.
 
+## Public booking
+
+Logged-out customers book through `POST /api/public/<slug>/booking-requests`,
+where `<slug>` is a `Garage.slug` (auto-generated from the garage name at
+registration; look it up via `GET /api/public/<slug>`, which also returns the
+garage's active appointment types). Submissions are held in `booking_requests`
+as `PENDING` — they never create `customers` / `vehicles` / `appointments`
+directly. Staff review them (`GET /api/booking-requests/`) and
+`POST /api/booking-requests/<id>/approve` (creates + links the real records) or
+`.../reject`.
+
+The public endpoint is protected by:
+
+- **CAPTCHA** — set `CAPTCHA_PROVIDER` (`recaptcha` | `hcaptcha` | `turnstile`)
+  and `CAPTCHA_SECRET`. Defaults to `none` (no check) for local dev.
+- **Rate limiting** — Flask-Limiter, `PUBLIC_BOOKING_RATELIMIT`
+  (default `5 per hour;20 per day`), counters in `RATELIMIT_STORAGE_URI`
+  (defaults to `REDIS_URL`, then in-memory).
+
+## Checklist evidence storage
+
+Photos / videos attached to checklist items are held in S3-compatible object
+storage (`app/storage`); the API never streams bytes, it only issues
+short-lived presigned URLs:
+
+1. `POST /api/appointment-checklist-items/<id>/media` → a presigned **PUT**
+   URL + a `PENDING` `checklist_item_media` row.
+2. client uploads straight to storage, then
+   `POST /api/checklist-item-media/<id>/finalize` confirms it landed.
+3. `GET /api/checklist-item-media/<id>` → a presigned **GET** URL for display;
+   `DELETE` removes the object + row.
+
+`STORAGE_BACKEND=none` (default) uses stand-in URLs for local dev / tests.
+`STORAGE_BACKEND=s3` targets a real bucket — production is designed around
+Cloudflare R2, MinIO works locally. Objects are keyed
+`garages/<garage_id>/checklist-items/<item_id>/<uuid>` and every endpoint is
+scoped to the caller's garage.
+
 ## Project structure
 
 ```text
@@ -55,13 +93,19 @@ app/
 ├── __init__.py
 ├── config.py
 ├── extensions.py
+├── storage/            # pluggable object storage (S3 / R2 / MinIO / none)
 ├── models/
 ├── auth/
+├── customer_auth/      # email + registration login for the customer portal
+├── customer_portal/    # read-only customer account API
 ├── garages/
 ├── customers/
 ├── vehicles/
 ├── mot_records/
-├── appointments/       # model only, not yet exposed via API
+├── appointments/
+│   └── media/          # presigned upload/download for checklist evidence
+├── public_booking/     # unauthenticated garage lookup + booking-request submit
+├── booking_requests/   # staff review / approve / reject of booking requests
 ├── reminders/          # model only, not yet exposed via API
 ├── notifications/      # not yet implemented
 ├── tasks/

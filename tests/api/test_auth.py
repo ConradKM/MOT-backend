@@ -124,6 +124,30 @@ def test_register_does_not_leak_password_in_response(client):
     assert "password_hash" not in body
 
 
+def test_register_generates_a_slug_from_the_garage_name(client, session):
+    client.post(
+        "/api/auth/register",
+        json={**VALID_PAYLOAD, "garage_name": "Bob's Tyres & Exhausts"},
+    )
+
+    garage = Garage.query.filter_by(name="Bob's Tyres & Exhausts").first()
+    assert garage.slug == "bob-s-tyres-exhausts"
+
+
+def test_register_gives_same_named_garages_distinct_slugs(client, session):
+    client.post(
+        "/api/auth/register",
+        json={"garage_name": "City Motors", "email": "a@example.com", "password": "password-1a"},
+    )
+    client.post(
+        "/api/auth/register",
+        json={"garage_name": "City Motors", "email": "b@example.com", "password": "password-1b"},
+    )
+
+    slugs = sorted(g.slug for g in Garage.query.filter_by(name="City Motors").all())
+    assert slugs == ["city-motors", "city-motors-2"]
+
+
 # --------------------------------------------------------------------------
 # Login
 # --------------------------------------------------------------------------

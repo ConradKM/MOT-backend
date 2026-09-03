@@ -1,7 +1,5 @@
 from marshmallow import Schema, fields, validate
 
-from app.models.appointments.appointment import APPOINTMENT_STATUSES
-
 
 class AppointmentSchema(Schema):
     id = fields.UUID(dump_only=True)
@@ -17,7 +15,9 @@ class AppointmentSchema(Schema):
     end_time = fields.DateTime(allow_none=True, load_default=None)
 
     appointment_type_id = fields.UUID(required=True)
-    status = fields.Str(dump_default="BOOKED", validate=validate.OneOf(APPOINTMENT_STATUSES))
+    # No enum here - the allowed values are the garage's configured status keys
+    # (with a built-in default set as fallback); validated in the route.
+    status = fields.Str(dump_default="BOOKED", validate=validate.Length(min=1, max=30))
     notes = fields.Str(allow_none=True)
 
     created_at = fields.DateTime(dump_only=True)
@@ -33,7 +33,7 @@ class AppointmentUpdateSchema(Schema):
     end_time = fields.DateTime()
 
     appointment_type_id = fields.UUID()
-    status = fields.Str(validate=validate.OneOf(APPOINTMENT_STATUSES))
+    status = fields.Str(validate=validate.Length(min=1, max=30))
     notes = fields.Str(allow_none=True)
 
 
@@ -44,5 +44,5 @@ class AppointmentQueryArgsSchema(Schema):
     employee_id = fields.UUID(load_default=None)
     customer_id = fields.UUID(load_default=None)
     vehicle_id = fields.UUID(load_default=None)
-    status = fields.Str(load_default=None, validate=validate.OneOf(APPOINTMENT_STATUSES))
+    status = fields.Str(load_default=None, validate=validate.Length(min=1, max=30))
     appointment_type_id = fields.UUID(load_default=None)

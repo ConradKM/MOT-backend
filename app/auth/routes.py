@@ -8,10 +8,11 @@ from flask_jwt_extended import (
 from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from app.appointments.statuses.defaults import seed_default_statuses
 from app.auth.utils import get_current_employee
 from app.employees.schemas import EmployeeSchema
 from app.extensions import db
-from app.models.appointments.appointment_type import GarageAppointmentType
+from app.garages.slug import slugify_unique
 from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.role import Role
@@ -24,23 +25,6 @@ auth_blp = Blueprint(
     url_prefix="/api/auth",
     description="Authentication",
 )
-
-# Temporary stopgap so a brand-new garage isn't left with zero appointment
-# types (and therefore unable to book anything) before owners have a real
-# way to build their own list from scratch. Tracked for removal in a
-# follow-up issue once that exists - see migration 46c9ee69459d's successor
-# for the equivalent one-time backfill for garages that already existed.
-# (name, default_duration_minutes) - Repair/Other are too variable to guess
-# a duration for, so they're left unset (still bookable, just requires an
-# explicit end_time).
-_DEFAULT_APPOINTMENT_TYPES = (
-    ("MOT", 45),
-    ("Service", 60),
-    ("MOT + Service", 105),
-    ("Repair", None),
-    ("Other", None),
-)
-
 
 @auth_blp.route("/register")
 class Register(MethodView):
@@ -60,18 +44,21 @@ class Register(MethodView):
             )
 
         garage = Garage(
-            name=data["garage_name"]
+            name=data["garage_name"],
+            slug=slugify_unique(data["garage_name"], db.session),
         )
 
         db.session.add(garage)
         db.session.flush()
 
-        for name, duration_minutes in _DEFAULT_APPOINTMENT_TYPES:
-            db.session.add(
-                GarageAppointmentType(
-                    garage_id=garage.id, name=name, default_duration_minutes=duration_minutes
-                )
-            )
+        # A new garage starts with no appointment types - the owner defines
+        # its own from Settings > Appointment types (see #9). Until they add
+        # one, the public booking wizard shows "no services yet" and staff
+        # can't create an appointment.
+
+        # Appointment statuses, on the other hand, ship with the built-in set
+        # (the owner can then rename / recolour / extend them).
+        seed_default_statuses(garage.id, db.session)
 
         owner_role = Role(garage_id=garage.id, name="OWNER")
         db.session.add(owner_role)

@@ -5,6 +5,7 @@ class GarageSchema(Schema):
     id = fields.UUID(dump_only=True)
 
     name = fields.Str(dump_only=True)
+    slug = fields.Str(dump_only=True)
     email = fields.Email(dump_only=True)
     phone = fields.Str(dump_only=True)
     address = fields.Str(dump_only=True)
@@ -25,3 +26,4 @@ class PublicGarageSchema(Schema):
 
     id = fields.UUID(dump_only=True)
     name = fields.Str(dump_only=True)
+    slug = fields.Str(dump_only=True)
