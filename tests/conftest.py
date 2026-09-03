@@ -294,6 +294,15 @@ def customer_client(client, customer_access_token):
 
 
 @pytest.fixture()
+def seeded_statuses(session, garage):
+    """Give the primary garage the built-in appointment-status set."""
+    from app.appointments.statuses.defaults import seed_default_statuses
+
+    seed_default_statuses(garage.id, session)
+    session.commit()
+
+
+@pytest.fixture()
 def booking_request(session, garage):
     """A PENDING public booking request in the primary garage."""
     br = BookingRequest(
@@ -441,6 +450,7 @@ _SECTION_BY_SUFFIX = [
     ("api/test_vehicles.py", "Vehicle API"),
     ("api/test_mot_records.py", "MOT API"),
     ("api/test_appointment_types.py", "Appointment Type API"),
+    ("api/test_appointment_statuses.py", "Appointment Status API"),
     ("api/test_checklist_templates.py", "Checklist Template API"),
     ("api/test_appointment_checklists.py", "Appointment Checklist API"),
     ("api/test_checklist_item_media.py", "Checklist Media API"),

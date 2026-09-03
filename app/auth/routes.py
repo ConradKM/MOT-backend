@@ -8,6 +8,7 @@ from flask_jwt_extended import (
 from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from app.appointments.statuses.defaults import seed_default_statuses
 from app.extensions import db
 from app.garages.slug import slugify_unique
 from app.models.employee import Employee
@@ -52,6 +53,10 @@ class Register(MethodView):
         # its own from Settings > Appointment types (see #9). Until they add
         # one, the public booking wizard shows "no services yet" and staff
         # can't create an appointment.
+
+        # Appointment statuses, on the other hand, ship with the built-in set
+        # (the owner can then rename / recolour / extend them).
+        seed_default_statuses(garage.id, db.session)
 
         owner_role = Role(garage_id=garage.id, name="OWNER")
         db.session.add(owner_role)

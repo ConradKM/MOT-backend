@@ -22,6 +22,7 @@ def create_app(config_class=Config):
     from .appointments.checklists.routes import appointment_checklists_blp
     from .appointments.media.routes import checklist_item_media_blp
     from .appointments.routes import appointments_blp
+    from .appointments.statuses.routes import appointment_statuses_blp
     from .appointments.types.routes import appointment_types_blp
     from .auth.routes import auth_blp
     from .booking_requests.routes import booking_requests_blp
@@ -50,6 +51,7 @@ def create_app(config_class=Config):
     api.register_blueprint(vehicles_blp)
     api.register_blueprint(mot_records_blp)
     api.register_blueprint(appointment_types_blp)
+    api.register_blueprint(appointment_statuses_blp)
     api.register_blueprint(checklist_templates_blp)
     api.register_blueprint(appointments_blp)
     api.register_blueprint(appointment_checklists_blp)
@@ -69,6 +71,7 @@ def create_app(config_class=Config):
         appointment,
         appointment_checklist,
         appointment_checklist_item,
+        appointment_status,
         appointment_type,
         checklist_item_media,
         checklist_template,

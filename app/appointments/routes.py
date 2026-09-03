@@ -4,9 +4,11 @@ from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 
+from app.appointments.statuses.defaults import DEFAULT_STATUS_KEYS
 from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
+from app.models.appointments.appointment_status import GarageAppointmentStatus
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.customer import Customer
 from app.models.employee import Employee
@@ -76,6 +78,23 @@ def _get_owned_vehicle(vehicle_id, garage_id, customer_id):
         abort(422, message="vehicle_id does not belong to the specified customer.")
 
     return vehicle
+
+
+def _allowed_statuses(garage_id):
+    """The garage's configured status keys, or the built-in default set if it
+    hasn't customised them."""
+    configured = {
+        key
+        for (key,) in db.session.query(GarageAppointmentStatus.key)
+        .filter_by(garage_id=garage_id)
+        .all()
+    }
+    return configured or set(DEFAULT_STATUS_KEYS)
+
+
+def _validate_status(status, garage_id):
+    if status is not None and status not in _allowed_statuses(garage_id):
+        abort(422, message="Not a valid appointment status for this garage.")
 
 
 def _validate_time_range(start_time, end_time):
@@ -180,6 +199,7 @@ class AppointmentList(MethodView):
         end_time = _resolve_end_time(data["start_time"], data["end_time"], appointment_type)
 
         _validate_time_range(data["start_time"], end_time)
+        _validate_status(data.get("status"), garage_id)
         _check_for_conflict(data["employee_id"], data["start_time"], end_time)
 
         appointment = Appointment(
@@ -240,6 +260,9 @@ class AppointmentResource(MethodView):
 
         if "vehicle_id" in data and data["vehicle_id"] is not None:
             _get_owned_vehicle(data["vehicle_id"], garage_id, effective_customer_id)
+
+        if "status" in data:
+            _validate_status(data["status"], garage_id)
 
         effective_start = data.get("start_time", appointment.start_time)
         effective_end = data.get("end_time", appointment.end_time)
