@@ -13,7 +13,3 @@ dist/
 build/
 *.egg-info/
 .DS_Store
-
-# Seeds a persistent local admin@admin.com / admin login into the dev
-# database - intentionally never committed. See issue #11.
-scripts/seed_admin.py

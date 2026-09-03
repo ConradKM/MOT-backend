@@ -9,6 +9,8 @@ from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.appointments.statuses.defaults import seed_default_statuses
+from app.auth.utils import get_current_employee
+from app.employees.schemas import EmployeeSchema
 from app.extensions import db
 from app.garages.slug import slugify_unique
 from app.models.employee import Employee
@@ -143,3 +145,24 @@ class Refresh(MethodView):
         return {
             "access_token": access_token,
         }
+
+
+@auth_blp.route("/me")
+class Me(MethodView):
+
+    @jwt_required()
+    @auth_blp.response(200, EmployeeSchema)
+    def get(self):
+        """The signed-in employee's own record (id, garage, email, roles).
+
+        Lets the frontend gate owner-only UI up front instead of discovering
+        the restriction from a 403 on the action itself.
+        """
+        employee = get_current_employee()
+
+        # Valid JWT, but it doesn't map to an employee - a deleted account, or
+        # a customer-portal token (see app/customer_auth).
+        if employee is None:
+            abort(401, message="Not authenticated as an employee.")
+
+        return employee
