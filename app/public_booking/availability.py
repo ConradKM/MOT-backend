@@ -195,6 +195,25 @@ def day_slots(garage, day, settings, hours_map, exceptions, now: datetime) -> li
     return slots
 
 
+def day_slot_count(day, settings, hours_map, exceptions) -> int:
+    """Number of slot start positions that fit in ``day``'s opening hours
+    (0 when the garage is closed that day). Ignores lead time - this is the
+    day's *maximum* schedule, used by the staff capacity dashboard."""
+    hrs = _day_hours(day, hours_map, exceptions)
+    if hrs is None:
+        return 0
+    opens_at, closes_at = hrs
+    interval = settings.slot_interval_minutes
+    duration = settings.default_appointment_minutes
+    close_m = _minutes(closes_at)
+    m = _minutes(opens_at)
+    count = 0
+    while m + duration <= close_m:
+        count += 1
+        m += interval
+    return count
+
+
 def day_summary(garage, day, settings, hours_map, exceptions, now, today) -> dict:
     weekday = day.weekday()
     if day < today:

@@ -7,7 +7,13 @@ from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.garage import Garage
 
-from .schemas import GarageSchema, GarageUpdateSchema, PublicGarageSchema
+from .capacity import capacity_summary
+from .schemas import (
+    CapacitySummarySchema,
+    GarageSchema,
+    GarageUpdateSchema,
+    PublicGarageSchema,
+)
 
 garages_blp = Blueprint(
     "garage",
@@ -45,6 +51,16 @@ class GarageResource(MethodView):
         db.session.commit()
 
         return garage
+
+
+@garages_blp.route("/capacity/summary")
+class GarageCapacitySummary(MethodView):
+
+    @jwt_required()
+    @garages_blp.response(200, CapacitySummarySchema)
+    def get(self):
+        garage = get_current_employee().garage
+        return capacity_summary(garage)
 
 
 @public_garages_blp.route("/")

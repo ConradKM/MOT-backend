@@ -27,3 +27,25 @@ class PublicGarageSchema(Schema):
     id = fields.UUID(dump_only=True)
     name = fields.Str(dump_only=True)
     slug = fields.Str(dump_only=True)
+
+
+class _CapacityBucketSchema(Schema):
+    booked = fields.Int(dump_only=True)
+    capacity = fields.Int(dump_only=True)
+    level = fields.Str(dump_only=True)  # green | amber | red
+
+
+class TodayCapacitySchema(_CapacityBucketSchema):
+    date = fields.Date(dump_only=True)
+
+
+class WeekCapacitySchema(_CapacityBucketSchema):
+    start = fields.Date(dump_only=True)
+    end = fields.Date(dump_only=True)
+
+
+class CapacitySummarySchema(Schema):
+    """Booked vs. configured capacity for the staff dashboard."""
+
+    today = fields.Nested(TodayCapacitySchema, dump_only=True)
+    week = fields.Nested(WeekCapacitySchema, dump_only=True)
