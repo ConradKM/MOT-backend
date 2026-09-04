@@ -5,10 +5,17 @@ from sqlalchemy.exc import IntegrityError
 
 from app.auth.utils import get_current_employee
 from app.extensions import db
+from app.models.appointments.appointment import Appointment
 from app.models.customer import Customer
+from app.models.mot_record import MOTRecord
 from app.models.vehicle import Vehicle
 
-from .schemas import VehicleQueryArgsSchema, VehicleSchema, VehicleUpdateSchema
+from .schemas import (
+    VehicleDeleteResultSchema,
+    VehicleQueryArgsSchema,
+    VehicleSchema,
+    VehicleUpdateSchema,
+)
 
 vehicles_blp = Blueprint(
     "vehicles",
@@ -27,6 +34,18 @@ def _get_owned_customer(customer_id, garage_id):
     return customer
 
 
+def _is_referenced(vehicle_id) -> bool:
+    """True if deleting this vehicle would cascade away real history (MOT
+    records) or leave appointments dangling - see VehicleResource.delete."""
+    has_mot_record = (
+        MOTRecord.query.filter_by(vehicle_id=vehicle_id).first() is not None
+    )
+    has_appointment = (
+        Appointment.query.filter_by(vehicle_id=vehicle_id).first() is not None
+    )
+    return has_mot_record or has_appointment
+
+
 @vehicles_blp.route("/")
 class VehicleList(MethodView):
 
@@ -37,6 +56,9 @@ class VehicleList(MethodView):
         garage_id = get_current_employee().garage_id
 
         query = Vehicle.query.filter_by(garage_id=garage_id)
+
+        if not args["include_inactive"]:
+            query = query.filter(Vehicle.is_active.is_(True))
 
         if args.get("registration"):
             pattern = f"%{args['registration'].strip().upper().replace(' ', '')}%"
@@ -88,6 +110,8 @@ class VehicleResource(MethodView):
     def get(self, vehicle_id):
         garage_id = get_current_employee().garage_id
 
+        # Not filtered by is_active - an archived vehicle must stay reachable
+        # by id (e.g. from an appointment) even once hidden from lists.
         vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
         if not vehicle:
@@ -121,7 +145,7 @@ class VehicleResource(MethodView):
         return vehicle
 
     @jwt_required()
-    @vehicles_blp.response(204)
+    @vehicles_blp.response(200, VehicleDeleteResultSchema)
     def delete(self, vehicle_id):
         garage_id = get_current_employee().garage_id
 
@@ -130,7 +154,16 @@ class VehicleResource(MethodView):
         if not vehicle:
             abort(404, message="Vehicle not found")
 
+        # A vehicle with MOT history or appointments is archived, not deleted
+        # - deleting it would cascade-delete its mot_records (real history)
+        # and orphan any appointment's vehicle reference. A never-referenced
+        # vehicle can still be removed outright.
+        if _is_referenced(vehicle.id):
+            vehicle.is_active = False
+            db.session.commit()
+            return {"archived": True, "deleted": False}
+
         db.session.delete(vehicle)
         db.session.commit()
 
-        return ""
+        return {"archived": False, "deleted": True}

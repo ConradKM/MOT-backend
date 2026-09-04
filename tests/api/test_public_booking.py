@@ -32,7 +32,7 @@ def _valid_payload(**overrides):
         "customer_first_name": "Alex",
         "customer_last_name": "Turner",
         "customer_email": "alex.turner@example.com",
-        "customer_phone": "+44 7700 900123",
+        "customer_phone": "07123 456789",
         "vehicle_registration": "PB11 REQ",
         "vehicle_make": "Ford",
         "vehicle_model": "Fiesta",
@@ -98,10 +98,44 @@ def test_submit_creates_a_pending_booking_request(client, session, garage):
     body = resp.get_json()
     assert body["status"] == "PENDING"
 
-    row = db.session.get(BookingRequest, body["id"])
-    assert row is not None
-    assert row.garage_id == garage.id
-    assert row.customer_email == "alex.turner@example.com"
+
+def test_submit_normalises_the_mobile_number_to_e164(client, session, garage):
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(customer_phone="07123 456789"),
+    )
+
+    assert resp.status_code == 201
+    row = db.session.get(BookingRequest, resp.get_json()["id"])
+    assert row.customer_phone == "+447123456789"
+
+
+def test_submit_missing_mobile_number_is_rejected(client, garage):
+    payload = {k: v for k, v in _valid_payload().items() if k != "customer_phone"}
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=payload)
+
+    assert resp.status_code == 422
+    assert "customer_phone" in resp.get_json()["errors"]["json"]
+
+
+def test_submit_landline_number_is_rejected(client, garage):
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(customer_phone="01234 567890"),
+    )
+
+    assert resp.status_code == 422
+    assert "customer_phone" in resp.get_json()["errors"]["json"]
+
+
+def test_submit_gibberish_phone_number_is_rejected(client, garage):
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(customer_phone="not a phone number"),
+    )
+
+    assert resp.status_code == 422
+    assert "customer_phone" in resp.get_json()["errors"]["json"]
 
 
 def test_submit_does_not_create_live_records(client, session, garage):
@@ -341,6 +375,82 @@ def test_a_pending_request_blocks_the_same_slot(client, garage):
         f"/api/public/{garage.slug}/booking-requests",
         json=_valid_payload(
             customer_email="someone.else@example.com", preferred_time="09:30:00"
+        ),
+    )
+    assert second.status_code == 409
+
+
+def test_submit_snapshots_the_selected_types_duration_and_price(client, session, garage):
+    full_service = GarageAppointmentType(
+        garage_id=garage.id,
+        name="Full Service",
+        status="ACTIVE",
+        default_duration_minutes=90,
+        base_price="189.00",
+    )
+    session.add(full_service)
+    session.commit()
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(appointment_type_id=str(full_service.id)),
+    )
+    assert resp.status_code == 201
+
+    row = db.session.get(BookingRequest, resp.get_json()["id"])
+    assert row.requested_duration_minutes == 90
+    assert str(row.requested_price) == "189.00"
+
+
+def test_a_90_minute_type_is_rejected_when_it_would_not_fit_before_closing(
+    client, session, garage
+):
+    """Item 14: the submit-time re-check must use the *selected type's* full
+    duration, not just a flat default - a slot that fits a short service can
+    still be too late in the day for a long one."""
+    long_type = GarageAppointmentType(
+        garage_id=garage.id, name="Full Service", status="ACTIVE", default_duration_minutes=90,
+    )
+    session.add(long_type)
+    session.commit()
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(
+            appointment_type_id=str(long_type.id), preferred_time="16:00:00"
+        ),
+    )
+    assert resp.status_code == 409
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
+
+
+def test_a_pending_90_minute_request_blocks_a_later_30_minute_submission(
+    client, session, garage
+):
+    long_type = GarageAppointmentType(
+        garage_id=garage.id, name="Full Service", status="ACTIVE", default_duration_minutes=90,
+    )
+    short_type = GarageAppointmentType(
+        garage_id=garage.id, name="Diagnostic", status="ACTIVE", default_duration_minutes=30,
+    )
+    session.add_all([long_type, short_type])
+    session.commit()
+
+    first = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(
+            appointment_type_id=str(long_type.id), preferred_time="10:00:00"
+        ),
+    )
+    assert first.status_code == 201
+
+    # 10:30 is well inside the first request's reserved 10:00-11:30 window.
+    second = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(
+            customer_email="someone.else@example.com",
+            appointment_type_id=str(short_type.id),
+            preferred_time="10:30:00",
         ),
     )
     assert second.status_code == 409

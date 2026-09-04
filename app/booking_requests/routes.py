@@ -4,6 +4,7 @@ from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 
+from app.appointments.checklists.service import snapshot_checklist_for_appointment
 from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
@@ -12,6 +13,7 @@ from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.vehicle import Vehicle
+from app.public_booking.availability import slot_capacity_usage
 
 from .schemas import (
     BookingRequestApproveSchema,
@@ -19,6 +21,7 @@ from .schemas import (
     BookingRequestRejectSchema,
     BookingRequestSchema,
 )
+from .service import attach_review_context, expire_stale_booking_requests, is_request_stale
 
 booking_requests_blp = Blueprint(
     "booking_requests",
@@ -94,6 +97,29 @@ def _assert_no_conflict(employee_id, start_time, end_time):
         )
 
 
+def _assert_capacity_available(garage, booking_request, start_time, end_time):
+    """The general per-slot capacity check (see app/public_booking/availability.py)
+    - not just "is this one employee free". A garage can configure
+    capacity_per_slot below its employee count, so a specific employee having
+    no conflict doesn't by itself guarantee the slot is still within capacity.
+    Excludes this request's own reservation - approving it converts that
+    reservation into the appointment, it doesn't add a new one."""
+    duration_min = int((end_time - start_time).total_seconds() // 60)
+    used, capacity = slot_capacity_usage(
+        garage,
+        start_time.date(),
+        start_time,
+        duration_min,
+        exclude_request_id=booking_request.id,
+    )
+    if used >= capacity:
+        abort(
+            409,
+            message="This time is no longer available - capacity has already "
+            "been taken by another appointment or request.",
+        )
+
+
 @booking_requests_blp.route("/")
 class BookingRequestList(MethodView):
 
@@ -103,11 +129,18 @@ class BookingRequestList(MethodView):
     def get(self, args):
         garage_id = get_current_employee().garage_id
 
+        # A PENDING request whose preferred time has passed shouldn't stay
+        # actionable - sweep before every read rather than relying on staff
+        # to notice and reject it manually (see service.py).
+        expire_stale_booking_requests(garage_id=garage_id)
+
         query = BookingRequest.query.filter_by(garage_id=garage_id)
         if args.get("status") is not None:
             query = query.filter(BookingRequest.status == args["status"])
 
-        return query.order_by(BookingRequest.created_at.desc()).all()
+        results = query.order_by(BookingRequest.created_at.desc()).all()
+        attach_review_context(results)
+        return results
 
 
 @booking_requests_blp.route("/<uuid:request_id>")
@@ -116,7 +149,10 @@ class BookingRequestResource(MethodView):
     @jwt_required()
     @booking_requests_blp.response(200, BookingRequestSchema)
     def get(self, request_id):
-        return _get_owned_request(request_id)
+        expire_stale_booking_requests(garage_id=get_current_employee().garage_id)
+        booking_request = _get_owned_request(request_id)
+        attach_review_context([booking_request])
+        return booking_request
 
 
 @booking_requests_blp.route("/<uuid:request_id>/approve")
@@ -129,6 +165,15 @@ class BookingRequestApprove(MethodView):
         employee = get_current_employee()
         garage_id = employee.garage_id
         booking_request = _get_owned_request(request_id)
+
+        if booking_request.status == "PENDING" and is_request_stale(booking_request):
+            booking_request.status = "EXPIRED"
+            db.session.commit()
+            abort(
+                409,
+                message="This request's preferred time has already passed - "
+                "it has expired and can no longer be approved.",
+            )
 
         if booking_request.status != "PENDING":
             abort(
@@ -151,11 +196,17 @@ class BookingRequestApprove(MethodView):
         assigned_employee_id = data.get("employee_id")
         if assigned_employee_id is None:
             abort(422, message="employee_id is required to schedule the appointment.")
-        if Employee.query.filter_by(id=assigned_employee_id, garage_id=garage_id).first() is None:
+        assigned_employee = Employee.query.filter_by(
+            id=assigned_employee_id, garage_id=garage_id
+        ).first()
+        if assigned_employee is None:
             abort(422, message="employee_id does not belong to your garage.")
+        if not assigned_employee.is_active:
+            abort(422, message="This employee's account is deactivated.")
 
         start_time, end_time = _resolve_appointment_slot(booking_request, data, appointment_type)
         _assert_no_conflict(assigned_employee_id, start_time, end_time)
+        _assert_capacity_available(booking_request.garage, booking_request, start_time, end_time)
 
         # --- reuse-or-create the customer ------------------------------
         customer = (
@@ -174,6 +225,11 @@ class BookingRequestApprove(MethodView):
             )
             db.session.add(customer)
             db.session.flush()
+        elif not customer.is_active:
+            # An archived customer matched by email - bring them back rather
+            # than silently creating a duplicate or letting the appointment
+            # attach to a customer nobody can see in the normal list.
+            customer.is_active = True
 
         # --- reuse-or-create the vehicle ------------------------------
         reg = _normalize_registration(booking_request.vehicle_registration)
@@ -198,6 +254,8 @@ class BookingRequestApprove(MethodView):
                 message="A vehicle with this registration already exists for a different "
                 "customer - resolve it manually before approving.",
             )
+        elif not vehicle.is_active:
+            vehicle.is_active = True
 
         # --- create the appointment ---------------------------------
         appointment = Appointment(
@@ -210,9 +268,11 @@ class BookingRequestApprove(MethodView):
             end_time=end_time,
             status="BOOKED",
             notes=booking_request.notes,
+            price_at_booking=appointment_type.base_price,
         )
         db.session.add(appointment)
         db.session.flush()
+        snapshot_checklist_for_appointment(appointment)
 
         booking_request.status = "APPROVED"
         booking_request.appointment_type_id = appointment_type.id
@@ -226,6 +286,7 @@ class BookingRequestApprove(MethodView):
 
         db.session.commit()
 
+        attach_review_context([booking_request])
         return booking_request
 
 
@@ -238,6 +299,10 @@ class BookingRequestReject(MethodView):
     def post(self, data, request_id):
         employee = get_current_employee()
         booking_request = _get_owned_request(request_id)
+
+        if booking_request.status == "PENDING" and is_request_stale(booking_request):
+            booking_request.status = "EXPIRED"
+            db.session.commit()
 
         if booking_request.status != "PENDING":
             abort(
@@ -252,4 +317,5 @@ class BookingRequestReject(MethodView):
 
         db.session.commit()
 
+        attach_review_context([booking_request])
         return booking_request

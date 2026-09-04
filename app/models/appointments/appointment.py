@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, Uuid
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -70,6 +71,12 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):
 
     status: Mapped[str] = mapped_column(String(30), default="BOOKED", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
+    # Snapshot of appointment_type.base_price at creation time - the type's
+    # price may change later (see app/appointments/types), but a historical
+    # appointment should keep showing what it actually cost. Duration doesn't
+    # need an equivalent snapshot: start_time/end_time are already fixed at
+    # creation and never move just because default_duration_minutes changes.
+    price_at_booking: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
 
     garage = relationship("Garage", back_populates="appointments")
     employee = relationship("Employee", back_populates="appointments")

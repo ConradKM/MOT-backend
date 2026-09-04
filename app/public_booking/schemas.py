@@ -10,6 +10,33 @@ from marshmallow import (
     validates,
 )
 
+from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
+
+
+class UKMobileField(fields.Str):
+    """A phone-number string, normalised to E.164 on the way in.
+
+    Lets the customer type a mobile number the way they normally would
+    (`07123 456789`, `+44 7123 456789`, ...) while what's actually stored is
+    always E.164 - the format the future SMS/Twilio integration needs.
+    """
+
+    def _deserialize(self, value, attr, data, **kwargs):
+        value = super()._deserialize(value, attr, data, **kwargs)
+        try:
+            return normalize_uk_mobile(value)
+        except InvalidPhoneNumberError as exc:
+            raise ValidationError(str(exc)) from exc
+
+
+class PublicIncludedItemSchema(Schema):
+    """One customer-visible checklist step - what a customer sees under
+    "What's included" for a service, never the full internal working
+    checklist (see ChecklistTemplateItem.visible_to_customer)."""
+
+    label = fields.Str(dump_only=True)
+    description = fields.Str(dump_only=True, allow_none=True)
+
 
 class PublicAppointmentTypeSchema(Schema):
     id = fields.UUID(dump_only=True)
@@ -17,6 +44,16 @@ class PublicAppointmentTypeSchema(Schema):
     description = fields.Str(dump_only=True, allow_none=True)
     base_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     default_duration_minutes = fields.Int(dump_only=True, allow_none=True)
+    included_items = fields.Method("_get_included_items", dump_only=True)
+
+    def _get_included_items(self, appointment_type):
+        template = appointment_type.checklist_template
+        if template is None:
+            return []
+        visible = sorted(
+            (i for i in template.items if i.visible_to_customer), key=lambda i: i.order
+        )
+        return PublicIncludedItemSchema(many=True).dump(visible)
 
 
 class PublicGarageDetailSchema(Schema):
@@ -45,9 +82,9 @@ class BookingRequestCreateSchema(Schema):
         required=True, validate=validate.Length(min=1, max=100)
     )
     customer_email = fields.Email(required=True, validate=validate.Length(max=320))
-    customer_phone = fields.Str(
-        allow_none=True, load_default=None, validate=validate.Length(max=40)
-    )
+    # Required: SMS reachability is the point of collecting it (see
+    # app/phone.py). Normalised to E.164 for storage.
+    customer_phone = UKMobileField(required=True, validate=validate.Length(max=40))
 
     vehicle_registration = fields.Str(
         required=True, validate=validate.Length(min=1, max=20)
@@ -111,6 +148,17 @@ class AvailabilityQueryArgsSchema(Schema):
     # `from` is a Python keyword, so bind it to `from_` but keep the query name.
     from_ = fields.Date(data_key="from", load_default=None)
     to = fields.Date(load_default=None)
+
+
+class DayAvailabilityQueryArgsSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    # Which service the customer is asking about - its duration determines
+    # which start times can fit (see app/public_booking/availability.py).
+    # Optional: omitted while the customer hasn't chosen a type yet, or for a
+    # garage that hasn't configured any.
+    appointment_type_id = fields.UUID(load_default=None)
 
 
 class _GarageRefSchema(Schema):

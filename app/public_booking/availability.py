@@ -136,24 +136,62 @@ def _load_day_usage(garage_id, day: date):
     return appointments, pending
 
 
-def _slot_usage(appointments, pending, slot_start: datetime, duration_min: int) -> int:
+def _pending_request_duration(pending_request, settings: "_Settings") -> int:
+    """The duration a PENDING request itself reserves - its selected
+    appointment type's current duration; the snapshot taken at submission
+    time if that type has since been edited to have none or deleted
+    (BookingRequest.appointment_type_id is a nullable FK, so this can
+    happen); the garage's generic default otherwise. Matches
+    _duration_minutes_for in app/booking_requests/service.py, which the
+    review screen uses for the same request."""
+    appt_type = pending_request.appointment_type
+    if appt_type is not None and appt_type.default_duration_minutes is not None:
+        return appt_type.default_duration_minutes
+    if pending_request.requested_duration_minutes is not None:
+        return pending_request.requested_duration_minutes
+    return settings.default_appointment_minutes
+
+
+def _slot_usage(
+    appointments, pending, slot_start: datetime, duration_min: int, settings: "_Settings"
+) -> int:
+    """How much of a candidate ``[slot_start, slot_start + duration_min)``
+    window is already used by real appointments or PENDING requests.
+
+    Each existing item is checked for a genuine interval overlap against its
+    *own* full duration - a 90-minute existing booking or pending request
+    blocks every candidate slot it overlaps, not just the one starting at its
+    exact start time. This is what lets a PENDING request correctly reserve
+    its whole span (e.g. 10:00-11:30 for a 90-minute service), not just the
+    single instant 10:00.
+    """
     slot_end = slot_start + timedelta(minutes=duration_min)
     used = sum(
         1
         for a in appointments
         if a.start_time < slot_end and a.end_time > slot_start
     )
-    start_m = _minutes(slot_start.time())
-    end_m = start_m + duration_min
-    used += sum(
-        1 for r in pending if start_m <= _minutes(r.preferred_time) < end_m
-    )
+    for r in pending:
+        p_start = datetime.combine(r.preferred_date, r.preferred_time, tzinfo=UTC)
+        p_end = p_start + timedelta(minutes=_pending_request_duration(r, settings))
+        if p_start < slot_end and p_end > slot_start:
+            used += 1
     return used
 
 
-def day_slots(garage, day, settings, hours_map, exceptions, now: datetime) -> list[dict]:
+def day_slots(
+    garage, day, settings, hours_map, exceptions, now: datetime, duration_min: int | None = None
+) -> list[dict]:
     """The bookable slot list for one open day. Empty when the garage is closed
-    that day or every slot is inside the lead-time cutoff."""
+    that day or every slot is inside the lead-time cutoff.
+
+    ``duration_min`` is the *candidate* appointment's length - normally the
+    selected appointment type's ``default_duration_minutes`` - so a slot only
+    appears when the whole job fits before closing and the whole span is free
+    (see ``_slot_usage``). Falls back to the garage's generic default when not
+    given, e.g. for the month calendar's day-level indicator, computed before
+    the customer has chosen a type at all.
+    """
     hrs = _day_hours(day, hours_map, exceptions)
     if hrs is None:
         return []
@@ -161,7 +199,7 @@ def day_slots(garage, day, settings, hours_map, exceptions, now: datetime) -> li
     opens_at, closes_at = hrs
     capacity = slot_capacity(garage, settings)
     interval = settings.slot_interval_minutes
-    duration = settings.default_appointment_minutes
+    duration = duration_min if duration_min is not None else settings.default_appointment_minutes
     # "limited" only makes sense once a slot can hold more than one booking.
     threshold = math.floor(capacity * settings.limited_threshold_ratio)
     lead_cutoff = now + timedelta(hours=settings.min_lead_time_hours)
@@ -175,7 +213,7 @@ def day_slots(garage, day, settings, hours_map, exceptions, now: datetime) -> li
         slot_time = time(m // 60, m % 60)
         slot_start = datetime.combine(day, slot_time, tzinfo=UTC)
         if slot_start >= lead_cutoff:
-            used = _slot_usage(appointments, pending, slot_start, duration)
+            used = _slot_usage(appointments, pending, slot_start, duration, settings)
             remaining = capacity - used
             if remaining <= 0:
                 status = SLOT_BOOKED
@@ -212,6 +250,18 @@ def day_slot_count(day, settings, hours_map, exceptions) -> int:
         count += 1
         m += interval
     return count
+
+
+def day_open_minutes(day, hours_map, exceptions) -> int:
+    """Minutes the garage is open on ``day`` (0 when closed) - the per-
+    resource capacity unit the staff dashboard uses, since it scales
+    correctly with appointments of any duration (unlike counting appointment
+    *rows* against a fixed slot count - see app/garages/capacity.py)."""
+    hrs = _day_hours(day, hours_map, exceptions)
+    if hrs is None:
+        return 0
+    opens_at, closes_at = hrs
+    return _minutes(closes_at) - _minutes(opens_at)
 
 
 def day_summary(garage, day, settings, hours_map, exceptions, now, today) -> dict:
@@ -298,15 +348,28 @@ def availability_range(garage, from_date, to_date, now: datetime) -> dict:
     }
 
 
-def single_day(garage, day: date, now: datetime) -> dict:
-    """Payload for GET /api/public/<slug>/availability/<date>."""
+def _type_duration(appointment_type, settings: _Settings) -> int:
+    if appointment_type is not None and appointment_type.default_duration_minutes is not None:
+        return appointment_type.default_duration_minutes
+    return settings.default_appointment_minutes
+
+
+def single_day(garage, day: date, now: datetime, appointment_type=None) -> dict:
+    """Payload for GET /api/public/<slug>/availability/<date>.
+
+    ``appointment_type`` is the service the customer has selected (optional -
+    the calendar's date step doesn't have one yet); when given, its own
+    duration drives which start times are offered, per
+    app/public_booking/availability.py's module docs.
+    """
     settings = resolve_settings(garage)
     hours_map = resolve_opening_hours(garage)
     today = now.date()
     exceptions = resolve_exceptions(garage, day, day)
     summary = day_summary(garage, day, settings, hours_map, exceptions, now, today)
+    duration = _type_duration(appointment_type, settings)
     slots = (
-        day_slots(garage, day, settings, hours_map, exceptions, now)
+        day_slots(garage, day, settings, hours_map, exceptions, now, duration_min=duration)
         if summary["is_open"]
         else []
     )
@@ -318,11 +381,41 @@ def single_day(garage, day: date, now: datetime) -> dict:
     }
 
 
-def validate_slot(garage, day: date, slot_time: time, now: datetime) -> str | None:
+def slot_capacity_usage(
+    garage,
+    day: date,
+    slot_start: datetime,
+    duration_min: int,
+    exclude_request_id=None,
+) -> tuple[int, int]:
+    """``(used, capacity)`` for one candidate slot - the same accounting
+    :func:`validate_slot` uses for its capacity check, exposed so other
+    callers (approving a booking request) can run the identical check.
+
+    ``exclude_request_id`` leaves one PENDING request's own reservation out of
+    ``used`` - pass the request being approved so converting its reservation
+    into a real appointment isn't double-counted against itself.
+    """
+    settings = resolve_settings(garage)
+    capacity = slot_capacity(garage, settings)
+    appointments, pending = _load_day_usage(garage.id, day)
+    if exclude_request_id is not None:
+        pending = [p for p in pending if p.id != exclude_request_id]
+    used = _slot_usage(appointments, pending, slot_start, duration_min, settings)
+    return used, capacity
+
+
+def validate_slot(
+    garage, day: date, slot_time: time, now: datetime, appointment_type=None
+) -> str | None:
     """Submit-time re-check that ``(day, slot_time)`` is genuinely bookable, by
     the same rules the customer calendar uses. Returns ``None`` when it is, or a
     short reason (``past`` / ``closed`` / ``outside_hours`` / ``too_soon`` /
     ``full`` / ``out_of_window``) so a direct API POST can't bypass the calendar.
+
+    ``appointment_type`` (when the request named one) makes this check use
+    the *real* selected duration - a slot that only just fits a 30-minute
+    diagnostic but not a 90-minute service must be rejected for the latter.
     """
     settings = resolve_settings(garage)
     today = now.date()
@@ -340,7 +433,7 @@ def validate_slot(garage, day: date, slot_time: time, now: datetime) -> str | No
         return "closed"
 
     opens_at, closes_at = hrs
-    duration = settings.default_appointment_minutes
+    duration = _type_duration(appointment_type, settings)
     start_m = _minutes(slot_time)
     if start_m < _minutes(opens_at) or start_m + duration > _minutes(closes_at):
         return "outside_hours"
@@ -351,9 +444,8 @@ def validate_slot(garage, day: date, slot_time: time, now: datetime) -> str | No
     if slot_start < now + timedelta(hours=settings.min_lead_time_hours):
         return "too_soon"
 
-    capacity = slot_capacity(garage, settings)
-    appointments, pending = _load_day_usage(garage.id, day)
-    if _slot_usage(appointments, pending, slot_start, duration) >= capacity:
+    used, capacity = slot_capacity_usage(garage, day, slot_start, duration)
+    if used >= capacity:
         return "full"
 
     return None

@@ -108,6 +108,7 @@ def _payload(**overrides):
         "customer_first_name": "Sam",
         "customer_last_name": "Day",
         "customer_email": "sam.day@example.com",
+        "customer_phone": "07123 456789",
         "vehicle_registration": "SD11 DAY",
         "preferred_date": TODAY.isoformat(),
         "preferred_time": "14:00:00",

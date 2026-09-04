@@ -1,19 +1,43 @@
 """API tests for the per-appointment checklist instance.
 
-Covers snapshot-on-first-use semantics: once created, a checklist instance
-must not change when its template is edited afterwards.
+Covers snapshot semantics: an appointment's checklist is snapshotted from its
+type's current template as soon as the appointment exists (see
+app/appointments/checklists/service.py) - once created, that snapshot must
+not change when the template is edited afterwards.
 """
 
 import uuid
 
+# This file's default checklist item is exercised with automotive-style
+# results (PASS/MAJOR/...) further down, so it opts into that preset
+# explicitly rather than the generic (DONE/NOT_APPLICABLE/NOT_CHECKED)
+# default a brand-new item gets - see
+# app/models/appointments/checklist_template_item.py.
+_AUTOMOTIVE_RESULT_OPTIONS = [
+    "PASS", "ADVISORY", "MINOR", "MAJOR", "DANGEROUS", "RECTIFIED",
+    "RECOMMENDED", "CUSTOMER_DECLINED", "NOT_APPLICABLE", "NOT_CHECKED",
+]
+
 
 def _make_appointment_with_template(authenticated_user, customer, template_items=None):
+    """Create a type + template + one appointment against it. The
+    appointment's checklist is auto-created at that point (the type already
+    has a template) - callers that need the checklist itself should GET it,
+    not POST (POST now 409s since one already exists; see
+    test_starting_an_already_snapshotted_checklist_conflicts)."""
     appt_type = authenticated_user.client.post(
         "/api/appointment-types/", json={"name": "MOT"}
     ).get_json()
     authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
 
-    for item in template_items or [{"label": "Check tyre tread depth", "is_compulsory": True}]:
+    default_items = [
+        {
+            "label": "Check tyre tread depth",
+            "is_compulsory": True,
+            "result_options": _AUTOMOTIVE_RESULT_OPTIONS,
+        }
+    ]
+    for item in template_items or default_items:
         authenticated_user.client.post(
             f"/api/appointment-types/{appt_type['id']}/checklist-template/items", json=item
         )
@@ -32,17 +56,28 @@ def _make_appointment_with_template(authenticated_user, customer, template_items
     return appt_type, appointment
 
 
+def _get_checklist(authenticated_user, appointment):
+    return authenticated_user.client.get(
+        f"/api/appointments/{appointment['id']}/checklist"
+    ).get_json()
+
+
 # --------------------------------------------------------------------------
 # Success cases
 # --------------------------------------------------------------------------
 
 
-def test_snapshot_checklist_for_appointment(authenticated_user, customer):
+def test_checklist_is_snapshotted_automatically_when_the_appointment_is_created(
+    authenticated_user, customer
+):
+    """The common path (item 11/19): a type with a template already built
+    gets its checklist snapshotted the moment the appointment exists, not
+    whenever staff first happen to open the checklist page."""
     _, appointment = _make_appointment_with_template(authenticated_user, customer)
 
-    resp = authenticated_user.client.post(f"/api/appointments/{appointment['id']}/checklist")
+    resp = authenticated_user.client.get(f"/api/appointments/{appointment['id']}/checklist")
 
-    assert resp.status_code == 201
+    assert resp.status_code == 200
     body = resp.get_json()
     assert body["appointment_id"] == appointment["id"]
     assert len(body["items"]) == 1
@@ -52,7 +87,6 @@ def test_snapshot_checklist_for_appointment(authenticated_user, customer):
 
 def test_get_checklist_after_snapshot(authenticated_user, customer):
     _, appointment = _make_appointment_with_template(authenticated_user, customer)
-    authenticated_user.client.post(f"/api/appointments/{appointment['id']}/checklist")
 
     resp = authenticated_user.client.get(f"/api/appointments/{appointment['id']}/checklist")
 
@@ -61,15 +95,28 @@ def test_get_checklist_after_snapshot(authenticated_user, customer):
 
 
 def test_get_checklist_before_snapshot_returns_404(authenticated_user, customer):
-    _, appointment = _make_appointment_with_template(authenticated_user, customer)
+    # No template exists at appointment-creation time, so nothing is
+    # auto-snapshotted (mirrors test_snapshot_without_a_template_fails).
+    appt_type = authenticated_user.client.post(
+        "/api/appointment-types/", json={"name": "MOT"}
+    ).get_json()
+    appointment = authenticated_user.client.post(
+        "/api/appointments/",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "customer_id": str(customer.id),
+            "start_time": "2026-09-15T09:00:00+01:00",
+            "end_time": "2026-09-15T10:00:00+01:00",
+            "appointment_type_id": appt_type["id"],
+        },
+    ).get_json()
 
     resp = authenticated_user.client.get(f"/api/appointments/{appointment['id']}/checklist")
     assert resp.status_code == 404
 
 
-def test_snapshotting_twice_conflicts(authenticated_user, customer):
+def test_starting_an_already_snapshotted_checklist_conflicts(authenticated_user, customer):
     _, appointment = _make_appointment_with_template(authenticated_user, customer)
-    authenticated_user.client.post(f"/api/appointments/{appointment['id']}/checklist")
 
     resp = authenticated_user.client.post(f"/api/appointments/{appointment['id']}/checklist")
     assert resp.status_code == 409
@@ -94,9 +141,39 @@ def test_snapshot_without_a_template_fails(authenticated_user, customer):
     assert resp.status_code == 422
 
 
+def test_manual_start_still_works_when_the_template_is_added_after_booking(
+    authenticated_user, customer
+):
+    """The remaining legitimate use of the manual POST: an appointment booked
+    for a type that had no checklist template yet, which later gains one."""
+    appt_type = authenticated_user.client.post(
+        "/api/appointment-types/", json={"name": "Consultation"}
+    ).get_json()
+    appointment = authenticated_user.client.post(
+        "/api/appointments/",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "customer_id": str(customer.id),
+            "start_time": "2026-09-15T09:00:00+01:00",
+            "end_time": "2026-09-15T10:00:00+01:00",
+            "appointment_type_id": appt_type["id"],
+        },
+    ).get_json()
+
+    authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    authenticated_user.client.post(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template/items",
+        json={"label": "Discuss goals"},
+    )
+
+    resp = authenticated_user.client.post(f"/api/appointments/{appointment['id']}/checklist")
+    assert resp.status_code == 201
+    assert len(resp.get_json()["items"]) == 1
+
+
 def test_logging_an_item_result_sets_status_and_notes(authenticated_user, customer):
     _, appointment = _make_appointment_with_template(authenticated_user, customer)
-    checklist = authenticated_user.client.post(
+    checklist = authenticated_user.client.get(
         f"/api/appointments/{appointment['id']}/checklist"
     ).get_json()
     item_id = checklist["items"][0]["id"]
@@ -114,7 +191,7 @@ def test_logging_an_item_result_sets_status_and_notes(authenticated_user, custom
 
 def test_logging_a_result_records_who_and_when(authenticated_user, customer):
     _, appointment = _make_appointment_with_template(authenticated_user, customer)
-    checklist = authenticated_user.client.post(
+    checklist = authenticated_user.client.get(
         f"/api/appointments/{appointment['id']}/checklist"
     ).get_json()
     item_id = checklist["items"][0]["id"]
@@ -131,7 +208,7 @@ def test_logging_a_result_records_who_and_when(authenticated_user, customer):
 
 def test_client_cannot_set_completed_by_or_completed_at_directly(authenticated_user, customer):
     _, appointment = _make_appointment_with_template(authenticated_user, customer)
-    checklist = authenticated_user.client.post(
+    checklist = authenticated_user.client.get(
         f"/api/appointments/{appointment['id']}/checklist"
     ).get_json()
     item_id = checklist["items"][0]["id"]
@@ -171,7 +248,6 @@ def test_editing_template_after_snapshot_does_not_change_existing_checklist(
     authenticated_user, customer
 ):
     appt_type, appointment = _make_appointment_with_template(authenticated_user, customer)
-    authenticated_user.client.post(f"/api/appointments/{appointment['id']}/checklist")
 
     # Add a brand-new item to the template after the checklist was snapshotted.
     authenticated_user.client.post(
@@ -196,7 +272,7 @@ def test_editing_template_item_after_snapshot_does_not_change_logged_item(
     ).get_json()
     template_item_id = template["items"][0]["id"]
 
-    checklist = authenticated_user.client.post(
+    checklist = authenticated_user.client.get(
         f"/api/appointments/{appointment['id']}/checklist"
     ).get_json()
 
@@ -218,7 +294,6 @@ def test_deleting_template_after_snapshot_preserves_the_checklist_instance(
     authenticated_user, customer
 ):
     appt_type, appointment = _make_appointment_with_template(authenticated_user, customer)
-    authenticated_user.client.post(f"/api/appointments/{appointment['id']}/checklist")
 
     resp = authenticated_user.client.delete(f"/api/appointment-types/{appt_type['id']}/checklist-template")
     assert resp.status_code == 204
@@ -235,7 +310,7 @@ def test_deleting_template_after_snapshot_preserves_the_checklist_instance(
 
 def test_log_result_invalid_status(authenticated_user, customer):
     _, appointment = _make_appointment_with_template(authenticated_user, customer)
-    checklist = authenticated_user.client.post(
+    checklist = authenticated_user.client.get(
         f"/api/appointments/{appointment['id']}/checklist"
     ).get_json()
     item_id = checklist["items"][0]["id"]
@@ -249,7 +324,7 @@ def test_log_result_invalid_status(authenticated_user, customer):
 
 def test_log_result_nonexistent_item_returns_404(authenticated_user, customer):
     _, appointment = _make_appointment_with_template(authenticated_user, customer)
-    checklist = authenticated_user.client.post(
+    checklist = authenticated_user.client.get(
         f"/api/appointments/{appointment['id']}/checklist"
     ).get_json()
 

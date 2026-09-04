@@ -1,7 +1,7 @@
 import uuid
 from datetime import date
 
-from sqlalchemy import Date, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, Date, ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.extensions import db
@@ -37,6 +37,12 @@ class Vehicle(db.Model, PrimaryKeyMixin, TimestampMixin):
     year: Mapped[int | None] = mapped_column()
     current_mileage: Mapped[int | None] = mapped_column()
     mot_expiry_date: Mapped[date | None] = mapped_column(Date)
+
+    # Soft-delete: a vehicle with MOT history/appointments is archived rather
+    # than hard-deleted (see app/vehicles/routes.py) so that history survives.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
 
     garage = relationship("Garage", back_populates="vehicles")
     customer = relationship("Customer", back_populates="vehicles")

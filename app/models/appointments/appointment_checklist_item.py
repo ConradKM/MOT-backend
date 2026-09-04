@@ -41,11 +41,19 @@ class AppointmentChecklistItem(db.Model, PrimaryKeyMixin, TimestampMixin):
 
     order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     label: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500))
     is_compulsory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     media_type: Mapped[str] = mapped_column(String(10), nullable=False, default="NONE")
     media_required_for_statuses: Mapped[list[str]] = mapped_column(
         ARRAY(String(20)), nullable=False, default=list
     )
+    # Snapshotted from the template item at creation time (see module
+    # docstring) - later template edits (including switching to a different
+    # result-options preset) never change what this logged item accepts.
+    result_options: Mapped[list[str]] = mapped_column(
+        ARRAY(String(30)), nullable=False, default=list
+    )
+    visible_to_customer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="NOT_CHECKED")
     notes: Mapped[str | None] = mapped_column(Text)

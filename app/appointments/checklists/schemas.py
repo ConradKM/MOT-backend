@@ -1,6 +1,4 @@
-from marshmallow import Schema, fields, validate
-
-from app.models.appointments.checklist_template_item import CHECKLIST_ITEM_STATUSES
+from marshmallow import Schema, fields
 
 
 class ChecklistItemMediaBriefSchema(Schema):
@@ -21,11 +19,20 @@ class AppointmentChecklistItemSchema(Schema):
 
     order = fields.Int(dump_only=True)
     label = fields.Str(dump_only=True)
+    description = fields.Str(dump_only=True, allow_none=True)
     is_compulsory = fields.Bool(dump_only=True)
     media_type = fields.Str(dump_only=True)
     media_required_for_statuses = fields.List(fields.Str(), dump_only=True)
+    # The values this specific logged item accepts for `status` - snapshotted
+    # at instance-creation time, so it never changes even if the template
+    # item's own result_options are edited afterwards (see model docstring).
+    result_options = fields.List(fields.Str(), dump_only=True)
+    visible_to_customer = fields.Bool(dump_only=True)
 
-    status = fields.Str(validate=validate.OneOf(CHECKLIST_ITEM_STATUSES))
+    # No fixed OneOf here - valid values are this item's own result_options,
+    # checked in the route (see checklists/routes.py) since marshmallow can't
+    # validate against per-instance data declaratively.
+    status = fields.Str()
     notes = fields.Str(allow_none=True)
     completed_by_employee_id = fields.UUID(dump_only=True, allow_none=True)
     completed_at = fields.DateTime(dump_only=True, allow_none=True)
@@ -41,7 +48,7 @@ class AppointmentChecklistItemSchema(Schema):
 
 
 class AppointmentChecklistItemUpdateSchema(Schema):
-    status = fields.Str(validate=validate.OneOf(CHECKLIST_ITEM_STATUSES))
+    status = fields.Str()
     notes = fields.Str(allow_none=True)
 
 
