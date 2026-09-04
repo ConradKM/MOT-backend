@@ -1,7 +1,8 @@
+from datetime import UTC, datetime
+
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
-from werkzeug.security import generate_password_hash
 
 from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
@@ -10,6 +11,21 @@ from app.models.employee import Employee
 from app.models.role import Role
 
 from .schemas import EmployeeSchema, EmployeeUpdateSchema
+from .service import create_employee_account
+
+
+def _active_owner_count(garage_id, exclude_id=None):
+    q = (
+        Employee.query.join(Employee.roles)
+        .filter(
+            Employee.garage_id == garage_id,
+            Employee.is_active.is_(True),
+            Role.name == "OWNER",
+        )
+    )
+    if exclude_id is not None:
+        q = q.filter(Employee.id != exclude_id)
+    return q.count()
 
 employees_blp = Blueprint(
     "employees",
@@ -51,35 +67,29 @@ class EmployeeList(MethodView):
     @employees_blp.arguments(EmployeeSchema)
     @employees_blp.response(201, EmployeeSchema)
     def post(self, data):
+        # Garage always comes from the owner's token - never the request body.
         garage_id = get_current_employee().garage_id
 
-        existing_employee = Employee.query.filter_by(email=data["email"]).first()
-
-        if existing_employee:
-            abort(409, message="An employee with this email already exists.")
-
         role_ids = data.get("role_ids") or []
-
         if role_ids:
             roles = _resolve_roles(role_ids, garage_id)
         else:
-            # No roles specified - default to the garage's STAFF role, same as before
-            # roles existed, unless it's been renamed/deleted.
-            default_role = Role.query.filter_by(garage_id=garage_id, name="STAFF").first()
+            # No roles specified - default to the garage's STAFF role, same as
+            # before roles existed, unless it's been renamed/deleted.
+            default_role = Role.query.filter_by(
+                garage_id=garage_id, name="STAFF"
+            ).first()
             roles = [default_role] if default_role else []
 
-        employee = Employee(
+        employee = create_employee_account(
             garage_id=garage_id,
             email=data["email"],
+            password=data["password"],
             first_name=data.get("first_name"),
             last_name=data.get("last_name"),
-            password_hash=generate_password_hash(data["password"]),
             roles=roles,
         )
-
-        db.session.add(employee)
         db.session.commit()
-
         return employee
 
 
@@ -113,23 +123,32 @@ class EmployeeResource(MethodView):
         if "role_ids" in data:
             new_roles = _resolve_roles(data["role_ids"], garage_id)
 
-            removing_own_ownership = employee.id == get_current_employee().id and not any(
-                role.name == "OWNER" for role in new_roles
-            )
-            if removing_own_ownership:
-                other_owners = (
-                    Employee.query.join(Employee.roles)
-                    .filter(
-                        Employee.garage_id == garage_id,
-                        Role.name == "OWNER",
-                        Employee.id != employee.id,
-                    )
-                    .count()
-                )
-                if other_owners == 0:
-                    abort(409, message="Cannot remove the last owner's OWNER role.")
+            was_owner = employee.has_role("OWNER")
+            will_be_owner = any(role.name == "OWNER" for role in new_roles)
+            if (
+                was_owner
+                and not will_be_owner
+                and employee.is_active
+                and _active_owner_count(garage_id, exclude_id=employee.id) == 0
+            ):
+                abort(409, message="Cannot remove the last active owner's OWNER role.")
 
             employee.roles = new_roles
+
+        if "is_active" in data and data["is_active"] != employee.is_active:
+            if (
+                not data["is_active"]
+                and employee.has_role("OWNER")
+                and _active_owner_count(garage_id, exclude_id=employee.id) == 0
+            ):
+                abort(
+                    409,
+                    message="Cannot deactivate the garage's only active owner.",
+                )
+            employee.is_active = data["is_active"]
+            if not data["is_active"]:
+                # End the deactivated user's live sessions immediately.
+                employee.tokens_valid_from = datetime.now(UTC)
 
         if "email" in data:
             existing_employee = Employee.query.filter(

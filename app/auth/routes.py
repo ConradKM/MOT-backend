@@ -1,3 +1,4 @@
+from flask import current_app, request
 from flask.views import MethodView
 from flask_jwt_extended import (
     create_access_token,
@@ -6,18 +7,37 @@ from flask_jwt_extended import (
     jwt_required,
 )
 from flask_smorest import Blueprint, abort
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash
 
-from app.appointments.statuses.defaults import seed_default_statuses
 from app.auth.utils import get_current_employee
 from app.employees.schemas import EmployeeSchema
-from app.extensions import db
-from app.garages.slug import slugify_unique
+from app.employees.service import validate_password
+from app.extensions import db, limiter
+from app.garages.onboarding import (
+    GarageSpec,
+    OnboardingEmailInUse,
+    OnboardingError,
+    OwnerSpec,
+    onboard_garage,
+)
 from app.models.employee import Employee
-from app.models.garage import Garage
-from app.models.role import Role
 
-from .schemas import LoginSchema, RefreshTokenSchema, RegisterSchema, TokenSchema
+from .reset import (
+    consume_token_and_set_password,
+    find_valid_token,
+    issue_reset_token,
+    send_reset_link,
+)
+from .schemas import (
+    ForgotPasswordSchema,
+    LoginSchema,
+    MessageSchema,
+    RefreshTokenSchema,
+    RegisterSchema,
+    ResetPasswordSchema,
+    ResetTokenStatusSchema,
+    TokenSchema,
+)
 
 auth_blp = Blueprint(
     "auth",
@@ -26,108 +46,79 @@ auth_blp = Blueprint(
     description="Authentication",
 )
 
+# Shown for every forgot-password call so the response can't be used to tell
+# whether an email is registered.
+_GENERIC_RESET_MESSAGE = (
+    "If an account exists for this email address, a password reset link "
+    "has been sent."
+)
+
+
 @auth_blp.route("/register")
 class Register(MethodView):
+    """Garage onboarding over HTTP.
 
+    A thin wrapper over ``app.garages.onboarding`` - the same transactional
+    service the ``flask onboard-garage`` CLI uses. There is no public path to
+    create a bare employee here; onboarding always makes the Garage + its
+    first OWNER together. Set ``ONBOARDING_HTTP_ENABLED=false`` to disable this
+    endpoint and onboard via the CLI only.
+    """
+
+    @limiter.limit(lambda: current_app.config["AUTH_RESET_RATELIMIT"])
     @auth_blp.arguments(RegisterSchema)
     @auth_blp.response(201, TokenSchema)
     def post(self, data):
-
-        existing_employee = Employee.query.filter_by(
-            email=data["email"]
-        ).first()
-
-        if existing_employee:
+        if not current_app.config.get("ONBOARDING_HTTP_ENABLED", True):
             abort(
-                409,
-                message="A user with this email already exists.",
+                404,
+                message="Garage onboarding is handled by the platform team.",
             )
 
-        garage = Garage(
-            name=data["garage_name"],
-            slug=slugify_unique(data["garage_name"], db.session),
-        )
-
-        db.session.add(garage)
-        db.session.flush()
-
-        # A new garage starts with no appointment types - the owner defines
-        # its own from Settings > Appointment types (see #9). Until they add
-        # one, the public booking wizard shows "no services yet" and staff
-        # can't create an appointment.
-
-        # Appointment statuses, on the other hand, ship with the built-in set
-        # (the owner can then rename / recolour / extend them).
-        seed_default_statuses(garage.id, db.session)
-
-        owner_role = Role(garage_id=garage.id, name="OWNER")
-        db.session.add(owner_role)
-        db.session.add(Role(garage_id=garage.id, name="STAFF"))
-
-        employee = Employee(
-            garage_id=garage.id,
-            email=data["email"],
-            password_hash=generate_password_hash(
-                data["password"]
-            ),
-            roles=[owner_role],
-        )
-
-        db.session.add(employee)
-        db.session.commit()
-
-        access_token = create_access_token(
-            identity=str(employee.id),
-        )
-
-        refresh_token = create_refresh_token(
-            identity=str(employee.id),
-        )
+        try:
+            result = onboard_garage(
+                garage=GarageSpec(name=data["garage_name"]),
+                owner=OwnerSpec(
+                    email=data["email"],
+                    password=data["password"],
+                    first_name=data.get("first_name"),
+                    last_name=data.get("last_name"),
+                ),
+            )
+        except OnboardingEmailInUse as exc:
+            abort(409, message=str(exc))
+        except OnboardingError as exc:
+            abort(422, message=str(exc))
 
         return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
+            "access_token": create_access_token(identity=str(result.owner.id)),
+            "refresh_token": create_refresh_token(identity=str(result.owner.id)),
         }
 
 
 @auth_blp.route("/login")
 class Login(MethodView):
 
+    @limiter.limit(lambda: current_app.config["AUTH_LOGIN_RATELIMIT"])
     @auth_blp.arguments(LoginSchema)
     @auth_blp.response(200, TokenSchema)
     def post(self, data):
+        employee = Employee.query.filter_by(email=data["email"]).first()
 
-        employee = Employee.query.filter_by(
-            email=data["email"]
-        ).first()
-
-        if not employee:
-            abort(
-                401,
-                message="Invalid email or password.",
-            )
-
-        if not check_password_hash(
-            employee.password_hash,
-            data["password"],
+        # One message for "no such account", "wrong password" and "deactivated"
+        # so login can't be used to probe which emails exist / are active.
+        if (
+            employee is None
+            or not employee.is_active
+            or not check_password_hash(employee.password_hash, data["password"])
         ):
-            abort(
-                401,
-                message="Invalid email or password.",
-            )
-
-        access_token = create_access_token(
-            identity=str(employee.id),
-        )
-
-        refresh_token = create_refresh_token(
-            identity=str(employee.id),
-        )
+            abort(401, message="Invalid email or password.")
 
         return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
+            "access_token": create_access_token(identity=str(employee.id)),
+            "refresh_token": create_refresh_token(identity=str(employee.id)),
         }
+
 
 @auth_blp.route("/refresh")
 class Refresh(MethodView):
@@ -135,16 +126,7 @@ class Refresh(MethodView):
     @jwt_required(refresh=True)
     @auth_blp.response(200, RefreshTokenSchema)
     def post(self):
-
-        employee_id = get_jwt_identity()
-
-        access_token = create_access_token(
-            identity=employee_id,
-        )
-
-        return {
-            "access_token": access_token,
-        }
+        return {"access_token": create_access_token(identity=get_jwt_identity())}
 
 
 @auth_blp.route("/me")
@@ -159,10 +141,62 @@ class Me(MethodView):
         the restriction from a 403 on the action itself.
         """
         employee = get_current_employee()
-
-        # Valid JWT, but it doesn't map to an employee - a deleted account, or
-        # a customer-portal token (see app/customer_auth).
         if employee is None:
             abort(401, message="Not authenticated as an employee.")
-
         return employee
+
+
+@auth_blp.route("/forgot-password")
+class ForgotPassword(MethodView):
+
+    @limiter.limit(lambda: current_app.config["AUTH_RESET_RATELIMIT"])
+    @auth_blp.arguments(ForgotPasswordSchema)
+    @auth_blp.response(200, MessageSchema)
+    def post(self, data):
+        employee = Employee.query.filter_by(email=data["email"]).first()
+        if employee is not None and employee.is_active:
+            raw_token = issue_reset_token(employee)
+            db.session.commit()
+            send_reset_link(employee, raw_token)
+
+        return {"message": _GENERIC_RESET_MESSAGE}
+
+
+@auth_blp.route("/reset-password")
+class ResetPassword(MethodView):
+
+    @auth_blp.arguments(ResetTokenStatusSchema(only=()), location="query")
+    @auth_blp.response(200, ResetTokenStatusSchema)
+    def get(self, _args):
+        """Lets the reset page show the invalid/expired state before the user
+        types a new password."""
+        token = request.args.get("token", "")
+        if find_valid_token(token) is None:
+            abort(
+                400,
+                message="This password reset link is invalid or has expired. "
+                "Please request a new one.",
+            )
+        return {"valid": True}
+
+    @limiter.limit(lambda: current_app.config["AUTH_RESET_RATELIMIT"])
+    @auth_blp.arguments(ResetPasswordSchema)
+    @auth_blp.response(200, MessageSchema)
+    def post(self, data):
+        validate_password(data["password"])
+
+        row = find_valid_token(data["token"])
+        if row is None:
+            abort(
+                400,
+                message="This password reset link is invalid or has expired. "
+                "Please request a new one.",
+            )
+
+        consume_token_and_set_password(row, data["password"])
+        db.session.commit()
+
+        return {
+            "message": "Your password has been reset successfully. "
+            "You can now log in."
+        }

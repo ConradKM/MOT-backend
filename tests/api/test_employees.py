@@ -420,3 +420,105 @@ def test_owner_can_remove_own_owner_role_if_another_owner_exists(authenticated_u
     assert resp.status_code == 200
     assert resp.get_json()["roles"] == []
     assert second_owner["roles"][0]["name"] == "OWNER"
+
+
+# --------------------------------------------------------------------------
+# Activate / deactivate
+# --------------------------------------------------------------------------
+
+
+def test_new_employee_is_active_by_default(authenticated_user):
+    created = authenticated_user.client.post(
+        "/api/employees/",
+        json={"email": "active@garage-a.example", "password": "password123"},
+    ).get_json()
+    assert created["is_active"] is True
+
+
+def test_owner_can_deactivate_and_reactivate_an_employee(authenticated_user):
+    emp = authenticated_user.client.post(
+        "/api/employees/",
+        json={"email": "toggle@garage-a.example", "password": "password123"},
+    ).get_json()
+
+    off = authenticated_user.client.patch(
+        f"/api/employees/{emp['id']}", json={"is_active": False}
+    )
+    assert off.status_code == 200 and off.get_json()["is_active"] is False
+
+    on = authenticated_user.client.patch(
+        f"/api/employees/{emp['id']}", json={"is_active": True}
+    )
+    assert on.status_code == 200 and on.get_json()["is_active"] is True
+
+
+def test_deactivated_employee_cannot_log_in(authenticated_user):
+    authenticated_user.client.post(
+        "/api/employees/",
+        json={"email": "gone@garage-a.example", "password": "password123"},
+    )
+    emp_id = [
+        e["id"]
+        for e in authenticated_user.client.get("/api/employees/").get_json()
+        if e["email"] == "gone@garage-a.example"
+    ][0]
+    authenticated_user.client.patch(f"/api/employees/{emp_id}", json={"is_active": False})
+
+    resp = authenticated_user.client.post(
+        "/api/auth/login",
+        json={"email": "gone@garage-a.example", "password": "password123"},
+    )
+    assert resp.status_code == 401
+
+
+def test_owner_cannot_deactivate_the_only_active_owner(authenticated_user):
+    resp = authenticated_user.client.patch(
+        f"/api/employees/{authenticated_user.user.id}", json={"is_active": False}
+    )
+    assert resp.status_code == 409
+
+
+def test_owner_can_deactivate_self_when_another_active_owner_exists(authenticated_user):
+    owner_role_id = str(authenticated_user.user.roles[0].id)
+    authenticated_user.client.post(
+        "/api/employees/",
+        json={
+            "email": "co-owner2@garage-a.example",
+            "password": "password123",
+            "role_ids": [owner_role_id],
+        },
+    )
+    resp = authenticated_user.client.patch(
+        f"/api/employees/{authenticated_user.user.id}", json={"is_active": False}
+    )
+    assert resp.status_code == 200
+
+
+def test_a_normal_employee_cannot_toggle_activation(
+    authenticated_user, staff_role, client
+):
+    from werkzeug.security import generate_password_hash
+
+    from app.extensions import db
+    from app.models.employee import Employee
+
+    staff = Employee(
+        garage_id=authenticated_user.garage.id,
+        email="plainstaff@garage-a.example",
+        password_hash=generate_password_hash("password123"),
+        roles=[staff_role],
+    )
+    db.session.add(staff)
+    db.session.commit()
+
+    token = client.post(
+        "/api/auth/login",
+        json={"email": "plainstaff@garage-a.example", "password": "password123"},
+    ).get_json()["access_token"]
+
+    resp = client.patch(
+        f"/api/employees/{authenticated_user.user.id}",
+        json={"is_active": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403

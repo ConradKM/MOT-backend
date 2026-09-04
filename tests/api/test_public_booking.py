@@ -5,6 +5,8 @@ POST /api/public/<slug>/booking-requests
 """
 
 import datetime
+import json
+import urllib.error
 
 from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -13,7 +15,16 @@ from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
 from app.models.vehicle import Vehicle
 
-FUTURE_DATE = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+def _future_weekday(days_ahead=7):
+    d = datetime.date.today() + datetime.timedelta(days=days_ahead)
+    while d.weekday() >= 5:  # keep off Sat/Sun - the default schedule is closed
+        d += datetime.timedelta(days=1)
+    return d
+
+
+# A weekday so the submit-time opening-hours re-check accepts these payloads
+# regardless of which day the suite runs on.
+FUTURE_DATE = _future_weekday().isoformat()
 
 
 def _valid_payload(**overrides):
@@ -182,6 +193,157 @@ def test_submit_rejected_captcha_returns_400(client, garage, monkeypatch):
     )
     assert resp.status_code == 400
     assert BookingRequest.query.count() == 0
+
+
+# --------------------------------------------------------------------------
+# Server-side Turnstile verification (real code path, provider = "turnstile")
+# --------------------------------------------------------------------------
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = json.dumps(payload).encode()
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _stub_siteverify(monkeypatch, *, success=True, raises=None):
+    def fake_urlopen(url, data=None, timeout=None):
+        if raises is not None:
+            raise raises
+        return _FakeResp({"success": success})
+
+    monkeypatch.setattr(
+        "app.public_booking.captcha.urllib.request.urlopen", fake_urlopen
+    )
+
+
+def test_turnstile_valid_token_creates_the_request(app, client, garage, monkeypatch):
+    monkeypatch.setitem(app.config, "CAPTCHA_PROVIDER", "turnstile")
+    _stub_siteverify(monkeypatch, success=True)
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(captcha_token="good-token"),
+    )
+    assert resp.status_code == 201
+    assert BookingRequest.query.count() == 1
+
+
+def test_turnstile_rejected_token_returns_400(app, client, garage, monkeypatch):
+    monkeypatch.setitem(app.config, "CAPTCHA_PROVIDER", "turnstile")
+    _stub_siteverify(monkeypatch, success=False)
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(captcha_token="bad-token"),
+    )
+    assert resp.status_code == 400
+    assert BookingRequest.query.count() == 0
+
+
+def test_turnstile_missing_token_returns_400_without_calling_provider(
+    app, client, garage, monkeypatch
+):
+    monkeypatch.setitem(app.config, "CAPTCHA_PROVIDER", "turnstile")
+
+    def explode(*a, **k):  # pragma: no cover - must not be reached
+        raise AssertionError("provider should not be called with no token")
+
+    monkeypatch.setattr(
+        "app.public_booking.captcha.urllib.request.urlopen", explode
+    )
+
+    payload = _valid_payload()
+    payload.pop("captcha_token", None)
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=payload)
+    assert resp.status_code == 400
+    assert BookingRequest.query.count() == 0
+
+
+def test_turnstile_network_failure_fails_closed(app, client, garage, monkeypatch):
+    monkeypatch.setitem(app.config, "CAPTCHA_PROVIDER", "turnstile")
+    _stub_siteverify(monkeypatch, raises=urllib.error.URLError("down"))
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(captcha_token="whatever"),
+    )
+    assert resp.status_code == 400
+    assert BookingRequest.query.count() == 0
+
+
+# --------------------------------------------------------------------------
+# Double-booking guard (re-check on submit)
+# --------------------------------------------------------------------------
+
+
+def _future_dt(hour, minute=0):
+    day = datetime.date.fromisoformat(FUTURE_DATE)
+    return datetime.datetime.combine(
+        day, datetime.time(hour, minute), tzinfo=datetime.UTC
+    )
+
+
+def test_submit_into_a_full_slot_returns_409(client, session, garage, make_appointment):
+    # One employee -> default per-slot capacity of 1; fill 09:30.
+    make_appointment(_future_dt(9, 30), minutes=60)
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(preferred_time="09:30:00"),
+    )
+
+    assert resp.status_code == 409
+    assert "no longer available" in resp.get_json()["message"]
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
+
+
+def test_submit_into_a_free_slot_still_succeeds(
+    client, session, garage, make_appointment
+):
+    make_appointment(_future_dt(14, 0), minutes=60)
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(preferred_time="09:30:00"),
+    )
+    assert resp.status_code == 201
+
+
+def test_submit_without_a_time_skips_the_slot_check(
+    client, session, garage, make_appointment
+):
+    make_appointment(_future_dt(9, 30), minutes=60)
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(preferred_time=None),
+    )
+    assert resp.status_code == 201
+
+
+def test_a_pending_request_blocks_the_same_slot(client, garage):
+    first = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(preferred_time="09:30:00"),
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(
+            customer_email="someone.else@example.com", preferred_time="09:30:00"
+        ),
+    )
+    assert second.status_code == 409
 
 
 # NOTE: end-to-end rate-limiting (429 after PUBLIC_BOOKING_RATELIMIT) is verified

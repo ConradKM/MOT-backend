@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, String, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -31,6 +32,17 @@ class Employee(db.Model, PrimaryKeyMixin, TimestampMixin):
     password_hash: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
+    )
+
+    # A deactivated account can't log in and existing tokens stop working
+    # (see the JWT blocklist loader in app/__init__.py).
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    # Access/refresh tokens issued before this instant are rejected - set on a
+    # password reset so the reset also ends any live sessions.
+    tokens_valid_from: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
 
     garage = relationship(

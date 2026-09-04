@@ -36,6 +36,26 @@ class Config:
     PUBLIC_BOOKING_RATELIMIT = os.getenv(
         "PUBLIC_BOOKING_RATELIMIT", "5 per hour;20 per day"
     )
+    # Garage auth: login attempts and password-reset requests.
+    AUTH_LOGIN_RATELIMIT = os.getenv(
+        "AUTH_LOGIN_RATELIMIT", "10 per minute;100 per hour"
+    )
+    AUTH_RESET_RATELIMIT = os.getenv(
+        "AUTH_RESET_RATELIMIT", "5 per hour;20 per day"
+    )
+    # The availability calendar is a read endpoint the wizard polls as the
+    # customer clicks around - a much looser limit than the write path.
+    PUBLIC_AVAILABILITY_RATELIMIT = os.getenv(
+        "PUBLIC_AVAILABILITY_RATELIMIT", "60 per minute"
+    )
+
+    # --- Garage onboarding (see app/garages/onboarding.py) --------------
+    # The supported way to create a tenant is the `flask onboard-garage` CLI.
+    # POST /api/auth/register calls the same onboarding service; set this to
+    # "false" to make onboarding CLI-only (the HTTP endpoint then 404s).
+    ONBOARDING_HTTP_ENABLED = (
+        os.getenv("ONBOARDING_HTTP_ENABLED", "true").lower() != "false"
+    )
 
     # --- Checklist evidence storage (see app/storage) --------------------
     # "s3" for any S3-compatible bucket (AWS / Cloudflare R2 / MinIO), "none"
@@ -48,6 +68,19 @@ class Config:
     STORAGE_SECRET_ACCESS_KEY = os.getenv("STORAGE_SECRET_ACCESS_KEY", "")
     STORAGE_PRESIGN_EXPIRY = int(os.getenv("STORAGE_PRESIGN_EXPIRY", "900"))
     MEDIA_MAX_BYTES = int(os.getenv("MEDIA_MAX_BYTES", str(100 * 1024 * 1024)))
+
+    # --- Outbound email (see app/email) --------------------------------
+    # Password-reset links are built from APP_BASE_URL. EMAIL_PROVIDER "console"
+    # (default) just logs the message in dev; "resend" / "postmark" / "sendgrid"
+    # / "ses" are pluggable later without touching the reset flow.
+    APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5173")
+    EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "console")
+    EMAIL_FROM = os.getenv("EMAIL_FROM", "no-reply@localhost")
+    EMAIL_API_KEY = os.getenv("EMAIL_API_KEY", "")
+    # Reset tokens live ~30 minutes.
+    PASSWORD_RESET_TOKEN_MINUTES = int(
+        os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30")
+    )
 
 
 class TestConfig(Config):
