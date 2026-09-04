@@ -488,6 +488,7 @@ _SECTION_BY_SUFFIX = [
     ("database/test_mot_record.py", "Database Tests"),
     ("database/test_isolation.py", "Database Tests"),
     ("api/test_auth.py", "Authentication"),
+    ("api/test_onboarding.py", "Onboarding"),
     ("api/test_customer_auth.py", "Customer Auth"),
     ("api/test_customer_portal.py", "Customer Portal"),
     ("api/test_public_booking.py", "Public Booking"),

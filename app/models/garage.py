@@ -7,15 +7,34 @@ from .mixins import PrimaryKeyMixin, TimestampMixin
 
 
 class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
+    """A tenant.
+
+    Three identifiers, three owners:
+
+    * ``id`` (UUID) - internal primary key. Never appears in a URL, never
+      accepted from a client. Every tenant-scoped query filters on this.
+    * ``slug`` - the public identifier in unauthenticated booking URLs
+      (``/api/public/<slug>/...``). Generated at onboarding from the name plus
+      a random suffix (see ``app/garages/slug.py``); **immutable** afterwards -
+      no API accepts it and no route lets a garage user change it.
+    * ``name`` - the human-facing display name. The owner may change it freely
+      (``PATCH /api/garage``); doing so does **not** touch the slug.
+
+    ``layout_variant`` is platform-controlled: it is chosen at onboarding and
+    resolved through the registry in ``app/garages/layouts.py``. It is not part
+    of ``GarageUpdateSchema`` - garage users cannot set it.
+    """
+
     __tablename__ = "garages"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    # URL-safe public identifier for the unauthenticated booking flow
-    # (POST /api/public/<slug>/booking-requests). Auto-generated from the name
-    # at creation (see app/garages/slug.py); not owner-editable yet.
     slug: Mapped[str] = mapped_column(
         String(120), unique=True, nullable=False, index=True
     )
+    # NULL -> the shared default layout. A non-null value is a key into
+    # app/garages/layouts.py::LAYOUT_VARIANTS. Set only by onboarding.
+    layout_variant: Mapped[str | None] = mapped_column(String(50))
+
     email: Mapped[str | None] = mapped_column(String(320))
     phone: Mapped[str | None] = mapped_column(String(40))
     address: Mapped[str | None] = mapped_column(String(500))

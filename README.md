@@ -34,6 +34,19 @@ The API will be available at `http://localhost:5000`.
 docker compose up --build
 ```
 
+## Onboarding a garage
+
+Tenants are created by a developer, not by public signup. Run:
+
+```bash
+flask --app app:create_app onboard-garage --file new_garage.json          # or --dry-run
+```
+
+This creates the garage (with a generated, immutable public slug), its default
+statuses/schedule/roles and the first OWNER login, in one transaction. The full
+runbook, spec format, the randomised-slug rationale and a copy-paste Claude
+prompt template are in [`docs/GARAGE_ONBOARDING.md`](docs/GARAGE_ONBOARDING.md).
+
 ## Testing
 
 Tests run against a dedicated `mot_garage_test` database on the same Postgres

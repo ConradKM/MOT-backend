@@ -9,16 +9,18 @@ from flask_jwt_extended import (
 from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash
 
-from app.appointments.statuses.defaults import seed_default_statuses
 from app.auth.utils import get_current_employee
 from app.employees.schemas import EmployeeSchema
-from app.employees.service import create_employee_account, validate_password
+from app.employees.service import validate_password
 from app.extensions import db, limiter
-from app.garages.schedule.defaults import seed_default_schedule
-from app.garages.slug import slugify_unique
+from app.garages.onboarding import (
+    GarageSpec,
+    OnboardingEmailInUse,
+    OnboardingError,
+    OwnerSpec,
+    onboard_garage,
+)
 from app.models.employee import Employee
-from app.models.garage import Garage
-from app.models.role import Role
 
 from .reset import (
     consume_token_and_set_password,
@@ -54,44 +56,43 @@ _GENERIC_RESET_MESSAGE = (
 
 @auth_blp.route("/register")
 class Register(MethodView):
-    """Garage onboarding - the ONLY way a garage + its first OWNER are made.
-    There is no public path to create a bare employee here."""
+    """Garage onboarding over HTTP.
+
+    A thin wrapper over ``app.garages.onboarding`` - the same transactional
+    service the ``flask onboard-garage`` CLI uses. There is no public path to
+    create a bare employee here; onboarding always makes the Garage + its
+    first OWNER together. Set ``ONBOARDING_HTTP_ENABLED=false`` to disable this
+    endpoint and onboard via the CLI only.
+    """
 
     @limiter.limit(lambda: current_app.config["AUTH_RESET_RATELIMIT"])
     @auth_blp.arguments(RegisterSchema)
     @auth_blp.response(201, TokenSchema)
     def post(self, data):
-        validate_password(data["password"])
+        if not current_app.config.get("ONBOARDING_HTTP_ENABLED", True):
+            abort(
+                404,
+                message="Garage onboarding is handled by the platform team.",
+            )
 
-        garage = Garage(
-            name=data["garage_name"],
-            slug=slugify_unique(data["garage_name"], db.session),
-        )
-        db.session.add(garage)
-        db.session.flush()
-
-        # New garages ship with the built-in appointment statuses + default
-        # scheduling; they define their own appointment types later.
-        seed_default_statuses(garage.id, db.session)
-        seed_default_schedule(garage.id, db.session)
-
-        owner_role = Role(garage_id=garage.id, name="OWNER")
-        db.session.add(owner_role)
-        db.session.add(Role(garage_id=garage.id, name="STAFF"))
-
-        employee = create_employee_account(
-            garage_id=garage.id,
-            email=data["email"],
-            password=data["password"],
-            first_name=data.get("first_name"),
-            last_name=data.get("last_name"),
-            roles=[owner_role],
-        )
-        db.session.commit()
+        try:
+            result = onboard_garage(
+                garage=GarageSpec(name=data["garage_name"]),
+                owner=OwnerSpec(
+                    email=data["email"],
+                    password=data["password"],
+                    first_name=data.get("first_name"),
+                    last_name=data.get("last_name"),
+                ),
+            )
+        except OnboardingEmailInUse as exc:
+            abort(409, message=str(exc))
+        except OnboardingError as exc:
+            abort(422, message=str(exc))
 
         return {
-            "access_token": create_access_token(identity=str(employee.id)),
-            "refresh_token": create_refresh_token(identity=str(employee.id)),
+            "access_token": create_access_token(identity=str(result.owner.id)),
+            "refresh_token": create_refresh_token(identity=str(result.owner.id)),
         }
 
 

@@ -49,6 +49,14 @@ class Config:
         "PUBLIC_AVAILABILITY_RATELIMIT", "60 per minute"
     )
 
+    # --- Garage onboarding (see app/garages/onboarding.py) --------------
+    # The supported way to create a tenant is the `flask onboard-garage` CLI.
+    # POST /api/auth/register calls the same onboarding service; set this to
+    # "false" to make onboarding CLI-only (the HTTP endpoint then 404s).
+    ONBOARDING_HTTP_ENABLED = (
+        os.getenv("ONBOARDING_HTTP_ENABLED", "true").lower() != "false"
+    )
+
     # --- Checklist evidence storage (see app/storage) --------------------
     # "s3" for any S3-compatible bucket (AWS / Cloudflare R2 / MinIO), "none"
     # (default) for local dev - no real storage, stand-in presigned URLs.

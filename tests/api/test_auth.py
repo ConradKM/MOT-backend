@@ -1,5 +1,7 @@
 """API tests for POST /api/auth/register, /api/auth/login, /api/auth/refresh."""
 
+import re
+
 from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.garage_schedule import GarageOpeningHours, GarageScheduleSettings
@@ -136,14 +138,17 @@ def test_register_does_not_leak_password_in_response(client):
     assert "password_hash" not in body
 
 
-def test_register_generates_a_slug_from_the_garage_name(client, session):
+def test_register_slug_is_a_readable_stem_plus_a_random_suffix(client, session):
     client.post(
         "/api/auth/register",
         json={**VALID_PAYLOAD, "garage_name": "Bob's Tyres & Exhausts"},
     )
 
     garage = Garage.query.filter_by(name="Bob's Tyres & Exhausts").first()
-    assert garage.slug == "bob-s-tyres-exhausts"
+    # readable stem from the name...
+    assert garage.slug.startswith("bob-s-tyres-exhausts-")
+    # ...then a fixed-length random token (decoupled from the display name).
+    assert re.fullmatch(r"bob-s-tyres-exhausts-[a-z0-9]{6}", garage.slug)
 
 
 def test_register_gives_same_named_garages_distinct_slugs(client, session):
@@ -156,8 +161,9 @@ def test_register_gives_same_named_garages_distinct_slugs(client, session):
         json={"garage_name": "City Motors", "email": "b@example.com", "password": "password-1b"},
     )
 
-    slugs = sorted(g.slug for g in Garage.query.filter_by(name="City Motors").all())
-    assert slugs == ["city-motors", "city-motors-2"]
+    slugs = [g.slug for g in Garage.query.filter_by(name="City Motors").all()]
+    assert len(slugs) == len(set(slugs)) == 2
+    assert all(s.startswith("city-motors-") for s in slugs)
 
 
 # --------------------------------------------------------------------------

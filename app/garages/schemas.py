@@ -5,7 +5,12 @@ class GarageSchema(Schema):
     id = fields.UUID(dump_only=True)
 
     name = fields.Str(dump_only=True)
+    # Public, generated at onboarding, immutable. Read-only here for the same
+    # reason `id` is: it is not something a garage user changes.
     slug = fields.Str(dump_only=True)
+    # Platform-controlled presentation key (see app/garages/layouts.py). NULL
+    # is dumped as-is and means "the shared default layout".
+    layout_variant = fields.Str(dump_only=True, allow_none=True)
     email = fields.Email(dump_only=True)
     phone = fields.Str(dump_only=True)
     address = fields.Str(dump_only=True)
@@ -15,6 +20,13 @@ class GarageSchema(Schema):
 
 
 class GarageUpdateSchema(Schema):
+    """Owner-editable *operational* garage fields only.
+
+    `id`, `slug` and `layout_variant` are deliberately absent - they are
+    platform-controlled. marshmallow rejects unknown fields, so a PATCH that
+    tries to set one is a 422, not a silent no-op.
+    """
+
     name = fields.Str(validate=validate.Length(min=1, max=200))
     email = fields.Email(allow_none=True)
     phone = fields.Str(allow_none=True, validate=validate.Length(max=40))
