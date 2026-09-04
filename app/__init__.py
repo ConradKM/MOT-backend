@@ -34,6 +34,7 @@ def create_app(config_class=Config):
     from .garages.schedule.routes import garage_schedule_blp
     from .health.routes import health_blp
     from .mot_records.routes import mot_records_blp
+    from .mot_reminders.routes import mot_reminders_blp
     from .public_booking.routes import public_booking_blp
     from .roles.routes import roles_blp
     from .vehicles.routes import vehicles_blp
@@ -52,6 +53,7 @@ def create_app(config_class=Config):
     api.register_blueprint(roles_blp)
     api.register_blueprint(vehicles_blp)
     api.register_blueprint(mot_records_blp)
+    api.register_blueprint(mot_reminders_blp)
     api.register_blueprint(appointment_types_blp)
     api.register_blueprint(appointment_statuses_blp)
     api.register_blueprint(checklist_templates_blp)
