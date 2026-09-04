@@ -1,7 +1,35 @@
+import uuid
+
 from flask import Flask
 
 from .config import Config
 from .extensions import api, db, jwt, limiter, migrate
+
+
+@jwt.token_in_blocklist_loader
+def _employee_token_revoked(_jwt_header, jwt_payload) -> bool:
+    """Reject an employee JWT whose account is deactivated or was issued
+    before the user's last password reset. Customer-portal tokens
+    (account_type == "customer") are left to app/customer_auth."""
+    if jwt_payload.get("account_type") == "customer":
+        return False
+
+    from .models.employee import Employee
+
+    identity = jwt_payload.get("sub")
+    try:
+        employee = db.session.get(Employee, uuid.UUID(identity))
+    except (TypeError, ValueError):
+        return True
+
+    if employee is None or not employee.is_active:
+        return True
+
+    valid_from = employee.tokens_valid_from
+    return (
+        valid_from is not None
+        and jwt_payload.get("iat", 0) < valid_from.timestamp()
+    )
 
 
 def create_app(config_class=Config):
@@ -68,6 +96,7 @@ def create_app(config_class=Config):
         garage,
         garage_schedule,
         mot_record,
+        password_reset_token,
         reminder,
         role,
         vehicle,

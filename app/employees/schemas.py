@@ -15,6 +15,7 @@ class EmployeeSchema(Schema):
     )
     role_ids = fields.List(fields.UUID(), load_only=True, load_default=list)
 
+    is_active = fields.Bool(dump_only=True)
     roles = fields.List(fields.Nested(RoleSchema), dump_only=True)
 
     created_at = fields.DateTime(dump_only=True)
@@ -26,3 +27,4 @@ class EmployeeUpdateSchema(Schema):
     first_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
     last_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
     role_ids = fields.List(fields.UUID())
+    is_active = fields.Bool()
