@@ -419,28 +419,23 @@ def test_get_garage_exposes_layout_variant(authenticated_user):
     assert "layout_variant" in body
 
 
-def test_patch_garage_rejects_layout_variant(authenticated_user):
-    resp = authenticated_user.client.patch(
-        "/api/garage", json={"layout_variant": "bespoke"}
-    )
-    assert resp.status_code == 422
-    assert "layout_variant" in resp.get_json()["errors"]["json"]
+def test_patch_garage_is_forbidden_for_garage_users(authenticated_user):
+    # Business details (and certainly slug / layout_variant) are platform-
+    # managed - no garage user, owner included, can edit them over the API.
+    for body in ({"layout_variant": "bespoke"}, {"slug": "new-slug"}, {"name": "x"}):
+        resp = authenticated_user.client.patch("/api/garage", json=body)
+        assert resp.status_code == 403
 
 
-def test_patch_garage_rejects_slug(authenticated_user):
-    resp = authenticated_user.client.patch("/api/garage", json={"slug": "new-slug"})
-    assert resp.status_code == 422
-    assert "slug" in resp.get_json()["errors"]["json"]
+def test_platform_rename_does_not_change_the_slug(garage, session):
+    from app.garages.details import update_garage_details
 
+    original_slug = garage.slug
+    update_garage_details(garage, name="Totally New Name")
 
-def test_renaming_a_garage_does_not_change_its_slug(authenticated_user, session):
-    original_slug = authenticated_user.garage.slug
-
-    authenticated_user.client.patch("/api/garage", json={"name": "Totally New Name"})
-
-    session.refresh(authenticated_user.garage)
-    assert authenticated_user.garage.name == "Totally New Name"
-    assert authenticated_user.garage.slug == original_slug
+    session.refresh(garage)
+    assert garage.name == "Totally New Name"
+    assert garage.slug == original_slug
 
 
 # --------------------------------------------------------------------------

@@ -20,6 +20,12 @@ from __future__ import annotations
 import click
 from flask.cli import with_appcontext
 
+from app.garages.details import (
+    EDITABLE_FIELDS,
+    GarageNotFoundError,
+    resolve_garage,
+    update_garage_details,
+)
 from app.garages.onboarding import (
     GarageSpec,
     OnboardingError,
@@ -118,3 +124,48 @@ def onboard_garage_command(
         "\nThe owner can now sign in at the garage login with the password "
         "you set."
     )
+
+
+@click.command("update-garage-details")
+@click.option(
+    "--garage",
+    "identifier",
+    required=True,
+    help="Target garage - its slug or its UUID.",
+)
+@click.option("--name", default=None, help="Business / trading name.")
+@click.option("--email", default=None, help="Main business email.")
+@click.option("--phone", default=None, help="Business telephone.")
+@click.option("--address", default=None)
+@click.option("--postcode", default=None)
+@click.option("--website", default=None)
+@with_appcontext
+def update_garage_details_command(
+    identifier, name, email, phone, address, postcode, website
+):
+    """Update ONE tenant's business details (platform-side, read-only to users).
+
+    Only the named garage is affected. The public slug is never changed.
+    """
+    fields = {
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "address": address,
+        "postcode": postcode,
+        "website": website,
+    }
+    if all(v is None for v in fields.values()):
+        raise click.ClickException(
+            f"Pass at least one of: {', '.join('--' + f for f in EDITABLE_FIELDS)}."
+        )
+
+    try:
+        garage = resolve_garage(identifier)
+        update_garage_details(garage, **fields)
+    except (GarageNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"Updated '{garage.name}' ({garage.slug}).")
+    for key in EDITABLE_FIELDS:
+        click.echo(f"  {key:9} {getattr(garage, key) or '—'}")

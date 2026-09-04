@@ -44,6 +44,7 @@ from app.garages.slug import slugify_unique
 from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.role import Role
+from app.mot_reminders.defaults import seed_mot_reminder_settings
 
 OWNER_ROLE_NAME = "OWNER"
 DEFAULT_STAFF_ROLE_NAME = "STAFF"
@@ -76,6 +77,8 @@ class GarageSpec:
     email: str | None = None
     phone: str | None = None
     address: str | None = None
+    postcode: str | None = None
+    website: str | None = None
     layout_variant: str | None = None
 
 
@@ -124,6 +127,8 @@ def parse_spec(raw: Any) -> tuple[GarageSpec, OwnerSpec]:
         email=garage_raw.get("email"),
         phone=garage_raw.get("phone"),
         address=garage_raw.get("address"),
+        postcode=garage_raw.get("postcode"),
+        website=garage_raw.get("website"),
         layout_variant=garage_raw.get("layout_variant"),
     )
     owner = OwnerSpec(
@@ -213,14 +218,18 @@ def onboard_garage(
             email=garage.email,
             phone=garage.phone,
             address=garage.address,
+            postcode=garage.postcode,
+            website=garage.website,
         )
         session.add(record)
         session.flush()
 
-        # New garages ship with the built-in appointment statuses + default
-        # scheduling; they define their own appointment types later.
+        # New garages ship with the built-in appointment statuses, default
+        # scheduling and the default MOT reminder schedule; they define their
+        # own appointment types later.
         seed_default_statuses(record.id, session)
         seed_default_schedule(record.id, session)
+        seed_mot_reminder_settings(record.id, session)
 
         owner_role = Role(garage_id=record.id, name=OWNER_ROLE_NAME)
         session.add(owner_role)

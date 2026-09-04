@@ -100,9 +100,11 @@ Why a random suffix:
   **immutable** — nothing about a rename forces a slug change.
 
 **The slug is immutable.** It is `dump_only` on `GarageSchema`, absent from
-`GarageUpdateSchema`, and no route or CLI accepts a `slug` input. Changing it
-would break every booking link already in the wild; if a slug ever genuinely
-must change, that is a deliberate data migration, not a settings toggle.
+every update schema, and no route or CLI accepts a `slug` input (the
+`update-garage-details` CLI's `EDITABLE_FIELDS` deliberately excludes it).
+Changing it would break every booking link already in the wild; if a slug ever
+genuinely must change, that is a deliberate data migration, not a settings
+toggle.
 
 ---
 
@@ -132,6 +134,8 @@ Steps:
        "email": "<GARAGE EMAIL or omit>",
        "phone": "<GARAGE PHONE or omit>",
        "address": "<ADDRESS or omit>",
+       "postcode": "<POSTCODE or omit>",
+       "website": "<WEBSITE or omit>",
        "layout_variant": null
      },
      "owner": {
@@ -180,7 +184,9 @@ not contain `slug`, `id` or `garage_id`** — `parse_spec()` in
     "name": "Kingsway MOT & Service Centre",
     "email": "hello@kingswaymot.co.uk",
     "phone": "+44 20 7946 1234",
-    "address": "12 Kingsway, London WC2B 6NH",
+    "address": "12 Kingsway, London",
+    "postcode": "WC2B 6NH",
+    "website": "https://kingswaymot.co.uk",
     "layout_variant": null
   },
   "owner": {
@@ -240,7 +246,22 @@ Identical behaviour without the `flask` entrypoint (loads `.env` itself):
 - Owner booking URL: **`/book/<generated-slug>`**.
 - Owner signs in at the garage login with their email + initial password, then
   adds staff under **Settings → Employees** and tunes **Settings →
-  Availability / Appointment types / Roles / Statuses**.
+  Availability / Appointment types / Roles / Statuses / MOT Reminders**.
+
+### Updating a tenant's business details later
+
+Business details (name, email, phone, address, postcode, website) are
+**read-only** to garage users — `Settings → Garage Details` just displays them,
+and `PATCH /api/garage` is `403` for everyone. A developer changes one tenant's
+details with:
+
+```bash
+flask --app app:create_app update-garage-details \
+  --garage <slug-or-id> --phone "+44 20 7946 9999" --website "https://…"
+```
+
+It edits **only** the named garage (resolved to its immutable id) and never
+touches the slug or `layout_variant`. Backed by `app/garages/details.py`.
 
 ### The HTTP endpoint
 
@@ -263,8 +284,8 @@ a presentation-only bundle (theme tokens, which optional panels show, …).
 - Frontend registry: `src/lib/layoutVariant.ts` → `LAYOUT_VARIANTS`,
   `resolveLayoutVariant(garage)`. `src/components/Layout.tsx` puts the resolved
   key on `data-layout-variant` for CSS to hook.
-- `Garage.layout_variant` is `dump_only` on `GarageSchema` and **not** in
-  `GarageUpdateSchema`. It is set at onboarding (`--layout-variant`, or
+- `Garage.layout_variant` is `dump_only` on `GarageSchema` and not editable by
+  any garage user. It is set at onboarding (`--layout-variant`, or
   `garage.layout_variant` in a spec) and only a developer can change it later.
 - An unknown or retired variant resolves back to `DEFAULT_LAYOUT` /
   `DEFAULT_LAYOUT_VARIANT` — it never errors at render time.
@@ -298,12 +319,15 @@ Treat these as invariants. Changing them breaks tenants already in production.
 - **The public-registration boundary.** No anonymous/public route may create a
   `Garage`. Tenant creation goes through `onboard_garage()` only (CLI, or the
   `ONBOARDING_HTTP_ENABLED` HTTP wrapper).
-- **The owner/operator settings split.** `GarageUpdateSchema` stays limited to
-  operational fields (`name`, `email`, `phone`, `address`). `id`, `slug` and
-  `layout_variant` are platform-controlled and must not be added to it.
+- **Garage business details are read-only to garage users.** `GET /api/garage`
+  displays `name` / `email` / `phone` / `address` / `postcode` / `website`;
+  `PATCH /api/garage` is `403` for everyone. Editing goes through
+  `app/garages/details.py` (the `update-garage-details` CLI) only. Do not add a
+  garage-user write path, and do not make the columns immutable — the platform
+  still edits them.
 - **Onboarding atomicity.** `onboard_garage()` must remain all-or-nothing —
-  garage, statuses, schedule, roles and the first owner in one transaction,
-  full rollback on any failure.
+  garage, statuses, schedule, roles, the default MOT reminder schedule and the
+  first owner in one transaction, full rollback on any failure.
 - **Layout selection by key, not identity.** No `if garage.name ==` /
   `if garage.id ==` branching anywhere — backend or frontend.
 

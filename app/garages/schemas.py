@@ -11,26 +11,31 @@ class GarageSchema(Schema):
     # Platform-controlled presentation key (see app/garages/layouts.py). NULL
     # is dumped as-is and means "the shared default layout".
     layout_variant = fields.Str(dump_only=True, allow_none=True)
-    email = fields.Email(dump_only=True)
-    phone = fields.Str(dump_only=True)
-    address = fields.Str(dump_only=True)
+    # Customer-facing business details - read-only to garage users, edited only
+    # by the platform (see app/garages/details.py + the onboarding CLI).
+    email = fields.Email(dump_only=True, allow_none=True)
+    phone = fields.Str(dump_only=True, allow_none=True)
+    address = fields.Str(dump_only=True, allow_none=True)
+    postcode = fields.Str(dump_only=True, allow_none=True)
+    website = fields.Str(dump_only=True, allow_none=True)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
 
-class GarageUpdateSchema(Schema):
-    """Owner-editable *operational* garage fields only.
+class GarageDetailsUpdateSchema(Schema):
+    """Platform-side edit of a tenant's business details (onboarding CLI).
 
-    `id`, `slug` and `layout_variant` are deliberately absent - they are
-    platform-controlled. marshmallow rejects unknown fields, so a PATCH that
-    tries to set one is a 422, not a silent no-op.
+    Not reachable by any garage user - `PATCH /api/garage` is 403 for
+    everyone. `slug`, `id` and `layout_variant` are not here on purpose.
     """
 
     name = fields.Str(validate=validate.Length(min=1, max=200))
     email = fields.Email(allow_none=True)
     phone = fields.Str(allow_none=True, validate=validate.Length(max=40))
     address = fields.Str(allow_none=True, validate=validate.Length(max=500))
+    postcode = fields.Str(allow_none=True, validate=validate.Length(max=20))
+    website = fields.Str(allow_none=True, validate=validate.Length(max=200))
 
 
 class PublicGarageSchema(Schema):

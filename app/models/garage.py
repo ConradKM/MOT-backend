@@ -35,9 +35,15 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
     # app/garages/layouts.py::LAYOUT_VARIANTS. Set only by onboarding.
     layout_variant: Mapped[str | None] = mapped_column(String(50))
 
+    # Customer-facing business details. The authoritative source for future
+    # telephone / email-reminder / SMS / booking-confirmation systems - not to
+    # be hardcoded anywhere. Garage users see these read-only (GET /api/garage);
+    # only the platform edits them (the onboarding CLI family).
     email: Mapped[str | None] = mapped_column(String(320))
     phone: Mapped[str | None] = mapped_column(String(40))
     address: Mapped[str | None] = mapped_column(String(500))
+    postcode: Mapped[str | None] = mapped_column(String(20))
+    website: Mapped[str | None] = mapped_column(String(200))
 
     employees = relationship(
         "Employee", back_populates="garage", cascade="all, delete-orphan"
@@ -59,6 +65,12 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
     )
     roles = relationship(
         "Role", back_populates="garage", cascade="all, delete-orphan"
+    )
+    mot_reminder_settings = relationship(
+        "MOTReminderSettings",
+        back_populates="garage",
+        uselist=False,
+        cascade="all, delete-orphan",
     )
     schedule_settings = relationship(
         "GarageScheduleSettings",

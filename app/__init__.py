@@ -46,9 +46,10 @@ def create_app(config_class=Config):
         "bearerAuth", {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
     )
 
-    from .garages.cli import onboard_garage_command
+    from .garages.cli import onboard_garage_command, update_garage_details_command
 
     app.cli.add_command(onboard_garage_command)
+    app.cli.add_command(update_garage_details_command)
 
     from .appointments.checklist_templates.routes import checklist_templates_blp
     from .appointments.checklists.routes import appointment_checklists_blp
@@ -100,6 +101,7 @@ def create_app(config_class=Config):
         garage,
         garage_schedule,
         mot_record,
+        mot_reminder_settings,
         password_reset_token,
         reminder,
         role,
