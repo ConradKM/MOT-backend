@@ -9,7 +9,7 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.garage import Garage
 
-from .availability import availability_range, check_slot_available, single_day
+from .availability import availability_range, single_day, validate_slot
 from .captcha import verify_captcha
 from .schemas import (
     AvailabilityQueryArgsSchema,
@@ -105,20 +105,36 @@ class BookingRequestSubmit(MethodView):
                     message="appointment_type_id is not an active type for this garage.",
                 )
 
-        # Double-booking guard: the slot the customer picked from the calendar
-        # may have filled up since. Only meaningful when a specific time was
-        # chosen - date-only requests carry no slot to re-check. Take a
-        # per-garage row lock first so two concurrent submits can't both pass.
+        # Re-check the picked slot server-side against the same rules the
+        # calendar uses (opening hours, closures, minimum notice, not in the
+        # past, capacity) so a direct POST can't bypass it. Only meaningful
+        # when a specific time was chosen - date-only requests carry no slot.
+        # Take a per-garage row lock first so two concurrent submits can't both
+        # pass the capacity check.
         preferred_time = data.get("preferred_time")
         if preferred_time is not None:
             db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
-            if not check_slot_available(
+            reason = validate_slot(
                 garage, data["preferred_date"], preferred_time, datetime.now(UTC)
-            ):
+            )
+            if reason is not None:
+                _SLOT_REJECTIONS = {
+                    "past": "That appointment time is in the past.",
+                    "closed": "The garage is not open at that time.",
+                    "outside_hours": "The garage is not open at that time.",
+                    "too_soon": "That time is inside the garage's minimum "
+                    "booking notice. Please pick a later slot.",
+                    "out_of_window": "That date is too far ahead to book.",
+                    "full": "This time is no longer available. "
+                    "Please select another time.",
+                }
                 abort(
                     409,
-                    message="This time is no longer available. "
-                    "Please select another time.",
+                    message=_SLOT_REJECTIONS.get(
+                        reason,
+                        "This time is no longer available. "
+                        "Please select another time.",
+                    ),
                 )
 
         booking_request = BookingRequest(

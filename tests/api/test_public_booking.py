@@ -15,7 +15,16 @@ from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
 from app.models.vehicle import Vehicle
 
-FUTURE_DATE = (datetime.date.today() + datetime.timedelta(days=7)).isoformat()
+def _future_weekday(days_ahead=7):
+    d = datetime.date.today() + datetime.timedelta(days=days_ahead)
+    while d.weekday() >= 5:  # keep off Sat/Sun - the default schedule is closed
+        d += datetime.timedelta(days=1)
+    return d
+
+
+# A weekday so the submit-time opening-hours re-check accepts these payloads
+# regardless of which day the suite runs on.
+FUTURE_DATE = _future_weekday().isoformat()
 
 
 def _valid_payload(**overrides):

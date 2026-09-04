@@ -318,19 +318,47 @@ def single_day(garage, day: date, now: datetime) -> dict:
     }
 
 
-def check_slot_available(garage, day: date, slot_time: time, now: datetime) -> bool:
-    """Re-check, at submit time, that ``(day, slot_time)`` still has capacity.
-
-    Purely a capacity check against live appointments + other pending requests -
-    it deliberately does not re-validate opening hours or lead time, matching the
-    fact that ``preferred_time`` has always been free-form and staff resolve the
-    rest at approval.
+def validate_slot(garage, day: date, slot_time: time, now: datetime) -> str | None:
+    """Submit-time re-check that ``(day, slot_time)`` is genuinely bookable, by
+    the same rules the customer calendar uses. Returns ``None`` when it is, or a
+    short reason (``past`` / ``closed`` / ``outside_hours`` / ``too_soon`` /
+    ``full`` / ``out_of_window``) so a direct API POST can't bypass the calendar.
     """
     settings = resolve_settings(garage)
+    today = now.date()
+    _, win_end = booking_window(settings, today)
+
+    if day < today:
+        return "past"
+    if day > win_end:
+        return "out_of_window"
+
+    hours_map = resolve_opening_hours(garage)
+    exceptions = resolve_exceptions(garage, day, day)
+    hrs = _day_hours(day, hours_map, exceptions)
+    if hrs is None:
+        return "closed"
+
+    opens_at, closes_at = hrs
+    duration = settings.default_appointment_minutes
+    start_m = _minutes(slot_time)
+    if start_m < _minutes(opens_at) or start_m + duration > _minutes(closes_at):
+        return "outside_hours"
+
+    slot_start = datetime.combine(day, slot_time, tzinfo=UTC)
+    if slot_start <= now:
+        return "past"
+    if slot_start < now + timedelta(hours=settings.min_lead_time_hours):
+        return "too_soon"
+
     capacity = slot_capacity(garage, settings)
     appointments, pending = _load_day_usage(garage.id, day)
-    slot_start = datetime.combine(day, slot_time, tzinfo=UTC)
-    used = _slot_usage(
-        appointments, pending, slot_start, settings.default_appointment_minutes
-    )
-    return used < capacity
+    if _slot_usage(appointments, pending, slot_start, duration) >= capacity:
+        return "full"
+
+    return None
+
+
+def check_slot_available(garage, day: date, slot_time: time, now: datetime) -> bool:
+    """Back-compat boolean wrapper around :func:`validate_slot`."""
+    return validate_slot(garage, day, slot_time, now) is None

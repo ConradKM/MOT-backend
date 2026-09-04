@@ -13,10 +13,12 @@ from datetime import time
 from app.models.garage_schedule import GarageOpeningHours, GarageScheduleSettings
 
 # Attribute name -> default, for both the seed and the in-code fallback.
+# min_lead_time_hours defaults to 2 so same-day bookings work out of the box
+# (a garage can raise it in Settings > Availability).
 DEFAULT_SETTINGS = {
     "slot_interval_minutes": 30,
     "default_appointment_minutes": 60,
-    "min_lead_time_hours": 24,
+    "min_lead_time_hours": 2,
     "max_advance_days": 60,
     "capacity_per_slot": None,
     "limited_threshold_ratio": 0.5,

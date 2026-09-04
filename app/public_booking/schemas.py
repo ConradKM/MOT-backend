@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, datetime
 
 from marshmallow import (
     EXCLUDE,
@@ -30,7 +30,7 @@ class PublicGarageDetailSchema(Schema):
     )
 
 
-_CURRENT_YEAR = date.today().year
+_CURRENT_YEAR = datetime.now(UTC).year
 
 
 class BookingRequestCreateSchema(Schema):
@@ -90,7 +90,9 @@ class BookingRequestCreateSchema(Schema):
 
     @validates("preferred_date")
     def _not_in_the_past(self, value, **kwargs):
-        if value < date.today():
+        # `<` not `<=`: today is a valid preferred date (same-day bookings).
+        # UTC to match the availability engine (app/public_booking/availability).
+        if value < datetime.now(UTC).date():
             raise ValidationError("Preferred date cannot be in the past.")
 
 
