@@ -4,6 +4,7 @@ from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 
+from app.appointments.checklists.service import snapshot_checklist_for_appointment
 from app.appointments.statuses.defaults import DEFAULT_STATUS_KEYS
 from app.auth.utils import get_current_employee
 from app.extensions import db
@@ -30,10 +31,18 @@ _AUTH_DOC = {"security": [{"bearerAuth": []}]}
 
 
 def _get_owned_employee(employee_id, garage_id):
+    """Look up an employee to assign to an appointment. Only called when an
+    appointment's employee is being set/changed (create, or an explicit
+    employee_id on PATCH) - an existing appointment keeps its employee even if
+    that employee is later deactivated, but a deactivated employee can't be
+    newly assigned to one."""
     employee = Employee.query.filter_by(id=employee_id, garage_id=garage_id).first()
 
     if not employee:
         abort(422, message="employee_id does not belong to your garage.")
+
+    if not employee.is_active:
+        abort(422, message="This employee's account is deactivated.")
 
     return employee
 
@@ -43,6 +52,11 @@ def _get_owned_customer(customer_id, garage_id):
 
     if not customer:
         abort(422, message="customer_id does not belong to your garage.")
+
+    # An archived customer (see app/customers/routes.py) is still a real,
+    # reachable record - booking them again just means they're active again.
+    if not customer.is_active:
+        customer.is_active = True
 
     return customer
 
@@ -76,6 +90,9 @@ def _get_owned_vehicle(vehicle_id, garage_id, customer_id):
 
     if vehicle.customer_id != customer_id:
         abort(422, message="vehicle_id does not belong to the specified customer.")
+
+    if not vehicle.is_active:
+        vehicle.is_active = True
 
     return vehicle
 
@@ -212,9 +229,12 @@ class AppointmentList(MethodView):
             appointment_type_id=data["appointment_type_id"],
             status=data.get("status") or "BOOKED",
             notes=data.get("notes"),
+            price_at_booking=appointment_type.base_price,
         )
 
         db.session.add(appointment)
+        db.session.flush()
+        snapshot_checklist_for_appointment(appointment)
         db.session.commit()
 
         return appointment

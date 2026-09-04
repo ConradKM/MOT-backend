@@ -1,9 +1,25 @@
-"""A reminder event.
+"""A reminder / notification event.
 
-One row = one reminder that was (or is scheduled to be) sent to a customer
-about a vehicle. The MOT reminder feature is the only producer today: each
-automatic stage and each manual send records a row here, keyed to the MOT
-expiry date it belongs to so a stage is never sent twice for the same cycle.
+One row = one message that was (or is scheduled to be) sent to a customer.
+The MOT reminder feature is the only producer today (each automatic stage and
+each manual send records a row here, keyed to the MOT expiry date so a stage
+is never sent twice for the same cycle), but the shape is deliberately generic
+so the same table can carry other message types later - booking-request
+confirmations, approval confirmations, appointment reminders, cancellation /
+reschedule notices - without a schema change:
+
+* ``type`` and ``stage`` are free-text on purpose (no DB enum) - a future
+  producer just writes a new value (e.g. ``type="BOOKING_CONFIRMATION"``).
+* ``appointment_id`` already lets a row reference an appointment, which is
+  what a cancellation/reschedule/appointment-reminder message needs;
+  ``mot_expiry_date`` is simply left null for those.
+* ``provider_message_id`` / ``delivered_at`` mirror what an SMS provider's
+  webhook reports (message id, queued/sent/delivered/failed) so wiring one up
+  later is additive, not a redesign.
+
+No SMS provider is integrated yet (see app/email for the only real channel
+today); this table is just shaped so that integration doesn't need new
+columns.
 """
 
 import uuid
@@ -70,3 +86,10 @@ class Reminder(db.Model, PrimaryKeyMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(20), default=STATUS_PENDING, nullable=False)
     # Free-text delivery outcome ("emailed jane@…", "no email on file", …).
     detail: Mapped[str | None] = mapped_column(Text)
+
+    # A future SMS/email provider's own id for this message (e.g. a Twilio
+    # message SID) and, separately from `sent_at` (when we handed it to the
+    # provider), the instant the provider's own status callback confirmed
+    # delivery. Both null for every channel that isn't provider-backed.
+    provider_message_id: Mapped[str | None] = mapped_column(String(100))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

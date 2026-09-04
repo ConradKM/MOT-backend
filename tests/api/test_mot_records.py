@@ -185,8 +185,9 @@ def test_create_mot_record_missing_required_fields(authenticated_user, vehicle):
     assert resp.status_code == 422
     errors = resp.get_json()["errors"]["json"]
     assert "mot_date" in errors
-    assert "expiry_date" in errors
     assert "result" in errors
+    # expiry_date is optional at the schema level (a FAIL doesn't need one -
+    # see test_pass_without_an_expiry_date_is_rejected).
 
 
 def test_create_mot_record_invalid_result_value(authenticated_user, vehicle):
@@ -195,6 +196,74 @@ def test_create_mot_record_invalid_result_value(authenticated_user, vehicle):
         json={"mot_date": "2026-01-01", "expiry_date": "2027-01-01", "result": "MAYBE"},
     )
     assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------------
+# A FAIL never grants a new expiry (see app/mot_records/routes.py)
+# --------------------------------------------------------------------------
+
+
+def test_pass_without_an_expiry_date_is_rejected(authenticated_user, vehicle):
+    resp = authenticated_user.client.post(
+        f"/api/vehicles/{vehicle.id}/mot-records/",
+        json={"mot_date": "2026-01-01", "result": "PASS"},
+    )
+    assert resp.status_code == 422
+    assert "expiry_date" in resp.get_json()["message"]
+
+
+def test_pass_expiry_on_or_before_mot_date_is_rejected(authenticated_user, vehicle):
+    resp = authenticated_user.client.post(
+        f"/api/vehicles/{vehicle.id}/mot-records/",
+        json={"mot_date": "2026-06-01", "expiry_date": "2026-06-01", "result": "PASS"},
+    )
+    assert resp.status_code == 422
+    assert "after mot_date" in resp.get_json()["message"]
+
+
+def test_fail_without_an_expiry_date_defaults_to_the_test_date(authenticated_user, vehicle):
+    resp = authenticated_user.client.post(
+        f"/api/vehicles/{vehicle.id}/mot-records/",
+        json={"mot_date": "2026-06-01", "result": "FAIL", "notes": "Brake failure."},
+    )
+    assert resp.status_code == 201
+    assert resp.get_json()["expiry_date"] == "2026-06-01"
+
+
+def test_fail_does_not_change_the_vehicles_current_mot_expiry(authenticated_user, vehicle):
+    authenticated_user.client.post(
+        f"/api/vehicles/{vehicle.id}/mot-records/",
+        json={"mot_date": "2026-01-01", "expiry_date": "2027-01-01", "result": "PASS"},
+    )
+
+    # A later FAIL - even one carrying a (bogus) forward-looking expiry_date -
+    # must never override the vehicle's real, PASS-derived expiry.
+    authenticated_user.client.post(
+        f"/api/vehicles/{vehicle.id}/mot-records/",
+        json={
+            "mot_date": "2026-12-20",
+            "expiry_date": "2027-12-20",
+            "result": "FAIL",
+        },
+    )
+
+    vehicle_resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}")
+    assert vehicle_resp.get_json()["mot_expiry_date"] == "2027-01-01"
+
+
+def test_switching_the_only_record_to_fail_clears_the_vehicles_mot_expiry(
+    authenticated_user, vehicle, mot_record
+):
+    # mot_record (fixture) is a PASS - switching it to FAIL means the vehicle
+    # no longer has any valid certificate.
+    resp = authenticated_user.client.patch(
+        f"/api/vehicles/{vehicle.id}/mot-records/{mot_record.id}",
+        json={"result": "FAIL"},
+    )
+    assert resp.status_code == 200
+
+    vehicle_resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}")
+    assert vehicle_resp.get_json()["mot_expiry_date"] is None
 
 
 # --------------------------------------------------------------------------

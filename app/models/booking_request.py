@@ -1,11 +1,13 @@
 import uuid
 from datetime import date, datetime, time
+from decimal import Decimal
 
 from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
     Integer,
+    Numeric,
     String,
     Text,
     Time,
@@ -17,9 +19,15 @@ from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
-# PENDING: awaiting staff review. APPROVED: staff accepted it and the linked
-# customer/vehicle/appointment rows were created. REJECTED: staff declined.
-BOOKING_REQUEST_STATUSES = ("PENDING", "APPROVED", "REJECTED")
+# PENDING: awaiting staff review, and still reserving capacity for its
+# preferred slot (see app/public_booking/availability.py). APPROVED: staff
+# accepted it and the linked customer/vehicle/appointment rows were created.
+# REJECTED: staff declined it. EXPIRED: nobody reviewed it before its
+# preferred date/time passed - set automatically (see
+# app/booking_requests/service.py::expire_stale_booking_requests), never by
+# staff action. Every terminal status (APPROVED/REJECTED/EXPIRED) releases
+# the capacity the request was holding, simply by no longer being PENDING.
+BOOKING_REQUEST_STATUSES = ("PENDING", "APPROVED", "REJECTED", "EXPIRED")
 
 
 class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
@@ -46,6 +54,10 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
     customer_first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     customer_last_name: Mapped[str] = mapped_column(String(100), nullable=False)
     customer_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    # Nullable at the DB level only for pre-existing rows submitted before the
+    # mobile number became required; the public form's schema (see
+    # app/public_booking/schemas.py::UKMobileField) requires and E.164-
+    # normalises it for every new submission.
     customer_phone: Mapped[str | None] = mapped_column(String(40))
 
     vehicle_registration: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -59,6 +71,14 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
     appointment_type_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("garage_appointment_types.id", ondelete="SET NULL")
     )
+    # Snapshot of the appointment type's duration/price at submission time -
+    # the type may be edited (or deleted) while this request is still
+    # PENDING, but what staff review should reflect what the customer actually
+    # saw and requested, not whatever the type looks like today. NULL on
+    # requests submitted before this column existed, or with no type chosen
+    # (see service.py for the display fallback).
+    requested_duration_minutes: Mapped[int | None] = mapped_column(Integer)
+    requested_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     preferred_date: Mapped[date] = mapped_column(Date, nullable=False)
     preferred_time: Mapped[time | None] = mapped_column(Time)
     preferred_employee_note: Mapped[str | None] = mapped_column(String(200))

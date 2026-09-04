@@ -272,6 +272,143 @@ def test_schedule_exception_closes_a_day(client, session, garage, garage_schedul
     assert body["slots"] == []
 
 
+def _make_type(session, garage, minutes, name="Full Service"):
+    from app.models.appointments.appointment_type import GarageAppointmentType
+
+    t = GarageAppointmentType(
+        garage_id=garage.id, name=name, status="ACTIVE", default_duration_minutes=minutes
+    )
+    session.add(t)
+    session.commit()
+    return t
+
+
+# --------------------------------------------------------------------------
+# Appointment-type-driven duration (item 2/13)
+# --------------------------------------------------------------------------
+
+
+def test_day_slots_use_the_selected_appointment_types_duration(client, session, garage):
+    day = _future_weekday()
+    ninety_min_type = _make_type(session, garage, 90)
+
+    body = client.get(
+        f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+        query_string={"appointment_type_id": str(ninety_min_type.id)},
+    ).get_json()
+
+    # 09:00-17:00, 30-min interval, 90-min duration -> last start is 15:30
+    # (15:30 + 90 = 17:00), not 16:00 as the 60-min default would allow.
+    assert body["slots"][-1]["start"] == "15:30"
+    assert all(s["start"] != "16:00" for s in body["slots"])
+
+
+def test_no_type_selected_falls_back_to_the_garages_generic_duration(client, garage):
+    day = _future_weekday()
+    body = client.get(
+        f"/api/public/{garage.slug}/availability/{day.isoformat()}"
+    ).get_json()
+    assert body["slots"][-1]["start"] == "16:00"
+
+
+def test_changing_the_selected_type_recalculates_available_times(client, session, garage):
+    day = _future_weekday()
+    short_type = _make_type(session, garage, 30, "Diagnostic Check")
+    long_type = _make_type(session, garage, 90, "Full Service")
+
+    short_slots = client.get(
+        f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+        query_string={"appointment_type_id": str(short_type.id)},
+    ).get_json()["slots"]
+    long_slots = client.get(
+        f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+        query_string={"appointment_type_id": str(long_type.id)},
+    ).get_json()["slots"]
+
+    assert len(long_slots) < len(short_slots)
+
+
+def test_unknown_appointment_type_id_returns_422(client, garage):
+    import uuid
+
+    day = _future_weekday()
+    resp = client.get(
+        f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+        query_string={"appointment_type_id": str(uuid.uuid4())},
+    )
+    assert resp.status_code == 422
+
+
+def test_a_long_existing_appointment_blocks_every_slot_it_overlaps(
+    client, session, garage, make_appointment
+):
+    day = _future_weekday()
+    # 12:00-13:30, so there's room to check a genuinely non-overlapping
+    # 90-minute candidate both before (09:00-10:30) and after (13:30-15:00).
+    make_appointment(_at(day, 12, 0), minutes=90)
+    ninety_min_type = _make_type(session, garage, 90)
+
+    slots = {
+        s["start"]: s["status"]
+        for s in client.get(
+            f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+            query_string={"appointment_type_id": str(ninety_min_type.id)},
+        ).get_json()["slots"]
+    }
+    # Every one of these candidate 90-minute windows overlaps the existing
+    # 12:00-13:30 booking, not just the one starting at its own 12:00.
+    assert slots["11:00"] == "booked"
+    assert slots["11:30"] == "booked"
+    assert slots["12:00"] == "booked"
+    assert slots["12:30"] == "booked"
+    assert slots["13:00"] == "booked"
+    # 09:00-10:30 and 13:30-15:00 don't overlap it.
+    assert slots["09:00"] == "available"
+    assert slots["13:30"] == "available"
+
+
+def test_pending_request_reserves_its_full_duration_not_just_its_start_time(
+    client, session, garage
+):
+    """Item 15's regression: a PENDING 90-minute request at 10:00 must
+    reserve 10:00-11:30 in full - a different customer asking about 10:30
+    must see it as unavailable too, not just the exact 10:00 start."""
+    day = _future_weekday()
+    ninety_min_type = _make_type(session, garage, 90, "Full Service")
+    thirty_min_type = _make_type(session, garage, 30, "Diagnostic Check")
+
+    session.add(
+        BookingRequest(
+            garage_id=garage.id,
+            status="PENDING",
+            customer_first_name="Sam",
+            customer_last_name="Lee",
+            customer_email="sam.lee@example.com",
+            vehicle_registration="PB11 AAA",
+            appointment_type_id=ninety_min_type.id,
+            requested_duration_minutes=90,
+            preferred_date=day,
+            preferred_time=datetime.time(10, 0),
+        )
+    )
+    session.commit()
+
+    slots = {
+        s["start"]: s["status"]
+        for s in client.get(
+            f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+            query_string={"appointment_type_id": str(thirty_min_type.id)},
+        ).get_json()["slots"]
+    }
+    assert slots["10:00"] == "booked"
+    # A 30-minute slot starting at 10:30 would still finish at 11:00, deep
+    # inside the pending request's reserved 10:00-11:30 window.
+    assert slots["10:30"] == "booked"
+    assert slots["11:00"] == "booked"
+    # 11:30 is the pending request's own end time - free again from here.
+    assert slots["11:30"] == "available"
+
+
 def test_tenant_isolation(client, session, garage, second_garage):
     day = _future_weekday()
     session.add(

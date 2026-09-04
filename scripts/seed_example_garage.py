@@ -54,6 +54,7 @@ load_dotenv()
 
 from app import create_app  # noqa: E402
 from app.extensions import db  # noqa: E402
+from app.garages.slug import slugify_unique  # noqa: E402
 from app.models.appointments.appointment import Appointment  # noqa: E402
 from app.models.appointments.appointment_checklist import AppointmentChecklist  # noqa: E402
 from app.models.appointments.appointment_checklist_item import (  # noqa: E402
@@ -62,7 +63,10 @@ from app.models.appointments.appointment_checklist_item import (  # noqa: E402
 from app.models.appointments.appointment_type import GarageAppointmentType  # noqa: E402
 from app.models.appointments.checklist_item_media import ChecklistItemMedia  # noqa: E402
 from app.models.appointments.checklist_template import ChecklistTemplate  # noqa: E402
-from app.models.appointments.checklist_template_item import ChecklistTemplateItem  # noqa: E402
+from app.models.appointments.checklist_template_item import (  # noqa: E402
+    CHECKLIST_ITEM_STATUSES,
+    ChecklistTemplateItem,
+)
 from app.models.customer import Customer  # noqa: E402
 from app.models.employee import Employee  # noqa: E402
 from app.models.garage import Garage  # noqa: E402
@@ -70,6 +74,7 @@ from app.models.mot_record import MOTRecord  # noqa: E402
 from app.models.reminder import Reminder  # noqa: E402
 from app.models.role import Role  # noqa: E402
 from app.models.vehicle import Vehicle  # noqa: E402
+from app.mot_records.routes import _sync_vehicle_mot_expiry  # noqa: E402
 from werkzeug.security import generate_password_hash  # noqa: E402
 
 GARAGE_NAME = "Kingsway MOT & Service Centre"
@@ -140,9 +145,12 @@ def seed() -> None:
     # ---- Garage ---------------------------------------------------------
     garage = Garage(
         name=GARAGE_NAME,
+        slug=slugify_unique(GARAGE_NAME, db.session),
         email="bookings@kingsway-mot.example",
         phone="+44 20 7946 0199",
         address="14-16 Kingsway Industrial Estate, London, EC1A 2BX",
+        postcode="EC1A 2BX",
+        website="https://kingsway-mot.example",
     )
     db.session.add(garage)
     db.session.flush()
@@ -260,7 +268,11 @@ def seed() -> None:
     # ---- Checklist templates --------------------------------------
     # Item tuple: (order, label, is_compulsory, media_type,
     #              media_required_for_statuses)
-    def build_template(appointment_type, items):
+    # These three templates are genuinely automotive (DVSA-style grading), so
+    # every item opts into the full CHECKLIST_ITEM_STATUSES preset rather
+    # than the generic DONE/NOT_APPLICABLE default a brand-new item gets -
+    # see app/models/appointments/checklist_template_item.py.
+    def build_template(appointment_type, items, customer_visible_labels=()):
         template = ChecklistTemplate(
             garage_id=garage.id, appointment_type_id=appointment_type.id
         )
@@ -276,6 +288,8 @@ def seed() -> None:
                 is_compulsory=compulsory,
                 media_type=media_type,
                 media_required_for_statuses=list(required_for),
+                result_options=list(CHECKLIST_ITEM_STATUSES),
+                visible_to_customer=label in customer_visible_labels,
             )
             db.session.add(row)
             rows.append(row)
@@ -295,6 +309,15 @@ def seed() -> None:
             (8, "Body, structure and general items", False, "PHOTO", ["DANGEROUS"]),
             (9, "Registration plates and VIN", True, "NONE", []),
         ],
+        # The customer-facing summary of a DVSA test - the full 9-point
+        # checklist stays internal working detail (item 5's "don't blindly
+        # expose every internal item").
+        customer_visible_labels={
+            "Brakes - condition and operation",
+            "Tyres and road wheels",
+            "Lights, indicators and reflectors",
+            "Exhaust, fuel and emissions",
+        },
     )
 
     _, service_items = build_template(
@@ -309,6 +332,12 @@ def seed() -> None:
             (7, "Tyre tread depth and pressures", True, "PHOTO", ["MINOR", "MAJOR"]),
             (8, "Wiper blades and washer fluid", False, "NONE", []),
         ],
+        customer_visible_labels={
+            "Engine oil and filter change",
+            "Brake fluid level and condition",
+            "Coolant level and antifreeze strength",
+            "Tyre tread depth and pressures",
+        },
     )
 
     _, brake_items = build_template(
@@ -321,6 +350,11 @@ def seed() -> None:
             (5, "Brake fluid moisture content", False, "NONE", ["DANGEROUS"]),
             (6, "Road test - braking in a straight line", True, "VIDEO", ["MAJOR", "DANGEROUS"]),
         ],
+        customer_visible_labels={
+            "Brake pad thickness - all corners",
+            "Brake disc condition and thickness",
+            "Road test - braking in a straight line",
+        },
     )
     # type_mot_service and type_diagnostic intentionally have no template,
     # so the "this appointment type has no checklist template yet" path is
@@ -416,33 +450,38 @@ def seed() -> None:
             )
         )
 
+    # Uses the same PASS-only rule production does (app/mot_records/routes.py)
+    # so a FAIL's placeholder expiry_date never masquerades as a fresh
+    # certificate - see the notes on each FAIL row below.
     def sync_expiry(vehicle):
-        latest = (
-            db.session.query(db.func.max(MOTRecord.expiry_date))
-            .filter_by(vehicle_id=vehicle.id)
-            .scalar()
-        )
-        vehicle.mot_expiry_date = latest
+        _sync_vehicle_mot_expiry(vehicle)
 
     # Focus: 3 years of history, current certificate expiring in ~18 days
     # -> "expiring soon".
     add_mot(veh_focus, TODAY - timedelta(days=730), TODAY - timedelta(days=365),
             "PASS", "No advisories.")
-    add_mot(veh_focus, TODAY - timedelta(days=365), TODAY + timedelta(days=18),
-            "FAIL", "Failed initially on offside headlamp aim; rectified and re-tested.")
+    # A FAIL grants no new expiry - it's stored as its own mot_date (zero
+    # forward validity), not the retest's eventual expiry.
+    add_mot(veh_focus, TODAY - timedelta(days=365), TODAY - timedelta(days=365),
+            "FAIL", "Failed on offside headlamp aim; rectified and re-tested "
+            "18 days later.")
     add_mot(veh_focus, TODAY - timedelta(days=347), TODAY + timedelta(days=18),
             "PASS", "Advisory: nearside front tyre worn close to limit (2.5mm).")
     sync_expiry(veh_focus)
 
-    # Audi: last certificate lapsed 3 weeks ago -> "expired".
-    add_mot(veh_audi, TODAY - timedelta(days=400), TODAY - timedelta(days=35),
+    # Audi: last (passed) certificate lapsed 3 weeks ago -> "expired". The
+    # subsequent FAIL is a lapsed-MOT retest that didn't pass, so it must not
+    # grant a new expiry either - sync_expiry correctly falls back to the
+    # older PASS's real expiry, not the FAIL's placeholder date.
+    add_mot(veh_audi, TODAY - timedelta(days=386), TODAY - timedelta(days=21),
             "PASS", "Advisory: light corrosion on rear subframe.")
-    add_mot(veh_audi, TODAY - timedelta(days=21), TODAY - timedelta(days=21),
-            "FAIL", "Excessive play in nearside front lower suspension arm ball joint (dangerous).")
+    add_mot(veh_audi, TODAY - timedelta(days=5), TODAY - timedelta(days=5),
+            "FAIL", "Excessive play in nearside front lower suspension arm "
+            "ball joint (dangerous). MOT had already lapsed before this retest.")
     sync_expiry(veh_audi)
 
     # Golf: healthy, ~10 months left -> "valid".
-    add_mot(veh_golf, TODAY - timedelta(days=300), TODAY + timedelta(days=305),
+    add_mot(veh_golf, TODAY - timedelta(days=60), TODAY + timedelta(days=305),
             "PASS", "No defects.")
     sync_expiry(veh_golf)
 
@@ -561,9 +600,12 @@ def seed() -> None:
                 checklist_template_item_id=trow.id,
                 order=trow.order,
                 label=trow.label,
+                description=trow.description,
                 is_compulsory=trow.is_compulsory,
                 media_type=trow.media_type,
                 media_required_for_statuses=list(trow.media_required_for_statuses),
+                result_options=list(trow.result_options),
+                visible_to_customer=trow.visible_to_customer,
                 status=status,
                 notes=notes,
                 completed_by_employee_id=completed_by.id if logged else None,

@@ -8,6 +8,11 @@ class EmployeeSchema(Schema):
     garage_id = fields.UUID(dump_only=True)
 
     email = fields.Email(required=True)
+    # Optional at the API level on purpose (existing, tested behaviour - see
+    # tests/api/test_employees.py::test_employee_name_is_optional) so a
+    # name-less employee stays usable and scriptable creation isn't blocked.
+    # The staff "Add employee" form makes both fields required in practice
+    # (see EmployeesList.tsx) - that's where real garage usage happens.
     first_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
     last_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
     password = fields.Str(

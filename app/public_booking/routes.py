@@ -16,6 +16,7 @@ from .schemas import (
     AvailabilityRangeSchema,
     BookingRequestCreatedSchema,
     BookingRequestCreateSchema,
+    DayAvailabilityQueryArgsSchema,
     DaySlotsSchema,
     PublicGarageDetailSchema,
 )
@@ -34,6 +35,20 @@ def _get_garage_by_slug(slug):
     if garage is None:
         abort(404, message="Garage not found")
     return garage
+
+
+def _get_active_appointment_type(garage, appointment_type_id):
+    """Resolve + validate a customer-selected appointment type, or None if
+    they haven't chosen one (a garage with none configured, or a step the
+    customer hasn't reached yet)."""
+    if appointment_type_id is None:
+        return None
+    appt_type = GarageAppointmentType.query.filter_by(
+        id=appointment_type_id, garage_id=garage.id
+    ).first()
+    if appt_type is None or appt_type.status != "ACTIVE":
+        abort(422, message="appointment_type_id is not an active type for this garage.")
+    return appt_type
 
 
 @public_booking_blp.route("/<slug>")
@@ -70,14 +85,16 @@ class PublicGarageAvailability(MethodView):
 class PublicGarageDayAvailability(MethodView):
 
     @limiter.limit(lambda: current_app.config["PUBLIC_AVAILABILITY_RATELIMIT"])
+    @public_booking_blp.arguments(DayAvailabilityQueryArgsSchema, location="query")
     @public_booking_blp.response(200, DaySlotsSchema)
-    def get(self, slug, day):
+    def get(self, args, slug, day):
         garage = _get_garage_by_slug(slug)
         try:
             parsed = date.fromisoformat(day)
         except ValueError:
             abort(422, message="day must be an ISO date (YYYY-MM-DD).")
-        return single_day(garage, parsed, datetime.now(UTC))
+        appt_type = _get_active_appointment_type(garage, args.get("appointment_type_id"))
+        return single_day(garage, parsed, datetime.now(UTC), appointment_type=appt_type)
 
 
 @public_booking_blp.route("/<slug>/booking-requests")
@@ -95,27 +112,25 @@ class BookingRequestSubmit(MethodView):
             abort(400, message="CAPTCHA verification failed.")
 
         appointment_type_id = data.get("appointment_type_id")
-        if appointment_type_id is not None:
-            appt_type = GarageAppointmentType.query.filter_by(
-                id=appointment_type_id, garage_id=garage.id
-            ).first()
-            if appt_type is None or appt_type.status != "ACTIVE":
-                abort(
-                    422,
-                    message="appointment_type_id is not an active type for this garage.",
-                )
+        appt_type = _get_active_appointment_type(garage, appointment_type_id)
 
         # Re-check the picked slot server-side against the same rules the
         # calendar uses (opening hours, closures, minimum notice, not in the
-        # past, capacity) so a direct POST can't bypass it. Only meaningful
-        # when a specific time was chosen - date-only requests carry no slot.
-        # Take a per-garage row lock first so two concurrent submits can't both
-        # pass the capacity check.
+        # past, capacity, and - critically - the *selected type's* full
+        # duration) so a direct POST can't bypass it and a slot that looked
+        # free for a shorter service can't be claimed for a longer one that
+        # no longer fits. Only meaningful when a specific time was chosen -
+        # date-only requests carry no slot. Take a per-garage row lock first
+        # so two concurrent submits can't both pass the capacity check.
         preferred_time = data.get("preferred_time")
         if preferred_time is not None:
             db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
             reason = validate_slot(
-                garage, data["preferred_date"], preferred_time, datetime.now(UTC)
+                garage,
+                data["preferred_date"],
+                preferred_time,
+                datetime.now(UTC),
+                appointment_type=appt_type,
             )
             if reason is not None:
                 _SLOT_REJECTIONS = {
@@ -150,6 +165,13 @@ class BookingRequestSubmit(MethodView):
             vehicle_year=data.get("vehicle_year"),
             vehicle_mileage=data.get("vehicle_mileage"),
             appointment_type_id=appointment_type_id,
+            # Snapshot what the customer actually saw/chose, so staff review
+            # (and history, if the type is edited or removed later) reflects
+            # the real request rather than the type's current configuration.
+            requested_duration_minutes=(
+                appt_type.default_duration_minutes if appt_type is not None else None
+            ),
+            requested_price=appt_type.base_price if appt_type is not None else None,
             preferred_date=data["preferred_date"],
             preferred_time=preferred_time,
             preferred_employee_note=data.get("preferred_employee_note"),

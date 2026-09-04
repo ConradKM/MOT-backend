@@ -19,6 +19,11 @@ class AppointmentSchema(Schema):
     # (with a built-in default set as fallback); validated in the route.
     status = fields.Str(dump_default="BOOKED", validate=validate.Length(min=1, max=30))
     notes = fields.Str(allow_none=True)
+    # Snapshot of the appointment type's price when this was created - stays
+    # accurate even if the type's base_price changes later. Null for
+    # appointments created before this column existed, or for a type with no
+    # price set.
+    price_at_booking = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)

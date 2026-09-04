@@ -46,19 +46,25 @@ def test_owner_can_add_checklist_template_item(authenticated_user):
         f"/api/appointment-types/{appt_type['id']}/checklist-template/items",
         json={
             "label": "Check front brake pad thickness",
+            "description": "Measure at the thinnest point of the pad.",
             "order": 0,
             "is_compulsory": True,
             "media_type": "PHOTO",
+            "result_options": ["PASS", "ADVISORY", "MAJOR", "DANGEROUS"],
             "media_required_for_statuses": ["MAJOR", "DANGEROUS"],
+            "visible_to_customer": True,
         },
     )
 
     assert resp.status_code == 201
     body = resp.get_json()
     assert body["label"] == "Check front brake pad thickness"
+    assert body["description"] == "Measure at the thinnest point of the pad."
     assert body["is_compulsory"] is True
     assert body["media_type"] == "PHOTO"
+    assert body["result_options"] == ["PASS", "ADVISORY", "MAJOR", "DANGEROUS"]
     assert body["media_required_for_statuses"] == ["MAJOR", "DANGEROUS"]
+    assert body["visible_to_customer"] is True
 
 
 def test_checklist_template_item_defaults(authenticated_user):
@@ -73,9 +79,49 @@ def test_checklist_template_item_defaults(authenticated_user):
     assert resp.status_code == 201
     body = resp.get_json()
     assert body["order"] == 0
+    assert body["description"] is None
     assert body["is_compulsory"] is False
     assert body["media_type"] == "NONE"
     assert body["media_required_for_statuses"] == []
+    # No business-specific grading assumed by default - see
+    # app/models/appointments/checklist_template_item.py::GENERIC_RESULT_OPTIONS.
+    assert body["result_options"] == ["NOT_CHECKED", "DONE", "NOT_APPLICABLE"]
+    assert body["visible_to_customer"] is False
+
+
+def test_media_required_status_must_be_one_of_the_items_own_result_options(authenticated_user):
+    appt_type = _create_type(authenticated_user.client)
+    authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+
+    resp = authenticated_user.client.post(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template/items",
+        json={
+            "label": "Check front brake pad thickness",
+            "media_type": "PHOTO",
+            # Left at the generic default (NOT_CHECKED/DONE/NOT_APPLICABLE) -
+            # MAJOR/DANGEROUS aren't valid results for this item.
+            "media_required_for_statuses": ["MAJOR", "DANGEROUS"],
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_owner_can_switch_an_item_to_a_generic_result_set(authenticated_user):
+    appt_type = _create_type(authenticated_user.client, "Haircut")
+    authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    created = authenticated_user.client.post(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template/items",
+        json={"label": "Confirm style with customer"},
+    ).get_json()
+
+    assert created["result_options"] == ["NOT_CHECKED", "DONE", "NOT_APPLICABLE"]
+
+    resp = authenticated_user.client.patch(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template/items/{created['id']}",
+        json={"result_options": ["DONE"]},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["result_options"] == ["DONE"]
 
 
 def test_list_and_get_checklist_template_items(authenticated_user):

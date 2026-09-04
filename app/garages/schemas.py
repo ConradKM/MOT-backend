@@ -1,5 +1,7 @@
 from marshmallow import Schema, fields, validate
 
+from app.public_booking.schemas import PublicAppointmentTypeSchema
+
 
 class GarageSchema(Schema):
     id = fields.UUID(dump_only=True)
@@ -39,16 +41,30 @@ class GarageDetailsUpdateSchema(Schema):
 
 
 class PublicGarageSchema(Schema):
-    """Garage fields safe to expose without auth, for the public booking flow."""
+    """Garage fields safe to expose without auth, for the public booking flow.
+
+    Mirrors PublicGarageDetailSchema (app/public_booking/schemas.py) - this is
+    the equivalent lookup by garage id rather than slug (the /book/:garageId
+    entry point), so it needs the same appointment_types the wizard's
+    date/type/time step relies on.
+    """
 
     id = fields.UUID(dump_only=True)
     name = fields.Str(dump_only=True)
     slug = fields.Str(dump_only=True)
+    appointment_types = fields.Method("_get_appointment_types", dump_only=True)
+
+    def _get_appointment_types(self, garage):
+        active = [t for t in garage.appointment_types if t.status == "ACTIVE"]
+        return PublicAppointmentTypeSchema(many=True).dump(active)
 
 
 class _CapacityBucketSchema(Schema):
-    booked = fields.Int(dump_only=True)
-    capacity = fields.Int(dump_only=True)
+    # Minutes of scheduling time, not a count of appointment rows - an
+    # appointment's actual duration and the garage's employee count both
+    # affect these (see app/garages/capacity.py).
+    booked_minutes = fields.Int(dump_only=True)
+    capacity_minutes = fields.Int(dump_only=True)
     level = fields.Str(dump_only=True)  # green | amber | red
 
 

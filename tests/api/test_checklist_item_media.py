@@ -29,7 +29,7 @@ def _checklist_item(authenticated_user, customer, media_type="PHOTO"):
             "appointment_type_id": appt_type["id"],
         },
     ).get_json()
-    checklist = authenticated_user.client.post(
+    checklist = authenticated_user.client.get(
         f"/api/appointments/{appointment['id']}/checklist"
     ).get_json()
     return appointment, checklist["items"][0]

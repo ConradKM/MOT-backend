@@ -7,7 +7,6 @@ from flask_smorest import Blueprint, abort
 from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
-from app.models.appointments.appointment_checklist import AppointmentChecklist
 from app.models.appointments.appointment_checklist_item import AppointmentChecklistItem
 
 from .schemas import (
@@ -15,6 +14,7 @@ from .schemas import (
     AppointmentChecklistItemUpdateSchema,
     AppointmentChecklistSchema,
 )
+from .service import snapshot_checklist_for_appointment
 
 appointment_checklists_blp = Blueprint(
     "appointment-checklists",
@@ -57,32 +57,10 @@ class AppointmentChecklistResource(MethodView):
         if appointment.checklist:
             abort(409, message="A checklist has already been started for this appointment.")
 
-        template = appointment.appointment_type.checklist_template
-        if not template:
+        if appointment.appointment_type.checklist_template is None:
             abort(422, message="This appointment type has no checklist template defined yet.")
 
-        checklist = AppointmentChecklist(
-            garage_id=garage_id,
-            appointment_id=appointment.id,
-            checklist_template_id=template.id,
-        )
-        db.session.add(checklist)
-        db.session.flush()
-
-        for template_item in template.items:
-            db.session.add(
-                AppointmentChecklistItem(
-                    garage_id=garage_id,
-                    appointment_checklist_id=checklist.id,
-                    checklist_template_item_id=template_item.id,
-                    order=template_item.order,
-                    label=template_item.label,
-                    is_compulsory=template_item.is_compulsory,
-                    media_type=template_item.media_type,
-                    media_required_for_statuses=list(template_item.media_required_for_statuses),
-                )
-            )
-
+        checklist = snapshot_checklist_for_appointment(appointment)
         db.session.commit()
 
         return checklist
@@ -105,6 +83,13 @@ class AppointmentChecklistItemResource(MethodView):
 
         if not item:
             abort(404, message="Checklist item not found")
+
+        if "status" in data and data["status"] not in item.result_options:
+            abort(
+                422,
+                message=f"'{data['status']}' is not a valid result for this item "
+                f"- choose one of: {', '.join(item.result_options)}.",
+            )
 
         for field, value in data.items():
             setattr(item, field, value)

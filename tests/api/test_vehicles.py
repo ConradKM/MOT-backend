@@ -69,13 +69,64 @@ def test_update_vehicle(authenticated_user, vehicle):
     assert resp.get_json()["current_mileage"] == 25000
 
 
-def test_delete_vehicle(authenticated_user, vehicle):
+def test_delete_vehicle_with_no_history_is_hard_deleted(authenticated_user, vehicle):
     resp = authenticated_user.client.delete(f"/api/vehicles/{vehicle.id}")
 
-    assert resp.status_code == 204
+    assert resp.status_code == 200
+    assert resp.get_json() == {"archived": False, "deleted": True}
 
     get_resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}")
     assert get_resp.status_code == 404
+
+
+def test_delete_vehicle_with_mot_history_is_archived_not_deleted(
+    authenticated_user, vehicle, mot_record, session
+):
+    resp = authenticated_user.client.delete(f"/api/vehicles/{vehicle.id}")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"archived": True, "deleted": False}
+
+    get_resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}")
+    assert get_resp.status_code == 200
+    assert get_resp.get_json()["is_active"] is False
+
+    session.refresh(mot_record)  # the MOT record still exists, untouched
+    assert mot_record.vehicle_id == vehicle.id
+
+
+def test_delete_vehicle_with_an_appointment_is_archived_not_deleted(
+    authenticated_user, vehicle, make_appointment, session
+):
+    import datetime
+
+    appt = make_appointment(
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
+    )
+    appt.vehicle_id = vehicle.id
+    session.commit()
+
+    resp = authenticated_user.client.delete(f"/api/vehicles/{vehicle.id}")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"archived": True, "deleted": False}
+
+    session.refresh(appt)
+    assert appt.vehicle_id == vehicle.id
+
+
+def test_archived_vehicle_is_excluded_from_the_default_list(
+    authenticated_user, vehicle, mot_record
+):
+    authenticated_user.client.delete(f"/api/vehicles/{vehicle.id}")
+
+    listed = authenticated_user.client.get("/api/vehicles/").get_json()
+    assert str(vehicle.id) not in {v["id"] for v in listed}
+
+    listed_with_inactive = authenticated_user.client.get(
+        "/api/vehicles/?include_inactive=true"
+    ).get_json()
+    assert str(vehicle.id) in {v["id"] for v in listed_with_inactive}
 
 
 # --------------------------------------------------------------------------

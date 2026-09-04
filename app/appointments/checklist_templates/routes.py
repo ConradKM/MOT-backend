@@ -101,9 +101,12 @@ class ChecklistTemplateItemList(MethodView):
             checklist_template_id=template.id,
             order=data["order"],
             label=data["label"],
+            description=data.get("description"),
             is_compulsory=data["is_compulsory"],
             media_type=data["media_type"],
             media_required_for_statuses=data["media_required_for_statuses"],
+            result_options=data["result_options"],
+            visible_to_customer=data["visible_to_customer"],
         )
         db.session.add(item)
         db.session.commit()
@@ -143,6 +146,16 @@ class ChecklistTemplateItemResource(MethodView):
 
         for field, value in data.items():
             setattr(item, field, value)
+
+        # Cross-field check against the item's *final* state, since either
+        # side of the pair (result_options / media_required_for_statuses)
+        # may be the one left unchanged by this particular PATCH.
+        bad = [s for s in item.media_required_for_statuses if s not in item.result_options]
+        if bad:
+            abort(
+                422,
+                message=f"{', '.join(bad)} - not one of this item's result_options.",
+            )
 
         db.session.commit()
 
