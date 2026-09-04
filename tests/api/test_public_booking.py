@@ -5,6 +5,8 @@ POST /api/public/<slug>/booking-requests
 """
 
 import datetime
+import json
+import urllib.error
 
 from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -179,6 +181,91 @@ def test_submit_rejected_captcha_returns_400(client, garage, monkeypatch):
 
     resp = client.post(
         f"/api/public/{garage.slug}/booking-requests", json=_valid_payload()
+    )
+    assert resp.status_code == 400
+    assert BookingRequest.query.count() == 0
+
+
+# --------------------------------------------------------------------------
+# Server-side Turnstile verification (real code path, provider = "turnstile")
+# --------------------------------------------------------------------------
+
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = json.dumps(payload).encode()
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _stub_siteverify(monkeypatch, *, success=True, raises=None):
+    def fake_urlopen(url, data=None, timeout=None):
+        if raises is not None:
+            raise raises
+        return _FakeResp({"success": success})
+
+    monkeypatch.setattr(
+        "app.public_booking.captcha.urllib.request.urlopen", fake_urlopen
+    )
+
+
+def test_turnstile_valid_token_creates_the_request(app, client, garage, monkeypatch):
+    monkeypatch.setitem(app.config, "CAPTCHA_PROVIDER", "turnstile")
+    _stub_siteverify(monkeypatch, success=True)
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(captcha_token="good-token"),
+    )
+    assert resp.status_code == 201
+    assert BookingRequest.query.count() == 1
+
+
+def test_turnstile_rejected_token_returns_400(app, client, garage, monkeypatch):
+    monkeypatch.setitem(app.config, "CAPTCHA_PROVIDER", "turnstile")
+    _stub_siteverify(monkeypatch, success=False)
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(captcha_token="bad-token"),
+    )
+    assert resp.status_code == 400
+    assert BookingRequest.query.count() == 0
+
+
+def test_turnstile_missing_token_returns_400_without_calling_provider(
+    app, client, garage, monkeypatch
+):
+    monkeypatch.setitem(app.config, "CAPTCHA_PROVIDER", "turnstile")
+
+    def explode(*a, **k):  # pragma: no cover - must not be reached
+        raise AssertionError("provider should not be called with no token")
+
+    monkeypatch.setattr(
+        "app.public_booking.captcha.urllib.request.urlopen", explode
+    )
+
+    payload = _valid_payload()
+    payload.pop("captcha_token", None)
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=payload)
+    assert resp.status_code == 400
+    assert BookingRequest.query.count() == 0
+
+
+def test_turnstile_network_failure_fails_closed(app, client, garage, monkeypatch):
+    monkeypatch.setitem(app.config, "CAPTCHA_PROVIDER", "turnstile")
+    _stub_siteverify(monkeypatch, raises=urllib.error.URLError("down"))
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(captcha_token="whatever"),
     )
     assert resp.status_code == 400
     assert BookingRequest.query.count() == 0
