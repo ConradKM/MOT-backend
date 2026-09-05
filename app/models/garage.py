@@ -88,3 +88,9 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
         back_populates="garage",
         cascade="all, delete-orphan",
     )
+    communication_settings = relationship(
+        "GarageCommunicationSettings",
+        back_populates="garage",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures and test-run reporting for the MOT Garage API suite.
+"""Shared pytest fixtures and test-run reporting for the CoMaz OS API suite.
 
 Tests run against a dedicated Postgres database (TestConfig.SQLALCHEMY_DATABASE_URI,
 default `mot_garage_test`), created automatically if it doesn't exist. The
@@ -487,6 +487,7 @@ _SECTION_BY_SUFFIX = [
     ("database/test_vehicle.py", "Database Tests"),
     ("database/test_mot_record.py", "Database Tests"),
     ("database/test_isolation.py", "Database Tests"),
+    ("database/test_communications.py", "Database Tests"),
     ("api/test_auth.py", "Authentication"),
     ("api/test_onboarding.py", "Onboarding"),
     ("api/test_customer_auth.py", "Customer Auth"),
@@ -503,6 +504,9 @@ _SECTION_BY_SUFFIX = [
     ("api/test_checklist_templates.py", "Checklist Template API"),
     ("api/test_appointment_checklists.py", "Appointment Checklist API"),
     ("api/test_checklist_item_media.py", "Checklist Media API"),
+    ("api/test_twilio_webhooks.py", "Twilio Webhooks"),
+    ("test_communications.py", "Communications Service"),
+    ("test_phone.py", "Phone Normalisation"),
     ("test_health.py", "Health Check"),
 ]
 

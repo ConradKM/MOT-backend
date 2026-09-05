@@ -1,5 +1,7 @@
 import os
 
+from app.branding import PLATFORM_NAME
+
 
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
@@ -10,7 +12,7 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
 
-    API_TITLE = "MOT Garage API"
+    API_TITLE = f"{PLATFORM_NAME} API"
     API_VERSION = "v1"
     OPENAPI_VERSION = "3.0.3"
 
@@ -82,6 +84,34 @@ class Config:
         os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30")
     )
 
+    # --- Twilio communications (see app/communications) ------------------
+    # CoMaz OS's own (master) Twilio account. Both unset (the default) is a
+    # fully supported, permanent state for a deployment that hasn't turned on
+    # communications yet - see app/communications/config.py::is_twilio_configured.
+    # Never hard-code these; never commit real values.
+    TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+    TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+    # Twilio signs every webhook request; the app recomputes and compares that
+    # signature before trusting the payload (app/communications/security.py).
+    # Only ever set to "false" for local/manual testing with a client that
+    # can't produce a real Twilio signature - production must leave this true.
+    TWILIO_WEBHOOK_VALIDATE = (
+        os.getenv("TWILIO_WEBHOOK_VALIDATE", "true").lower() != "false"
+    )
+    # If true, an inbound WhatsApp message that resolves to a garage gets an
+    # immediate generic acknowledgement reply. Off by default - no CoMaz OS
+    # deployment should send an automated WhatsApp reply until someone
+    # deliberately turns it on for that environment.
+    TWILIO_WHATSAPP_AUTO_ACK = (
+        os.getenv("TWILIO_WHATSAPP_AUTO_ACK", "false").lower() == "true"
+    )
+    # This deployment's own public HTTPS origin (no trailing slash) - used only
+    # to print the exact webhook URLs to give Twilio when configuring a number
+    # (`flask twilio-webhook-urls`). Twilio itself is never told this by the
+    # app; it's configured by hand in the Twilio console / API against
+    # whichever number or WhatsApp sender you provision.
+    PUBLIC_API_BASE_URL = os.getenv("PUBLIC_API_BASE_URL", "http://localhost:5001")
+
 
 class TestConfig(Config):
     """Config for the automated test suite. Always targets a dedicated
@@ -101,3 +131,9 @@ class TestConfig(Config):
     RATELIMIT_ENABLED = False
     RATELIMIT_STORAGE_URI = "memory://"
     STORAGE_BACKEND = "none"
+
+    # No real Twilio account in CI/local test runs; signature validation would
+    # otherwise reject every request the test suite sends itself. Tests that
+    # specifically exercise validation flip this back on for the duration of
+    # the test (see tests/api/test_twilio_webhooks.py).
+    TWILIO_WEBHOOK_VALIDATE = False

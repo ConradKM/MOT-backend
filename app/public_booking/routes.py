@@ -4,6 +4,7 @@ from flask import current_app
 from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
+from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
@@ -180,5 +181,7 @@ class BookingRequestSubmit(MethodView):
 
         db.session.add(booking_request)
         db.session.commit()
+
+        emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
 
         return booking_request

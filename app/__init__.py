@@ -46,10 +46,16 @@ def create_app(config_class=Config):
         "bearerAuth", {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
     )
 
+    from .communications.cli import (
+        configure_garage_communications_command,
+        twilio_webhook_urls_command,
+    )
     from .garages.cli import onboard_garage_command, update_garage_details_command
 
     app.cli.add_command(onboard_garage_command)
     app.cli.add_command(update_garage_details_command)
+    app.cli.add_command(configure_garage_communications_command)
+    app.cli.add_command(twilio_webhook_urls_command)
 
     from .appointments.checklist_templates.routes import checklist_templates_blp
     from .appointments.checklists.routes import appointment_checklists_blp
@@ -59,6 +65,8 @@ def create_app(config_class=Config):
     from .appointments.types.routes import appointment_types_blp
     from .auth.routes import auth_blp
     from .booking_requests.routes import booking_requests_blp
+    from .communications.voice_webhooks import twilio_voice_blp
+    from .communications.whatsapp_webhooks import twilio_whatsapp_blp
     from .customer_auth.routes import customer_auth_blp
     from .customer_portal.routes import customer_portal_blp
     from .customers.routes import customers_blp
@@ -73,6 +81,8 @@ def create_app(config_class=Config):
     from .vehicles.routes import vehicles_blp
 
     api.register_blueprint(health_blp)
+    api.register_blueprint(twilio_voice_blp)
+    api.register_blueprint(twilio_whatsapp_blp)
     api.register_blueprint(auth_blp)
     api.register_blueprint(customer_auth_blp)
     api.register_blueprint(customer_portal_blp)
@@ -116,6 +126,10 @@ def create_app(config_class=Config):
         checklist_item_media,
         checklist_template,
         checklist_template_item,
+    )
+    from .models.communications import (  # noqa: F401
+        communication_log,
+        garage_communication_settings,
     )
 
     return app

@@ -6,6 +6,11 @@ from flask_smorest import Blueprint, abort
 
 from app.appointments.checklists.service import snapshot_checklist_for_appointment
 from app.auth.utils import get_current_employee
+from app.communications.events import (
+    BOOKING_REQUEST_APPROVED,
+    BOOKING_REQUEST_REJECTED,
+    emit_event,
+)
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -286,6 +291,13 @@ class BookingRequestApprove(MethodView):
 
         db.session.commit()
 
+        emit_event(
+            BOOKING_REQUEST_APPROVED,
+            garage=booking_request.garage,
+            booking_request=booking_request,
+            appointment=appointment,
+        )
+
         attach_review_context([booking_request])
         return booking_request
 
@@ -316,6 +328,10 @@ class BookingRequestReject(MethodView):
         booking_request.staff_notes = data.get("staff_notes")
 
         db.session.commit()
+
+        emit_event(
+            BOOKING_REQUEST_REJECTED, garage=booking_request.garage, booking_request=booking_request
+        )
 
         attach_review_context([booking_request])
         return booking_request

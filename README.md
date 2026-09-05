@@ -1,6 +1,6 @@
-# MOT Garage Backend
+# CoMaz OS Backend
 
-Backend API for a multi-tenant MOT/garage management SaaS.
+Backend API for CoMaz OS™, a multi-tenant MOT/garage management SaaS platform.
 
 ## Stack
 
@@ -99,6 +99,16 @@ Cloudflare R2, MinIO works locally. Objects are keyed
 `garages/<garage_id>/checklist-items/<item_id>/<uuid>` and every endpoint is
 scoped to the caller's garage.
 
+## Communications (Twilio)
+
+Foundation for phone-call and WhatsApp features (`app/communications`) - no
+AI phone/chat agent yet, just tenant-aware config, webhooks, and a service
+layer future work builds on. Runs with zero Twilio credentials: the app
+starts normally, booking is unaffected, sends are recorded as
+`SKIPPED_NOT_CONFIGURED`, and the webhook endpoints 503 instead of trusting
+unverifiable requests. Full architecture, setup checklist and required
+environment variables: [`docs/TWILIO_SETUP.md`](docs/TWILIO_SETUP.md).
+
 ## Project structure
 
 ```text
@@ -119,8 +129,8 @@ app/
 │   └── media/          # presigned upload/download for checklist evidence
 ├── public_booking/     # unauthenticated garage lookup + booking-request submit
 ├── booking_requests/   # staff review / approve / reject of booking requests
-├── reminders/          # model only, not yet exposed via API
-├── notifications/      # not yet implemented
+├── mot_reminders/      # MOT reminder scheduling + delivery
+├── communications/     # Twilio foundation: config, webhooks, service layer
 ├── tasks/
 └── health/
 ```

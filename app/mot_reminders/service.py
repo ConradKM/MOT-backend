@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
 
+from app.communications.events import MOT_REMINDER_DUE, emit_event
 from app.email import send_email
 from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -189,6 +190,15 @@ def record_and_send(
     )
     session.add(reminder)
     session.flush()
+
+    # Fires regardless of `status` - "due" means a stage was reached and
+    # processed, not that the email specifically went out. A future WhatsApp
+    # handler can use that to attempt its own channel even when email was
+    # STATUS_SKIPPED (no address on file).
+    emit_event(
+        MOT_REMINDER_DUE, garage=garage, customer=customer, vehicle=vehicle, reminder=reminder
+    )
+
     return reminder
 
 

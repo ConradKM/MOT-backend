@@ -7,6 +7,11 @@ from flask_smorest import Blueprint, abort
 from app.appointments.checklists.service import snapshot_checklist_for_appointment
 from app.appointments.statuses.defaults import DEFAULT_STATUS_KEYS
 from app.auth.utils import get_current_employee
+from app.communications.events import (
+    APPOINTMENT_CANCELLED,
+    APPOINTMENT_RESCHEDULED,
+    emit_event,
+)
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_status import GarageAppointmentStatus
@@ -297,10 +302,24 @@ class AppointmentResource(MethodView):
                 exclude_appointment_id=appointment.id,
             )
 
+        previous_status = appointment.status
+        previous_start = appointment.start_time
+        previous_end = appointment.end_time
+
         for field, value in data.items():
             setattr(appointment, field, value)
 
         db.session.commit()
+
+        # Precise, low-risk signals only: a real transition into CANCELLED, or
+        # a real time change on a still-live appointment - never fired just
+        # because *some* field on this general-purpose PATCH changed.
+        if appointment.status == "CANCELLED" and previous_status != "CANCELLED":
+            emit_event(APPOINTMENT_CANCELLED, garage=appointment.garage, appointment=appointment)
+        elif appointment.status != "CANCELLED" and (
+            appointment.start_time != previous_start or appointment.end_time != previous_end
+        ):
+            emit_event(APPOINTMENT_RESCHEDULED, garage=appointment.garage, appointment=appointment)
 
         return appointment
 
