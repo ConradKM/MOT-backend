@@ -1,10 +1,13 @@
 # Twilio communications
 
 The foundation for CoMaz OS's phone-call and WhatsApp features: multi-tenant
-config, webhook endpoints, and a service layer. **No AI voice agent, IVR, or
-WhatsApp bot is built yet** - see [What's not built yet](#whats-not-built-yet).
-This document explains the architecture that exists today and exactly what
-you (the platform operator) still need to do outside this codebase.
+config, webhook endpoints, and a service layer. **No AI voice agent or IVR is
+built** - see [What's not built yet](#whats-not-built-yet). A rule-based (not
+AI) WhatsApp conversational booking engine *is* built and fully usable
+without a live Twilio account - see
+[`CONVERSATION_ENGINE.md`](CONVERSATION_ENGINE.md). This document explains
+the transport-layer architecture that exists today and exactly what you (the
+platform operator) still need to do outside this codebase.
 
 ---
 
@@ -89,17 +92,17 @@ imports the `twilio` package directly:
 
 `app/communications/events.py` defines named events
 (`BOOKING_REQUEST_CREATED/APPROVED/REJECTED`, `APPOINTMENT_CANCELLED`,
-`APPOINTMENT_RESCHEDULED`, `MOT_REMINDER_DUE`, `APPOINTMENT_REMINDER_DUE`).
-The booking/appointment/reminder code calls `emit_event(...)` at the relevant
-point (booking request created/approved/rejected, an appointment's status
-becomes `CANCELLED`, its time changes, an MOT reminder fires) - it does not
-know or care whether anything is listening. Nothing subscribes today, so
-every `emit_event` call is a no-op (a debug log line). Wiring a real
-notification is a matter of calling `register_handler(EVENT, fn)` for the
-event you care about; it needs no changes to the booking code itself.
-`APPOINTMENT_REMINDER_DUE` has no producer yet - there's no generic
-appointment-reminder feature in the codebase today (only MOT reminders) - the
-constant exists for when there is one.
+`APPOINTMENT_RESCHEDULED`, `MOT_REMINDER_DUE`, `APPOINTMENT_REMINDER_DUE`,
+`MISSED_CALL`, `CALLBACK_REQUESTED`). The booking/appointment/reminder/voice
+code calls `emit_event(...)` at the relevant point - it does not know or
+care whether anything is listening. `app/conversation/automation.py` now
+registers the real subscribers (see
+[`CONVERSATION_ENGINE.md`](CONVERSATION_ENGINE.md#automation-rules-and-events)):
+each one checks the garage's own automation settings (off by default) before
+sending anything, through the same `send_whatsapp_message` path as
+everything else. `APPOINTMENT_REMINDER_DUE` still has no producer - there's
+no generic appointment-reminder feature in the codebase today (only MOT
+reminders) - the constant exists for when there is one.
 
 ---
 
@@ -168,7 +171,6 @@ product decisions:
 
 * AI voice assistant / speech-to-text / LLM-driven booking conversations
 * IVR menus beyond the single static greeting
-* A WhatsApp conversational booking bot
 * Automated Twilio subaccount provisioning or phone-number purchasing
 * Production WhatsApp message templates
 * Twilio usage/billing integration
