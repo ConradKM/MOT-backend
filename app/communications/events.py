@@ -36,6 +36,12 @@ APPOINTMENT_RESCHEDULED = "APPOINTMENT_RESCHEDULED"
 APPOINTMENT_CANCELLED = "APPOINTMENT_CANCELLED"
 APPOINTMENT_REMINDER_DUE = "APPOINTMENT_REMINDER_DUE"
 MOT_REMINDER_DUE = "MOT_REMINDER_DUE"
+# An inbound call that never connected (see app/communications/queries.py::
+# MISSED_CALL_STATUSES) - emitted from voice_webhooks.py's status callback.
+MISSED_CALL = "MISSED_CALL"
+# A customer asked for a callback via the conversation engine (or, later,
+# any other channel) - see app/conversation/actions.py::create_callback_request.
+CALLBACK_REQUESTED = "CALLBACK_REQUESTED"
 
 EVENT_TYPES = (
     BOOKING_REQUEST_CREATED,
@@ -45,6 +51,8 @@ EVENT_TYPES = (
     APPOINTMENT_CANCELLED,
     APPOINTMENT_REMINDER_DUE,
     MOT_REMINDER_DUE,
+    MISSED_CALL,
+    CALLBACK_REQUESTED,
 )
 
 EventHandler = Callable[..., None]
@@ -53,12 +61,17 @@ _handlers: dict[str, list[EventHandler]] = defaultdict(list)
 
 
 def register_handler(event_type: str, handler: EventHandler) -> None:
-    """Subscribe ``handler`` to ``event_type``. Called at import time by
-    whatever future module actually wants to react (e.g. a
-    ``app/communications/handlers.py`` that sends WhatsApp confirmations) -
-    nothing in this codebase registers one yet."""
+    """Subscribe ``handler`` to ``event_type`` - see
+    app/conversation/automation.py::register_default_handlers for the real
+    subscribers. Idempotent by design: registering the exact same handler
+    function for the same event twice is a no-op rather than a second
+    subscription, so a caller that re-registers defensively (e.g. after
+    ``_reset_handlers_for_tests`` wiped the registry in an unrelated test)
+    can never end up sending the same automated message twice per event."""
     if event_type not in EVENT_TYPES:
         raise ValueError(f"Unknown communications event type: {event_type!r}")
+    if handler in _handlers[event_type]:
+        return
     _handlers[event_type].append(handler)
 
 

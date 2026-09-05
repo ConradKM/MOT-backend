@@ -214,12 +214,23 @@ class BookingRequestApprove(MethodView):
         _assert_capacity_available(booking_request.garage, booking_request, start_time, end_time)
 
         # --- reuse-or-create the customer ------------------------------
-        customer = (
-            Customer.query.filter(
-                Customer.garage_id == garage_id,
-                Customer.email.ilike(booking_request.customer_email),
+        # A request already linked to a known customer (e.g. the
+        # conversation engine identified them by phone - see
+        # app/conversation/actions.py::create_booking_request) uses that
+        # link directly, rather than re-deriving identity from email - which
+        # a WhatsApp/voice-originated request may not even have.
+        customer = None
+        if booking_request.customer_id is not None:
+            customer = Customer.query.filter_by(
+                id=booking_request.customer_id, garage_id=garage_id
             ).first()
-        )
+        if customer is None and booking_request.customer_email:
+            customer = (
+                Customer.query.filter(
+                    Customer.garage_id == garage_id,
+                    Customer.email.ilike(booking_request.customer_email),
+                ).first()
+            )
         if customer is None:
             customer = Customer(
                 garage_id=garage_id,

@@ -138,3 +138,84 @@ class OverviewSchema(Schema):
 
 class UnreadCountSchema(Schema):
     whatsapp_unread = fields.Int(dump_only=True)
+
+
+# --------------------------------------------------------------------------
+# Communications automation settings (Part 26/40) - never Twilio credentials,
+# those stay platform/CLI-only (app/garages/details.py, app/communications/cli.py).
+# --------------------------------------------------------------------------
+
+
+class AutomationSettingsSchema(Schema):
+    booking_ack_enabled = fields.Bool()
+    booking_confirmation_enabled = fields.Bool()
+    reminder_enabled = fields.Bool()
+    reminder_hours_before = fields.Int(validate=validate.Range(min=1, max=168))
+    missed_call_ack_enabled = fields.Bool()
+    conversation_automation_enabled = fields.Bool()
+
+
+# --------------------------------------------------------------------------
+# Message templates (Part 24/34)
+# --------------------------------------------------------------------------
+
+
+class MessageTemplateSchema(Schema):
+    key = fields.Str(dump_only=True)
+    body = fields.Str(dump_only=True)
+    default_body = fields.Str(dump_only=True)
+    is_custom = fields.Bool(dump_only=True)
+
+
+class MessageTemplateListResponseSchema(Schema):
+    items = fields.List(fields.Nested(MessageTemplateSchema), dump_only=True)
+
+
+class UpdateMessageTemplateSchema(Schema):
+    body = fields.Str(required=True, validate=validate.Length(min=1, max=1600))
+
+
+class TemplatePreviewSchema(Schema):
+    body = fields.Str(required=True, validate=validate.Length(min=1, max=1600))
+
+
+class TemplatePreviewResultSchema(Schema):
+    preview = fields.Str(dump_only=True)
+
+
+# --------------------------------------------------------------------------
+# Callback requests (Part 21/38)
+# --------------------------------------------------------------------------
+
+
+class CallbackRequestSchema(Schema):
+    id = fields.UUID(dump_only=True)
+    customer = fields.Nested(CommunicationCustomerSchema, dump_only=True, allow_none=True)
+    phone_number = fields.Str(dump_only=True)
+    reason = fields.Str(dump_only=True, allow_none=True)
+    preferred_time = fields.Str(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)
+    created_at = fields.DateTime(dump_only=True)
+
+
+class CallbackRequestListQueryArgsSchema(Schema):
+    status = fields.Str(load_default=None, validate=validate.OneOf(["PENDING", "COMPLETED", "CANCELLED"]))
+    limit = fields.Int(load_default=None, validate=validate.Range(min=1, max=200))
+    offset = fields.Int(load_default=0, validate=validate.Range(min=0))
+
+
+class CallbackRequestListResponseSchema(Schema):
+    items = fields.List(fields.Nested(CallbackRequestSchema), dump_only=True)
+    total = fields.Int(dump_only=True)
+
+
+# --------------------------------------------------------------------------
+# Staff conversation takeover / resume automation (Part 20)
+# --------------------------------------------------------------------------
+
+
+class ConversationAutomationStatusSchema(Schema):
+    phone = fields.Str(dump_only=True)
+    status = fields.Str(dump_only=True, allow_none=True)
+    intent = fields.Str(dump_only=True, allow_none=True)
+    handoff_reason = fields.Str(dump_only=True, allow_none=True)

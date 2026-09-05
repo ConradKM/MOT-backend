@@ -36,7 +36,12 @@ CHANNELS = (CHANNEL_VOICE, CHANNEL_WHATSAPP, CHANNEL_SMS, CHANNEL_EMAIL)
 
 DIRECTION_INBOUND = "INBOUND"
 DIRECTION_OUTBOUND = "OUTBOUND"
-DIRECTIONS = (DIRECTION_INBOUND, DIRECTION_OUTBOUND)
+# A row the conversation engine writes about itself, not a message to/from
+# the customer - e.g. "Booking request #1234 created" (see
+# app/conversation/engine.py). Shows up in the same timeline as the
+# INBOUND/OUTBOUND turns around it so staff can see what automation did.
+DIRECTION_SYSTEM = "SYSTEM"
+DIRECTIONS = (DIRECTION_INBOUND, DIRECTION_OUTBOUND, DIRECTION_SYSTEM)
 
 # Set instead of ever calling a real provider, whenever Twilio (or that
 # garage's communications) isn't configured - never silently pretend a
@@ -84,6 +89,10 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):
     # e.g. "BOOKING_REQUEST_APPROVED". Null for a row created directly (an
     # inbound webhook), rather than via the event dispatcher.
     trigger_event: Mapped[str | None] = mapped_column(String(60))
+    # The app/conversation/intents.py constant detected for an INBOUND
+    # message, e.g. "CREATE_BOOKING". Null for OUTBOUND/SYSTEM rows and for
+    # anything logged before the conversation engine existed.
+    intent: Mapped[str | None] = mapped_column(String(40))
 
     body: Mapped[str | None] = mapped_column(Text)
     call_duration_seconds: Mapped[int | None] = mapped_column(Integer)

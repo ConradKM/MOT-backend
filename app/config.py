@@ -112,6 +112,16 @@ class Config:
     # whichever number or WhatsApp sender you provision.
     PUBLIC_API_BASE_URL = os.getenv("PUBLIC_API_BASE_URL", "http://localhost:5001")
 
+    # --- Conversation engine (see app/conversation) -----------------------
+    # The development conversation simulator (POST /api/conversation/simulate)
+    # runs real customer messages through the real booking engine without
+    # Twilio - essential before live credentials exist, but it must NEVER be
+    # reachable in production (Part 29). Defaults on so local dev/CI need no
+    # setup; a production deployment MUST set this to "false" explicitly.
+    CONVERSATION_SIMULATOR_ENABLED = (
+        os.getenv("CONVERSATION_SIMULATOR_ENABLED", "true").lower() != "false"
+    )
+
 
 class TestConfig(Config):
     """Config for the automated test suite. Always targets a dedicated

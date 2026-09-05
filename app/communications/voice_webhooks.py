@@ -16,9 +16,11 @@ from flask import Response, current_app, request
 from flask_smorest import Blueprint, abort
 from twilio.twiml.voice_response import VoiceResponse
 
-from app.models.communications.communication_log import CHANNEL_VOICE
+from app.models.communications.communication_log import CHANNEL_VOICE, DIRECTION_INBOUND
 
 from .config import is_twilio_configured
+from .events import MISSED_CALL, emit_event
+from .queries import MISSED_CALL_STATUSES
 from .security import validate_twilio_request
 from .service import record_inbound_communication, update_communication_status
 from .tenant_resolution import resolve_garage_by_voice_number
@@ -87,10 +89,16 @@ def voice_status():
         abort(403, message="Invalid Twilio signature.")
 
     duration = request.form.get("CallDuration")
-    update_communication_status(
+    status = request.form.get("CallStatus") or "unknown"
+    log = update_communication_status(
         external_id=request.form.get("CallSid"),
-        status=request.form.get("CallStatus") or "unknown",
+        status=status,
         call_duration_seconds=int(duration) if duration and duration.isdigit() else None,
         error_code=request.form.get("ErrorCode") or None,
     )
+    # A call that never connected (see queries.py::MISSED_CALL_STATUSES) is
+    # exactly what the MISSED_CALL automation rule exists for - only for a
+    # call that came IN, never one CoMaz OS itself placed.
+    if log is not None and log.direction == DIRECTION_INBOUND and status in MISSED_CALL_STATUSES:
+        emit_event(MISSED_CALL, garage=log.garage, communication_log=log)
     return ("", 204)

@@ -68,6 +68,7 @@ def create_app(config_class=Config):
     from .communications.routes import communications_blp
     from .communications.voice_webhooks import twilio_voice_blp
     from .communications.whatsapp_webhooks import twilio_whatsapp_blp
+    from .conversation.routes import conversation_blp
     from .customer_auth.routes import customer_auth_blp
     from .customer_portal.routes import customer_portal_blp
     from .customers.routes import customers_blp
@@ -93,6 +94,7 @@ def create_app(config_class=Config):
     api.register_blueprint(public_booking_blp)
     api.register_blueprint(booking_requests_blp)
     api.register_blueprint(communications_blp)
+    api.register_blueprint(conversation_blp)
     api.register_blueprint(customers_blp)
     api.register_blueprint(employees_blp)
     api.register_blueprint(roles_blp)
@@ -106,6 +108,7 @@ def create_app(config_class=Config):
     api.register_blueprint(appointment_checklists_blp)
     api.register_blueprint(checklist_item_media_blp)
 
+    from .conversation.automation import register_default_handlers
     from .models import (  # noqa: F401
         booking_request,
         customer,
@@ -130,8 +133,13 @@ def create_app(config_class=Config):
         checklist_template_item,
     )
     from .models.communications import (  # noqa: F401
+        automation_settings,
         communication_log,
         garage_communication_settings,
+        message_template,
     )
+    from .models.conversation import callback_request, conversation_session  # noqa: F401
+
+    register_default_handlers()
 
     return app

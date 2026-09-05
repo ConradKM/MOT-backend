@@ -34,7 +34,9 @@ class BookingRequestSchema(Schema):
     customer_first_name = fields.Str(dump_only=True)
     customer_last_name = fields.Str(dump_only=True)
     customer_full_name = fields.Method("_get_customer_full_name", dump_only=True)
-    customer_email = fields.Email(dump_only=True)
+    # allow_none: a request created by the conversation engine (WhatsApp/
+    # voice) may have no email - that channel never asks for one.
+    customer_email = fields.Email(dump_only=True, allow_none=True)
     customer_phone = fields.Str(dump_only=True, allow_none=True)
 
     vehicle_registration = fields.Str(dump_only=True)

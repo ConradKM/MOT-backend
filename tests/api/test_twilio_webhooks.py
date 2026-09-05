@@ -14,6 +14,9 @@ import datetime
 
 from twilio.request_validator import RequestValidator
 
+from app.models.communications.automation_settings import (
+    GarageCommunicationAutomationSettings,
+)
 from app.models.communications.communication_log import CommunicationLog
 from app.models.communications.garage_communication_settings import (
     GarageCommunicationSettings,
@@ -180,6 +183,56 @@ def test_voice_status_updates_the_matching_log_idempotently(
     assert matches[0].call_duration_seconds == 37
 
 
+def test_voice_status_missed_call_emits_missed_call_event(app, session, client, garage, monkeypatch):
+    from app.communications import events as comms_events
+
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        CommunicationLog(
+            garage_id=garage.id, channel="VOICE", direction="INBOUND",
+            status="ringing", external_id="CA-missed-1", from_address="+447700900000",
+        )
+    )
+    session.commit()
+
+    received = []
+    comms_events.register_handler("MISSED_CALL", lambda garage, **ctx: received.append((garage.id, ctx)))
+
+    path = "/api/webhooks/twilio/voice/status"
+    form = {"CallSid": "CA-missed-1", "CallStatus": "no-answer"}
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 204
+    assert len(received) == 1
+    assert received[0][0] == garage.id
+    assert received[0][1]["communication_log"].external_id == "CA-missed-1"
+
+
+def test_voice_status_completed_call_does_not_emit_missed_call_event(
+    app, session, client, garage, monkeypatch
+):
+    from app.communications import events as comms_events
+
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        CommunicationLog(
+            garage_id=garage.id, channel="VOICE", direction="INBOUND",
+            status="ringing", external_id="CA-answered-1",
+        )
+    )
+    session.commit()
+
+    received = []
+    comms_events.register_handler("MISSED_CALL", lambda garage, **ctx: received.append(garage.id))
+
+    path = "/api/webhooks/twilio/voice/status"
+    form = {"CallSid": "CA-answered-1", "CallStatus": "completed", "CallDuration": "42"}
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 204
+    assert received == []
+
+
 # --------------------------------------------------------------------------
 # WhatsApp: /incoming
 # --------------------------------------------------------------------------
@@ -302,6 +355,66 @@ def test_whatsapp_incoming_auto_ack_when_explicitly_enabled(
     assert resp.status_code == 200
     assert b"<Message>" in resp.data
     assert garage.name.encode() in resp.data
+
+
+# --------------------------------------------------------------------------
+# WhatsApp: routed through the conversation engine when enabled
+# --------------------------------------------------------------------------
+
+
+def test_whatsapp_incoming_routes_through_conversation_engine_when_automation_enabled(
+    app, session, client, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, whatsapp_sender="whatsapp:+14155238886")
+    )
+    session.add(
+        GarageCommunicationAutomationSettings(garage_id=garage.id, conversation_automation_enabled=True)
+    )
+    session.commit()
+
+    path = "/api/webhooks/twilio/whatsapp/incoming"
+    form = {
+        "To": "whatsapp:+14155238886", "From": "whatsapp:+447123456789",
+        "MessageSid": "SM-engine-1", "Body": "what are your opening hours",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+    assert b"<Message>" in resp.data
+    assert b"opening hours" in resp.data
+
+    # The engine owns its own turn logging - record_inbound_communication must
+    # never also fire, or every automated turn would be logged twice.
+    logs = CommunicationLog.query.filter_by(garage_id=garage.id).order_by(CommunicationLog.created_at).all()
+    assert len(logs) == 2
+    assert all(log.external_provider == "comaz_conversation_engine" for log in logs)
+
+
+def test_whatsapp_incoming_does_not_route_through_engine_when_automation_disabled(
+    app, session, client, garage, monkeypatch
+):
+    # conversation_automation_enabled defaults to False - explicit here since
+    # this is the one test that would catch the default silently flipping.
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, whatsapp_sender="whatsapp:+14155238886")
+    )
+    session.commit()
+
+    path = "/api/webhooks/twilio/whatsapp/incoming"
+    form = {
+        "To": "whatsapp:+14155238886", "From": "whatsapp:+447123456789",
+        "MessageSid": "SM-no-engine-1", "Body": "what are your opening hours",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+    assert b"<Message>" not in resp.data  # no auto-ack, and no engine reply either
+
+    log = CommunicationLog.query.filter_by(external_id="SM-no-engine-1").one()
+    assert log.external_provider == "twilio"
 
 
 # --------------------------------------------------------------------------

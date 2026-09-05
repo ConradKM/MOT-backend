@@ -53,7 +53,13 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
     # --- what the public form submitted -------------------------------------
     customer_first_name: Mapped[str] = mapped_column(String(100), nullable=False)
     customer_last_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    customer_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    # Required by the public web form's own schema (see
+    # app/public_booking/schemas.py::BookingRequestCreateSchema) - nullable
+    # at the DB level because the conversational booking flow (WhatsApp/voice,
+    # see app/conversation/actions.py::create_booking_request) never asks a
+    # customer for an email; that channel already *is* the confirmation
+    # channel. Falls back to the matched customer's own email when one exists.
+    customer_email: Mapped[str | None] = mapped_column(String(320))
     # Nullable at the DB level only for pre-existing rows submitted before the
     # mobile number became required; the public form's schema (see
     # app/public_booking/schemas.py::UKMobileField) requires and E.164-

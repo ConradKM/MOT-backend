@@ -12,6 +12,7 @@ from flask import Response, current_app, request
 from flask_smorest import Blueprint, abort
 from twilio.twiml.messaging_response import MessagingResponse
 
+from app.conversation import automation, engine
 from app.models.communications.communication_log import CHANNEL_WHATSAPP
 
 from .config import is_twilio_configured
@@ -57,7 +58,24 @@ def incoming_whatsapp():
         )
         return Response(str(reply), mimetype="text/xml")
 
-    customer = find_customer_by_phone(garage, from_number.removeprefix("whatsapp:"))
+    phone_e164 = from_number.removeprefix("whatsapp:")
+
+    if automation.is_conversation_automation_enabled(garage):
+        # The engine owns its own turn logging (inbound + bot/system rows,
+        # tagged external_provider="comaz_conversation_engine") - calling
+        # record_inbound_communication as well would log this message twice.
+        result = engine.handle_message(
+            garage,
+            channel=CHANNEL_WHATSAPP,
+            phone_e164=phone_e164,
+            text=body,
+            external_message_id=message_sid,
+        )
+        if result.response_text:
+            reply.message(result.response_text)
+        return Response(str(reply), mimetype="text/xml")
+
+    customer = find_customer_by_phone(garage, phone_e164)
     record_inbound_communication(
         garage=garage,
         channel=CHANNEL_WHATSAPP,
