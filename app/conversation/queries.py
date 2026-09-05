@@ -19,7 +19,10 @@ from app.models.conversation.callback_request import (
     STATUS_COMPLETED,
     CallbackRequest,
 )
-from app.models.conversation.conversation_session import ConversationSession
+from app.models.conversation.conversation_session import (
+    STATUS_HUMAN_HANDOFF,
+    ConversationSession,
+)
 
 
 def list_callback_requests(
@@ -47,6 +50,22 @@ def complete_callback_request(callback: CallbackRequest) -> None:
 def cancel_callback_request(callback: CallbackRequest) -> None:
     callback.status = STATUS_CANCELLED
     db.session.commit()
+
+
+def list_handoff_sessions(
+    garage, *, channel: str = CHANNEL_WHATSAPP
+) -> list[ConversationSession]:
+    """The "attention queue" (Part 39): every conversation automation could
+    not resolve and handed to a human, most recently handed off first - a
+    human, never a timer, ever clears one of these (see
+    session_service.is_stale's HUMAN_HANDOFF carve-out)."""
+    return (
+        ConversationSession.query.filter_by(
+            garage_id=garage.id, channel=channel, status=STATUS_HUMAN_HANDOFF
+        )
+        .order_by(ConversationSession.last_activity_at.desc())
+        .all()
+    )
 
 
 def get_conversation_session(

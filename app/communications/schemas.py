@@ -219,3 +219,20 @@ class ConversationAutomationStatusSchema(Schema):
     status = fields.Str(dump_only=True, allow_none=True)
     intent = fields.Str(dump_only=True, allow_none=True)
     handoff_reason = fields.Str(dump_only=True, allow_none=True)
+
+
+# --------------------------------------------------------------------------
+# Attention queue (Part 39) - conversations automation handed to a human
+# --------------------------------------------------------------------------
+
+
+class AttentionQueueItemSchema(Schema):
+    phone = fields.Str(attribute="customer_phone", dump_only=True)
+    customer = fields.Nested(CommunicationCustomerSchema, dump_only=True, allow_none=True)
+    intent = fields.Str(dump_only=True, allow_none=True)
+    handoff_reason = fields.Str(dump_only=True, allow_none=True)
+    last_activity_at = fields.DateTime(dump_only=True)
+
+
+class AttentionQueueResponseSchema(Schema):
+    items = fields.List(fields.Nested(AttentionQueueItemSchema), dump_only=True)

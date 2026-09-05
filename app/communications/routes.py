@@ -26,6 +26,7 @@ from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
 
 from . import queries
 from .schemas import (
+    AttentionQueueResponseSchema,
     AutomationSettingsSchema,
     CallbackRequestListQueryArgsSchema,
     CallbackRequestListResponseSchema,
@@ -393,6 +394,20 @@ def _automation_status_payload(phone_e164: str, session) -> dict:
         "intent": session.intent,
         "handoff_reason": session.handoff_reason,
     }
+
+
+@communications_blp.route("/attention-queue")
+class AttentionQueue(MethodView):
+
+    @jwt_required()
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.response(200, AttentionQueueResponseSchema)
+    def get(self):
+        """Every WhatsApp conversation automation could not resolve and
+        handed to a human - the queue a staff member works through, rather
+        than hunting for it inside the full conversation list."""
+        garage = get_current_employee().garage
+        return {"items": conversation_queries.list_handoff_sessions(garage)}
 
 
 @communications_blp.route("/conversations/<string:phone>/automation")

@@ -253,6 +253,37 @@ def test_resume_automation_clears_the_handoff(garage, authenticated_client):
     assert resp.get_json()["handoff_reason"] is None
 
 
+def test_attention_queue_lists_only_human_handoff_conversations(
+    garage, garage_schedule, appointment_type, user, authenticated_client
+):
+    engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now())
+    other_phone = "+447123400600"
+    engine.handle_message(garage, channel="WHATSAPP", phone_e164=other_phone, text="speak to a human", now=_now())
+
+    resp = authenticated_client.get("/api/communications/attention-queue")
+    assert resp.status_code == 200
+    items = resp.get_json()["items"]
+    assert len(items) == 1
+    assert items[0]["phone"] == other_phone
+    assert items[0]["handoff_reason"]
+
+
+def test_attention_queue_empties_once_resumed(garage, authenticated_client):
+    engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="speak to a human", now=_now())
+    assert len(authenticated_client.get("/api/communications/attention-queue").get_json()["items"]) == 1
+
+    authenticated_client.post(f"/api/communications/conversations/{PHONE_RAW}/resume-automation")
+
+    assert authenticated_client.get("/api/communications/attention-queue").get_json()["items"] == []
+
+
+def test_attention_queue_is_tenant_scoped(garage, second_garage, authenticated_client, second_authenticated_client):
+    engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="speak to a human", now=_now())
+
+    resp = second_authenticated_client.get("/api/communications/attention-queue")
+    assert resp.get_json()["items"] == []
+
+
 def test_conversation_automation_endpoints_are_tenant_scoped(
     garage, garage_schedule, appointment_type, user, second_garage, authenticated_client, second_authenticated_client
 ):
