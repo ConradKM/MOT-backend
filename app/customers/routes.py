@@ -3,6 +3,8 @@ from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 
 from app.auth.utils import get_current_employee
+from app.communications import queries as communications_queries
+from app.communications.schemas import CommunicationLogSchema
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.customer import Customer
@@ -149,3 +151,19 @@ class CustomerResource(MethodView):
         db.session.commit()
 
         return {"archived": False, "deleted": True}
+
+
+@customers_blp.route("/<uuid:customer_id>/communications")
+class CustomerCommunications(MethodView):
+
+    @jwt_required()
+    @customers_blp.response(200, CommunicationLogSchema(many=True))
+    def get(self, customer_id):
+        employee = get_current_employee()
+        garage_id = employee.garage_id
+
+        customer = Customer.query.filter_by(id=customer_id, garage_id=garage_id).first()
+        if not customer:
+            abort(404, message="Customer not found")
+
+        return communications_queries.list_customer_communications(employee.garage, customer_id)

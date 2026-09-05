@@ -127,11 +127,32 @@ def send_whatsapp_message(
     just with status ``SKIPPED_NOT_CONFIGURED`` and no provider SID.
     """
     settings = garage.communication_settings
+
+    try:
+        to_e164 = normalize_uk_mobile(to)
+    except InvalidPhoneNumberError as exc:
+        return _skip(
+            garage=garage,
+            channel=CHANNEL_WHATSAPP,
+            direction=DIRECTION_OUTBOUND,
+            to_address=to,
+            body=body,
+            trigger_event=trigger_event,
+            customer=customer,
+            appointment=appointment,
+            booking_request=booking_request,
+            reason=f"Invalid destination number: {exc}",
+        )
+
+    # Normalised (and, from here on, "whatsapp:"-prefixed) even for a
+    # SKIPPED_NOT_CONFIGURED row - the communication log should always show a
+    # clean destination number, regardless of which check below stopped it.
+    to_address = f"whatsapp:{to_e164}"
     skip_kwargs = {
         "garage": garage,
         "channel": CHANNEL_WHATSAPP,
         "direction": DIRECTION_OUTBOUND,
-        "to_address": to,
+        "to_address": to_address,
         "body": body,
         "trigger_event": trigger_event,
         "customer": customer,
@@ -146,12 +167,6 @@ def send_whatsapp_message(
     if not (settings.whatsapp_sender or settings.messaging_service_sid):
         return _skip(**skip_kwargs, reason="No WhatsApp sender configured for this garage.")
 
-    try:
-        to_e164 = normalize_uk_mobile(to)
-    except InvalidPhoneNumberError as exc:
-        return _skip(**skip_kwargs, reason=f"Invalid destination number: {exc}")
-
-    to_address = f"whatsapp:{to_e164}"
     client = get_twilio_client_for_garage(garage)
     assert client is not None  # guaranteed by the is_twilio_configured() check above
 
@@ -211,11 +226,27 @@ def initiate_voice_call(
     skip/error/success recording contract as :func:`send_whatsapp_message`.
     """
     settings = garage.communication_settings
+
+    try:
+        to_e164 = normalize_uk_mobile(to)
+    except InvalidPhoneNumberError as exc:
+        return _skip(
+            garage=garage,
+            channel=CHANNEL_VOICE,
+            direction=DIRECTION_OUTBOUND,
+            to_address=to,
+            trigger_event=trigger_event,
+            customer=customer,
+            appointment=appointment,
+            booking_request=booking_request,
+            reason=f"Invalid destination number: {exc}",
+        )
+
     skip_kwargs = {
         "garage": garage,
         "channel": CHANNEL_VOICE,
         "direction": DIRECTION_OUTBOUND,
-        "to_address": to,
+        "to_address": to_e164,
         "trigger_event": trigger_event,
         "customer": customer,
         "appointment": appointment,
@@ -228,11 +259,6 @@ def initiate_voice_call(
         return _skip(**skip_kwargs, reason="Communications are not enabled for this garage.")
     if not settings.voice_phone_number:
         return _skip(**skip_kwargs, reason="No voice number configured for this garage.")
-
-    try:
-        to_e164 = normalize_uk_mobile(to)
-    except InvalidPhoneNumberError as exc:
-        return _skip(**skip_kwargs, reason=f"Invalid destination number: {exc}")
 
     client = get_twilio_client_for_garage(garage)
     assert client is not None  # guaranteed by the is_twilio_configured() check above

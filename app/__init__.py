@@ -65,6 +65,7 @@ def create_app(config_class=Config):
     from .appointments.types.routes import appointment_types_blp
     from .auth.routes import auth_blp
     from .booking_requests.routes import booking_requests_blp
+    from .communications.routes import communications_blp
     from .communications.voice_webhooks import twilio_voice_blp
     from .communications.whatsapp_webhooks import twilio_whatsapp_blp
     from .customer_auth.routes import customer_auth_blp
@@ -91,6 +92,7 @@ def create_app(config_class=Config):
     api.register_blueprint(public_garages_blp)
     api.register_blueprint(public_booking_blp)
     api.register_blueprint(booking_requests_blp)
+    api.register_blueprint(communications_blp)
     api.register_blueprint(customers_blp)
     api.register_blueprint(employees_blp)
     api.register_blueprint(roles_blp)

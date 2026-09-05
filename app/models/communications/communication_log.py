@@ -19,8 +19,9 @@ the one row matching a SID rather than ever inserting a second one.
 """
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, Uuid
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -88,6 +89,11 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):
     call_duration_seconds: Mapped[int | None] = mapped_column(Integer)
     error_code: Mapped[str | None] = mapped_column(String(40))
     error_message: Mapped[str | None] = mapped_column(Text)
+
+    # When staff marked this INBOUND row read (see app/communications/queries.py
+    # ::mark_conversation_read). Null forever for OUTBOUND rows - only an
+    # inbound message/call is ever "unread".
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     garage = relationship("Garage")
     customer = relationship("Customer")
