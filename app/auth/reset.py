@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from flask import current_app
 from werkzeug.security import generate_password_hash
 
+from app.branding import PLATFORM_NAME
 from app.email import send_email
 from app.extensions import db
 from app.models.employee import Employee
@@ -50,7 +51,7 @@ def send_reset_link(employee: Employee, raw_token: str) -> None:
     url = f"{base}/reset-password?token={raw_token}"
     send_email(
         to=employee.email,
-        subject="Reset your MOT Garage password",
+        subject=f"Reset your {PLATFORM_NAME} password",
         body=(
             "We received a request to reset the password for this account.\n\n"
             f"Reset it here (link expires in {minutes} minutes):\n{url}\n\n"
