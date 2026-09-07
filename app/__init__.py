@@ -60,12 +60,15 @@ def create_app(config_class=Config):
         configure_garage_communications_command,
         twilio_webhook_urls_command,
     )
+    from .dev.cli import dev_info_command, seed_dev_command
     from .garages.cli import onboard_garage_command, update_garage_details_command
 
     app.cli.add_command(onboard_garage_command)
     app.cli.add_command(update_garage_details_command)
     app.cli.add_command(configure_garage_communications_command)
     app.cli.add_command(twilio_webhook_urls_command)
+    app.cli.add_command(seed_dev_command)
+    app.cli.add_command(dev_info_command)
 
     from .appointments.checklist_templates.routes import checklist_templates_blp
     from .appointments.checklists.routes import appointment_checklists_blp

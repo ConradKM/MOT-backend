@@ -34,6 +34,35 @@ The API will be available at `http://localhost:5000`.
 docker compose up --build
 ```
 
+## Local seed data
+
+`flask seed-dev` builds one fully-populated example test business
+("TEST GARAGE 101") for manual/exploratory testing, and `flask dev-info` tells
+you how to reach it - so you never have to open psql to find a business's slug.
+
+```bash
+docker compose up -d
+docker compose exec api flask seed-dev     # or: flask --app app:create_app seed-dev
+docker compose exec api flask dev-info     # booking URL, slug, API URL, logins
+```
+
+`dev-info` prints, for each seeded business: the customer booking URL
+(`/book/<business UUID>` - the wizard route resolves the business by id, then
+uses its slug for the availability/booking calls), the slug-based public API
+URL, the staff login URL, and the seeded owner login
+`owner@kingsway-mot.example` / `Password123!` (plus four more staff accounts,
+same password). Add `--all` to also list businesses created with
+`onboard-business` / `onboard-garage` (no passwords - those are only stored
+hashed).
+
+Re-running `seed-dev` is idempotent: it reuses the existing business row, so its
+**id and randomised public slug never change**, rebuilds the data underneath,
+and resets the seeded logins to the password above. `--fresh` TRUNCATEs
+everything first (and does mint a new slug). Both commands, and the seeded
+credentials in their output, are **development only** - they refuse to run
+unless `APP_ENV=development`. The standalone `python scripts/seed_example_garage.py`
+still works and does the same thing.
+
 ## Onboarding a business
 
 Tenants are created by an operator, not by public signup.
