@@ -19,6 +19,7 @@ already draws around business identity fields. See
 """
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,8 +28,11 @@ from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.garage import Garage
 
-class GarageCommunicationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class GarageCommunicationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "garage_communication_settings"
     __table_args__ = (
         UniqueConstraint("garage_id", name="uq_garage_communication_settings_garage_id"),
@@ -62,4 +66,4 @@ class GarageCommunicationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):
     # routed through one (sender pools / templates) rather than a fixed number.
     messaging_service_sid: Mapped[str | None] = mapped_column(String(64))
 
-    garage = relationship("Garage", back_populates="communication_settings")
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="communication_settings")

@@ -32,7 +32,6 @@ def _appointment_summary(appointment):
 
 @customer_portal_blp.route("/account")
 class CustomerAccountResource(MethodView):
-
     @jwt_required()
     @customer_required
     @customer_portal_blp.response(200, CustomerAccountSchema)
@@ -70,7 +69,6 @@ class CustomerAccountResource(MethodView):
 
 @customer_portal_blp.route("/appointments/<uuid:appointment_id>")
 class CustomerAppointmentResource(MethodView):
-
     @jwt_required()
     @customer_required
     @customer_portal_blp.response(200, CustomerAppointmentDetailSchema)

@@ -84,9 +84,7 @@ def test_mot_expiry_date_persistence(authenticated_user, vehicle):
     )
     record_id = resp.get_json()["id"]
 
-    get_resp = authenticated_user.client.get(
-        f"/api/vehicles/{vehicle.id}/mot-records/{record_id}"
-    )
+    get_resp = authenticated_user.client.get(f"/api/vehicles/{vehicle.id}/mot-records/{record_id}")
     assert get_resp.get_json()["expiry_date"] == "2027-06-01"
 
 

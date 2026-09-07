@@ -21,8 +21,7 @@ def send_email(*, to: str, subject: str, body: str) -> None:
         # "console" is never selected in production, so reset links are not
         # written to logs there.
         current_app.logger.warning(
-            "[email:console] Would send email\n"
-            "  from:    %s\n  to:      %s\n  subject: %s\n\n%s\n",
+            "[email:console] Would send email\n  from:    %s\n  to:      %s\n  subject: %s\n\n%s\n",
             sender,
             to,
             subject,

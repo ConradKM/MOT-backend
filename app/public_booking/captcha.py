@@ -55,9 +55,7 @@ def verify_captcha(token: str | None) -> bool:
     body = urllib.parse.urlencode({"secret": secret, "response": token}).encode()
 
     try:
-        with urllib.request.urlopen(  # noqa: S310 - fixed https provider URLs
-            verify_url, data=body, timeout=_TIMEOUT_SECONDS
-        ) as resp:
+        with urllib.request.urlopen(verify_url, data=body, timeout=_TIMEOUT_SECONDS) as resp:
             payload = json.loads(resp.read().decode())
     except (urllib.error.URLError, TimeoutError, ValueError):
         return False

@@ -7,6 +7,7 @@ automatically at all. None of it is a Twilio credential or resource id.
 """
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, ForeignKey, Integer, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -15,13 +16,18 @@ from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.garage import Garage
 
-class GarageCommunicationAutomationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class GarageCommunicationAutomationSettings(
+    db.Model,  # type: ignore[name-defined]
+    PrimaryKeyMixin,
+    TimestampMixin,
+):
     __tablename__ = "garage_communication_automation_settings"
     __table_args__ = (
-        UniqueConstraint(
-            "garage_id", name="uq_garage_communication_automation_settings_garage_id"
-        ),
+        UniqueConstraint("garage_id", name="uq_garage_communication_automation_settings_garage_id"),
     )
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -52,4 +58,4 @@ class GarageCommunicationAutomationSettings(db.Model, PrimaryKeyMixin, Timestamp
         Boolean, nullable=False, default=False, server_default="false"
     )
 
-    garage = relationship("Garage")
+    garage: Mapped["Garage"] = relationship("Garage")

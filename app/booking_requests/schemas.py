@@ -49,16 +49,12 @@ class BookingRequestSchema(Schema):
     # The appointment type as it stands today (name/price/duration/status) -
     # null once the type has been hard-deleted (only possible if it was never
     # used elsewhere either; see app/appointments/types/routes.py).
-    appointment_type = fields.Nested(
-        _RequestAppointmentTypeSchema, dump_only=True, allow_none=True
-    )
+    appointment_type = fields.Nested(_RequestAppointmentTypeSchema, dump_only=True, allow_none=True)
     # Best-known duration for the job *right now*: the type's own current
     # default, falling back to the garage's default appointment length - see
     # service.py. Informational only; the actual appointment's end_time is
     # set at approval time using the same live lookup.
-    duration_minutes = fields.Int(
-        dump_only=True, allow_none=True, attribute="_duration_minutes"
-    )
+    duration_minutes = fields.Int(dump_only=True, allow_none=True, attribute="_duration_minutes")
     # What the customer actually saw and chose at submission time - a
     # snapshot, so it stays accurate even if the type's own duration/price is
     # edited (or the type is deleted) afterwards. Null on requests submitted
@@ -78,9 +74,7 @@ class BookingRequestSchema(Schema):
     slot_check = fields.Nested(SlotCheckSchema, dump_only=True, attribute="_slot_check")
 
     reviewed_by_employee_id = fields.UUID(dump_only=True, allow_none=True)
-    reviewed_by_name = fields.Str(
-        dump_only=True, allow_none=True, attribute="_reviewed_by_name"
-    )
+    reviewed_by_name = fields.Str(dump_only=True, allow_none=True, attribute="_reviewed_by_name")
     reviewed_at = fields.DateTime(dump_only=True, allow_none=True)
     staff_notes = fields.Str(dump_only=True, allow_none=True)
 
@@ -114,6 +108,4 @@ class BookingRequestRejectSchema(Schema):
 
 
 class BookingRequestQueryArgsSchema(Schema):
-    status = fields.Str(
-        load_default=None, validate=validate.OneOf(BOOKING_REQUEST_STATUSES)
-    )
+    status = fields.Str(load_default=None, validate=validate.OneOf(BOOKING_REQUEST_STATUSES))

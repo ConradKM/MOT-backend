@@ -18,9 +18,10 @@ from app.garages.details import GarageNotFoundError, resolve_garage
 from app.models.communications.garage_communication_settings import (
     GarageCommunicationSettings,
 )
+from app.models.garage import Garage
 
 
-def _get_or_create_settings(garage) -> GarageCommunicationSettings:
+def _get_or_create_settings(garage: Garage) -> GarageCommunicationSettings:
     settings = garage.communication_settings
     if settings is None:
         settings = GarageCommunicationSettings(garage_id=garage.id)
@@ -29,21 +30,21 @@ def _get_or_create_settings(garage) -> GarageCommunicationSettings:
 
 
 @click.command("configure-garage-communications")
+@click.option("--garage", "identifier", required=True, help="Target garage - its slug or its UUID.")
 @click.option(
-    "--garage", "identifier", required=True, help="Target garage - its slug or its UUID."
-)
-@click.option(
-    "--enable/--disable", "enabled", default=None,
+    "--enable/--disable",
+    "enabled",
+    default=None,
     help="Turn communications on/off for this garage.",
 )
 @click.option("--twilio-subaccount-sid", default=None)
 @click.option(
-    "--voice-number", "voice_phone_number", default=None,
+    "--voice-number",
+    "voice_phone_number",
+    default=None,
     help="E.164, e.g. +441234567890.",
 )
-@click.option(
-    "--whatsapp-sender", default=None, help='e.g. "whatsapp:+14155238886".'
-)
+@click.option("--whatsapp-sender", default=None, help='e.g. "whatsapp:+14155238886".')
 @click.option("--messaging-service-sid", default=None)
 @with_appcontext
 def configure_garage_communications_command(

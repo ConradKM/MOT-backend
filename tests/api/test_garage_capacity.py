@@ -19,13 +19,11 @@ from app.public_booking.availability import (
 )
 
 UTC = datetime.UTC
-TODAY = datetime.date.today()
+TODAY = datetime.datetime.now(UTC).date()
 
 
 def _at(hour, minute=0):
-    return datetime.datetime.combine(
-        TODAY, datetime.time(hour, minute), tzinfo=UTC
-    )
+    return datetime.datetime.combine(TODAY, datetime.time(hour, minute), tzinfo=UTC)
 
 
 def _expected_today_capacity_minutes(garage):
@@ -52,7 +50,11 @@ def test_summary_shape(authenticated_client, garage, garage_schedule):
 
     assert set(body["today"]) == {"date", "booked_minutes", "capacity_minutes", "level"}
     assert set(body["week"]) == {
-        "start", "end", "booked_minutes", "capacity_minutes", "level",
+        "start",
+        "end",
+        "booked_minutes",
+        "capacity_minutes",
+        "level",
     }
     assert body["today"]["date"] == TODAY.isoformat()
     assert body["today"]["level"] in {"green", "amber", "red"}
@@ -62,9 +64,7 @@ def test_summary_shape(authenticated_client, garage, garage_schedule):
     assert ws.weekday() == 0 and (we - ws).days == 6 and ws <= TODAY <= we
 
 
-def test_capacity_matches_the_schedule(
-    authenticated_client, garage, garage_schedule
-):
+def test_capacity_matches_the_schedule(authenticated_client, garage, garage_schedule):
     body = authenticated_client.get("/api/garage/capacity/summary").get_json()
     assert body["today"]["capacity_minutes"] == _expected_today_capacity_minutes(garage)
     # The week spans today, so weekly capacity is at least today's.
@@ -83,12 +83,8 @@ def test_booked_counts_minutes_of_non_cancelled_appointments_today(
     assert body["week"]["booked_minutes"] >= 105
 
 
-def test_closure_zeroes_the_day(
-    authenticated_client, session, garage, garage_schedule
-):
-    session.add(
-        GarageScheduleException(garage_id=garage.id, date=TODAY, is_closed=True)
-    )
+def test_closure_zeroes_the_day(authenticated_client, session, garage, garage_schedule):
+    session.add(GarageScheduleException(garage_id=garage.id, date=TODAY, is_closed=True))
     session.commit()
 
     body = authenticated_client.get("/api/garage/capacity/summary").get_json()
@@ -147,9 +143,7 @@ def test_summary_is_tenant_scoped(
     make_appointment(_at(9, 0), minutes=60)
 
     mine = authenticated_client.get("/api/garage/capacity/summary").get_json()
-    theirs = second_authenticated_client.get(
-        "/api/garage/capacity/summary"
-    ).get_json()
+    theirs = second_authenticated_client.get("/api/garage/capacity/summary").get_json()
 
     assert mine["today"]["booked_minutes"] == 60
     assert theirs["today"]["booked_minutes"] == 0

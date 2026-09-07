@@ -21,7 +21,7 @@ _EXT_KEY = "_object_storage"
 
 def get_storage() -> ObjectStorage:
     """The configured storage backend, cached on the app extensions dict."""
-    store = current_app.extensions.get(_EXT_KEY)
+    store: ObjectStorage | None = current_app.extensions.get(_EXT_KEY)
     if store is not None:
         return store
 

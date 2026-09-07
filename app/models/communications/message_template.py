@@ -8,6 +8,7 @@ no code execution here, by design (Part 24/34 of the brief).
 """
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -16,8 +17,11 @@ from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.garage import Garage
 
-class GarageMessageTemplate(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class GarageMessageTemplate(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "garage_message_templates"
     __table_args__ = (
         UniqueConstraint("garage_id", "key", name="uq_garage_message_templates_garage_key"),
@@ -33,4 +37,4 @@ class GarageMessageTemplate(db.Model, PrimaryKeyMixin, TimestampMixin):
     key: Mapped[str] = mapped_column(String(60), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
 
-    garage = relationship("Garage")
+    garage: Mapped["Garage"] = relationship("Garage")

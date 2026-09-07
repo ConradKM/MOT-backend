@@ -27,9 +27,9 @@ def issue_reset_token(employee: Employee) -> str:
     """New reset token for ``employee``; voids any it already has. Returns the
     raw token - it only ever goes into the emailed link."""
     now = datetime.now(UTC)
-    PasswordResetToken.query.filter_by(
-        employee_id=employee.id, used_at=None
-    ).update({"used_at": now})
+    PasswordResetToken.query.filter_by(employee_id=employee.id, used_at=None).update(
+        {"used_at": now}
+    )
 
     raw = secrets.token_urlsafe(32)
     minutes = current_app.config.get("PASSWORD_RESET_TOKEN_MINUTES", 30)
@@ -44,9 +44,7 @@ def issue_reset_token(employee: Employee) -> str:
 
 
 def send_reset_link(employee: Employee, raw_token: str) -> None:
-    base = current_app.config.get(
-        "APP_BASE_URL", "http://localhost:5173"
-    ).rstrip("/")
+    base = current_app.config.get("APP_BASE_URL", "http://localhost:5173").rstrip("/")
     minutes = current_app.config.get("PASSWORD_RESET_TOKEN_MINUTES", 30)
     url = f"{base}/reset-password?token={raw_token}"
     send_email(
@@ -63,7 +61,7 @@ def send_reset_link(employee: Employee, raw_token: str) -> None:
 def find_valid_token(raw_token: str) -> PasswordResetToken | None:
     if not raw_token:
         return None
-    row = PasswordResetToken.query.filter_by(
+    row: PasswordResetToken | None = PasswordResetToken.query.filter_by(
         token_hash=_hash_token(raw_token)
     ).first()
     if row is None or row.used_at is not None:
@@ -73,9 +71,7 @@ def find_valid_token(raw_token: str) -> PasswordResetToken | None:
     return row
 
 
-def consume_token_and_set_password(
-    row: PasswordResetToken, new_password: str
-) -> None:
+def consume_token_and_set_password(row: PasswordResetToken, new_password: str) -> None:
     now = datetime.now(UTC)
     employee = row.employee
     employee.password_hash = generate_password_hash(new_password)

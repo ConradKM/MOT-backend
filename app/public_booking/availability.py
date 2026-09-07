@@ -18,6 +18,7 @@ from datetime import UTC, date, datetime, time, timedelta
 
 from app.garages.schedule.defaults import DEFAULT_OPENING_HOURS, DEFAULT_SETTINGS
 from app.models.appointments.appointment import Appointment
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.employee import Employee
 
@@ -48,6 +49,15 @@ class _Settings:
         "slot_interval_minutes",
     )
 
+    # Mirrors __slots__ above - set dynamically via setattr in __init__, so
+    # mypy needs these declared here to know the attributes exist at all.
+    capacity_per_slot: int | None
+    default_appointment_minutes: int
+    limited_threshold_ratio: float
+    max_advance_days: int
+    min_lead_time_hours: int
+    slot_interval_minutes: int
+
     def __init__(self, **kw):
         for key in self.__slots__:
             setattr(self, key, kw[key])
@@ -69,10 +79,7 @@ def resolve_settings(garage) -> _Settings:
 
 def resolve_opening_hours(garage) -> dict[int, tuple[time, time, bool]]:
     """weekday (0=Mon .. 6=Sun) -> (opens_at, closes_at, is_closed)."""
-    rows = {
-        oh.weekday: (oh.opens_at, oh.closes_at, oh.is_closed)
-        for oh in garage.opening_hours
-    }
+    rows = {oh.weekday: (oh.opens_at, oh.closes_at, oh.is_closed) for oh in garage.opening_hours}
     if not rows:
         return dict(DEFAULT_OPENING_HOURS)
     return {wd: rows.get(wd, DEFAULT_OPENING_HOURS[wd]) for wd in range(7)}
@@ -80,16 +87,15 @@ def resolve_opening_hours(garage) -> dict[int, tuple[time, time, bool]]:
 
 def resolve_exceptions(garage, start_date: date, end_date: date) -> dict:
     return {
-        exc.date: exc
-        for exc in garage.schedule_exceptions
-        if start_date <= exc.date <= end_date
+        exc.date: exc for exc in garage.schedule_exceptions if start_date <= exc.date <= end_date
     }
 
 
 def slot_capacity(garage, settings: _Settings) -> int:
     if settings.capacity_per_slot is not None:
         return max(1, settings.capacity_per_slot)
-    return max(1, Employee.query.filter_by(garage_id=garage.id).count())
+    active_employees: int = Employee.query.filter_by(garage_id=garage.id).count()
+    return max(1, active_employees)
 
 
 def booking_window(settings: _Settings, today: date) -> tuple[date, date]:
@@ -136,7 +142,7 @@ def _load_day_usage(garage_id, day: date):
     return appointments, pending
 
 
-def _pending_request_duration(pending_request, settings: "_Settings") -> int:
+def _pending_request_duration(pending_request: BookingRequest, settings: "_Settings") -> int:
     """The duration a PENDING request itself reserves - its selected
     appointment type's current duration; the snapshot taken at submission
     time if that type has since been edited to have none or deleted
@@ -166,11 +172,7 @@ def _slot_usage(
     single instant 10:00.
     """
     slot_end = slot_start + timedelta(minutes=duration_min)
-    used = sum(
-        1
-        for a in appointments
-        if a.start_time < slot_end and a.end_time > slot_start
-    )
+    used = sum(1 for a in appointments if a.start_time < slot_end and a.end_time > slot_start)
     for r in pending:
         p_start = datetime.combine(r.preferred_date, r.preferred_time, tzinfo=UTC)
         p_end = p_start + timedelta(minutes=_pending_request_duration(r, settings))
@@ -273,14 +275,10 @@ def day_summary(garage, day, settings, hours_map, exceptions, now, today) -> dic
 
     slots = day_slots(garage, day, settings, hours_map, exceptions, now)
     total = len(slots)
-    open_slots = sum(
-        1 for s in slots if s["status"] in (SLOT_AVAILABLE, SLOT_LIMITED)
-    )
+    open_slots = sum(1 for s in slots if s["status"] in (SLOT_AVAILABLE, SLOT_LIMITED))
     if open_slots == 0:
         level = LEVEL_FULL
-    elif any(s["status"] == SLOT_LIMITED for s in slots) or open_slots <= max(
-        1, total // 3
-    ):
+    elif any(s["status"] == SLOT_LIMITED for s in slots) or open_slots <= max(1, total // 3):
         level = LEVEL_LIMITED
     else:
         level = LEVEL_AVAILABLE
@@ -329,9 +327,7 @@ def availability_range(garage, from_date, to_date, now: datetime) -> dict:
     days = []
     cursor = start
     while cursor <= end:
-        days.append(
-            day_summary(garage, cursor, settings, hours_map, exceptions, now, today)
-        )
+        days.append(day_summary(garage, cursor, settings, hours_map, exceptions, now, today))
         cursor += timedelta(days=1)
 
     return {
@@ -348,7 +344,7 @@ def availability_range(garage, from_date, to_date, now: datetime) -> dict:
     }
 
 
-def _type_duration(appointment_type, settings: _Settings) -> int:
+def _type_duration(appointment_type: "GarageAppointmentType | None", settings: _Settings) -> int:
     if appointment_type is not None and appointment_type.default_duration_minutes is not None:
         return appointment_type.default_duration_minutes
     return settings.default_appointment_minutes

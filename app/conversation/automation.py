@@ -58,7 +58,9 @@ def _automation_settings(garage) -> GarageCommunicationAutomationSettings:
     singleton - constructing a mapped model at import time risks running
     before every model is registered (SQLAlchemy needs the *whole* mapping
     configured to resolve relationship() string references)."""
-    row = GarageCommunicationAutomationSettings.query.filter_by(garage_id=garage.id).first()
+    row: GarageCommunicationAutomationSettings | None = (
+        GarageCommunicationAutomationSettings.query.filter_by(garage_id=garage.id).first()
+    )
     if row is not None:
         return row
     # An unsaved instance's column defaults only apply on INSERT, not on
@@ -86,7 +88,9 @@ def update_automation_settings(garage, **changes) -> GarageCommunicationAutomati
     that, _automation_settings's in-code defaults are all that exist).
     ``changes`` is whatever subset of _SETTINGS_FIELDS the request included -
     a partial update, same as set_workflow_step's context_updates."""
-    row = GarageCommunicationAutomationSettings.query.filter_by(garage_id=garage.id).first()
+    row: GarageCommunicationAutomationSettings | None = (
+        GarageCommunicationAutomationSettings.query.filter_by(garage_id=garage.id).first()
+    )
     if row is None:
         row = GarageCommunicationAutomationSettings(garage_id=garage.id)
         db.session.add(row)
@@ -208,8 +212,11 @@ def _handle_appointment_cancelled(garage, appointment=None, **_context):
         appointment_date=appointment.start_time.strftime("%d %B %Y"),
     )
     send_whatsapp_message(
-        garage=garage, to=phone, body=body,
-        customer=appointment.customer, appointment=appointment,
+        garage=garage,
+        to=phone,
+        body=body,
+        customer=appointment.customer,
+        appointment=appointment,
         trigger_event=APPOINTMENT_CANCELLED,
     )
 
@@ -232,8 +239,11 @@ def _handle_appointment_rescheduled(garage, appointment=None, **_context):
         appointment_time=appointment.start_time.strftime("%H:%M"),
     )
     send_whatsapp_message(
-        garage=garage, to=phone, body=body,
-        customer=appointment.customer, appointment=appointment,
+        garage=garage,
+        to=phone,
+        body=body,
+        customer=appointment.customer,
+        appointment=appointment,
         trigger_event=APPOINTMENT_RESCHEDULED,
     )
 
@@ -254,9 +264,7 @@ def _handle_missed_call(garage, communication_log=None, **_context):
     if communication_log is None or not communication_log.from_address:
         return
 
-    body = templates.render_template(
-        garage, templates.MISSED_CALL_ACK, business_name=garage.name
-    )
+    body = templates.render_template(garage, templates.MISSED_CALL_ACK, business_name=garage.name)
     send_whatsapp_message(
         garage=garage,
         to=communication_log.from_address,

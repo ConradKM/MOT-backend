@@ -70,7 +70,9 @@ def find_next_available_days(
     found: list[date] = []
     cursor = max(start_day, now.date())
     while cursor <= window_end and len(found) < limit:
-        payload = get_availability_for_day(garage, cursor, appointment_type=appointment_type, now=now)
+        payload = get_availability_for_day(
+            garage, cursor, appointment_type=appointment_type, now=now
+        )
         if payload["is_open"] and any(
             s["status"] != availability.SLOT_BOOKED for s in payload["slots"]
         ):
@@ -105,7 +107,7 @@ def find_customer_vehicle_by_registration(customer: Customer, registration: str)
 
 def get_upcoming_appointments(garage, customer: Customer, *, now=None) -> list[Appointment]:
     now = now or datetime.now(UTC)
-    return (
+    rows: list[Appointment] = (
         Appointment.query.filter(
             Appointment.garage_id == garage.id,
             Appointment.customer_id == customer.id,
@@ -115,6 +117,7 @@ def get_upcoming_appointments(garage, customer: Customer, *, now=None) -> list[A
         .order_by(Appointment.start_time.asc())
         .all()
     )
+    return rows
 
 
 def get_business_hours(garage) -> dict[int, tuple[time, time, bool]]:
@@ -137,7 +140,9 @@ def revalidate_slot(
     offered several conversation turns ago may have been taken since
     (Part 9)."""
     now = now or datetime.now(UTC)
-    return availability.validate_slot(garage, day, slot_time, now, appointment_type=appointment_type)
+    return availability.validate_slot(
+        garage, day, slot_time, now, appointment_type=appointment_type
+    )
 
 
 def create_booking_request(
@@ -168,7 +173,9 @@ def create_booking_request(
     customers had raced for the same slot over the public booking page.
     """
     if preferred_time is not None:
-        reason = revalidate_slot(garage, preferred_date, preferred_time, appointment_type=appointment_type)
+        reason = revalidate_slot(
+            garage, preferred_date, preferred_time, appointment_type=appointment_type
+        )
         if reason is not None:
             return None, reason
 

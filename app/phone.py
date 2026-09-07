@@ -35,14 +35,10 @@ def normalize_uk_mobile(raw: str) -> str:
     try:
         parsed = phonenumbers.parse(raw, "GB")
     except phonenumbers.NumberParseException as exc:
-        raise InvalidPhoneNumberError(
-            "Enter a valid UK mobile number, e.g. 07123 456789."
-        ) from exc
+        raise InvalidPhoneNumberError("Enter a valid UK mobile number, e.g. 07123 456789.") from exc
 
     if not phonenumbers.is_valid_number(parsed):
-        raise InvalidPhoneNumberError(
-            "Enter a valid UK mobile number, e.g. 07123 456789."
-        )
+        raise InvalidPhoneNumberError("Enter a valid UK mobile number, e.g. 07123 456789.")
 
     number_type = phonenumbers.number_type(parsed)
     # FIXED_LINE_OR_MOBILE covers UK ranges phonenumbers can't split further

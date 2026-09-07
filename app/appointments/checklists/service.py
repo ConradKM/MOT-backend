@@ -20,11 +20,12 @@ gains one.
 from __future__ import annotations
 
 from app.extensions import db
+from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_checklist import AppointmentChecklist
 from app.models.appointments.appointment_checklist_item import AppointmentChecklistItem
 
 
-def snapshot_checklist_for_appointment(appointment) -> AppointmentChecklist | None:
+def snapshot_checklist_for_appointment(appointment: Appointment) -> AppointmentChecklist | None:
     """Create and return the checklist instance for ``appointment``, or None
     if its appointment type has no template (or one already exists).
 

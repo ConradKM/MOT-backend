@@ -55,4 +55,4 @@ def validate_twilio_request(request: Request) -> bool:
         return False
 
     validator = RequestValidator(current_app.config["TWILIO_AUTH_TOKEN"])
-    return validator.validate(_external_url(request), request.form.to_dict(), signature)
+    return bool(validator.validate(_external_url(request), request.form.to_dict(), signature))

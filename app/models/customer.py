@@ -1,4 +1,5 @@
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -7,8 +8,13 @@ from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.appointments.appointment import Appointment
+    from app.models.garage import Garage
+    from app.models.vehicle import Vehicle
 
-class Customer(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class Customer(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "customers"
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -37,10 +43,10 @@ class Customer(db.Model, PrimaryKeyMixin, TimestampMixin):
         Boolean, nullable=False, default=False, server_default="false"
     )
 
-    garage = relationship("Garage", back_populates="customers")
-    vehicles = relationship(
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="customers")
+    vehicles: Mapped[list["Vehicle"]] = relationship(
         "Vehicle", back_populates="customer", cascade="all, delete-orphan"
     )
-    appointments = relationship(
+    appointments: Mapped[list["Appointment"]] = relationship(
         "Appointment", back_populates="customer", cascade="all, delete-orphan"
     )

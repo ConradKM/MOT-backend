@@ -53,14 +53,11 @@ def _booked_minutes_between(garage_id, start_date: date, end_date: date) -> int:
         .all()
     )
     return sum(
-        max(0, int((end_time - start_time).total_seconds() // 60))
-        for start_time, end_time in rows
+        max(0, int((end_time - start_time).total_seconds() // 60)) for start_time, end_time in rows
     )
 
 
-def _range_capacity_minutes(
-    hours_map, exceptions, start_date, end_date, resource_count
-) -> int:
+def _range_capacity_minutes(hours_map, exceptions, start_date, end_date, resource_count) -> int:
     total = 0
     day = start_date
     while day <= end_date:

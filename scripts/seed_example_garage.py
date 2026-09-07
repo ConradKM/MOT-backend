@@ -52,30 +52,31 @@ from dotenv import load_dotenv
 # standalone script.
 load_dotenv()
 
-from app import create_app  # noqa: E402
-from app.extensions import db  # noqa: E402
-from app.garages.slug import slugify_unique  # noqa: E402
-from app.models.appointments.appointment import Appointment  # noqa: E402
-from app.models.appointments.appointment_checklist import AppointmentChecklist  # noqa: E402
-from app.models.appointments.appointment_checklist_item import (  # noqa: E402
+from werkzeug.security import generate_password_hash
+
+from app import create_app
+from app.extensions import db
+from app.garages.slug import slugify_unique
+from app.models.appointments.appointment import Appointment
+from app.models.appointments.appointment_checklist import AppointmentChecklist
+from app.models.appointments.appointment_checklist_item import (
     AppointmentChecklistItem,
 )
-from app.models.appointments.appointment_type import GarageAppointmentType  # noqa: E402
-from app.models.appointments.checklist_item_media import ChecklistItemMedia  # noqa: E402
-from app.models.appointments.checklist_template import ChecklistTemplate  # noqa: E402
-from app.models.appointments.checklist_template_item import (  # noqa: E402
+from app.models.appointments.appointment_type import GarageAppointmentType
+from app.models.appointments.checklist_item_media import ChecklistItemMedia
+from app.models.appointments.checklist_template import ChecklistTemplate
+from app.models.appointments.checklist_template_item import (
     CHECKLIST_ITEM_STATUSES,
     ChecklistTemplateItem,
 )
-from app.models.customer import Customer  # noqa: E402
-from app.models.employee import Employee  # noqa: E402
-from app.models.garage import Garage  # noqa: E402
-from app.models.mot_record import MOTRecord  # noqa: E402
-from app.models.reminder import Reminder  # noqa: E402
-from app.models.role import Role  # noqa: E402
-from app.models.vehicle import Vehicle  # noqa: E402
-from app.mot_records.routes import _sync_vehicle_mot_expiry  # noqa: E402
-from werkzeug.security import generate_password_hash  # noqa: E402
+from app.models.customer import Customer
+from app.models.employee import Employee
+from app.models.garage import Garage
+from app.models.mot_record import MOTRecord
+from app.models.reminder import Reminder
+from app.models.role import Role
+from app.models.vehicle import Vehicle
+from app.mot_records.routes import _sync_vehicle_mot_expiry
 
 GARAGE_NAME = "Kingsway MOT & Service Centre"
 PASSWORD = "Password123!"  # every seeded employee shares this
@@ -86,9 +87,7 @@ TODAY = NOW.date()
 
 def at(day_offset: int, hour: int, minute: int = 0) -> datetime:
     """A tz-aware instant on the day `day_offset` days from today."""
-    return datetime.combine(
-        TODAY + timedelta(days=day_offset), time(hour, minute), tzinfo=UTC
-    )
+    return datetime.combine(TODAY + timedelta(days=day_offset), time(hour, minute), tzinfo=UTC)
 
 
 # Tables in FK-safe delete order (children first). Used both for the
@@ -113,11 +112,7 @@ _DELETE_ORDER = [
 
 def wipe_everything() -> None:
     db.session.execute(
-        db.text(
-            "TRUNCATE TABLE "
-            + ", ".join(_DELETE_ORDER)
-            + " RESTART IDENTITY CASCADE"
-        )
+        db.text("TRUNCATE TABLE " + ", ".join(_DELETE_ORDER) + " RESTART IDENTITY CASCADE")
     )
     db.session.commit()
     print("Truncated every table (--fresh).")
@@ -131,9 +126,7 @@ def delete_existing_example_garage() -> None:
     gid = garage.id
     for table in _DELETE_ORDER:
         column = "id" if table == "garages" else "garage_id"
-        db.session.execute(
-            db.text(f"DELETE FROM {table} WHERE {column} = :gid"), {"gid": gid}
-        )
+        db.session.execute(db.text(f"DELETE FROM {table} WHERE {column} = :gid"), {"gid": gid})
     db.session.commit()
     print(f"Removed the previous '{GARAGE_NAME}' and everything under it.")
 
@@ -189,9 +182,7 @@ def seed() -> None:
     owner = make_employee(
         "owner@kingsway-mot.example", "Dawn", "Whitfield", [role_owner, role_tester]
     )
-    greg = make_employee(
-        "greg.mason@kingsway-mot.example", "Greg", "Mason", [role_mechanic]
-    )
+    greg = make_employee("greg.mason@kingsway-mot.example", "Greg", "Mason", [role_mechanic])
     tom = make_employee(
         "tom.baxter@kingsway-mot.example", "Tom", "Baxter", [role_tester, role_mechanic]
     )
@@ -220,9 +211,7 @@ def seed() -> None:
         db.session.add(t)
         return t
 
-    type_mot = make_type(
-        "MOT Test", "Class 4 MOT test to current DVSA standards.", "54.85", 45
-    )
+    type_mot = make_type("MOT Test", "Class 4 MOT test to current DVSA standards.", "54.85", 45)
     type_service = make_type(
         "Full Service",
         "Comprehensive 60-point service including oil and filter change.",
@@ -273,9 +262,7 @@ def seed() -> None:
     # than the generic DONE/NOT_APPLICABLE default a brand-new item gets -
     # see app/models/appointments/checklist_template_item.py.
     def build_template(appointment_type, items, customer_visible_labels=()):
-        template = ChecklistTemplate(
-            garage_id=garage.id, appointment_type_id=appointment_type.id
-        )
+        template = ChecklistTemplate(garage_id=garage.id, appointment_type_id=appointment_type.id)
         db.session.add(template)
         db.session.flush()
         rows = []
@@ -406,9 +393,7 @@ def seed() -> None:
         email=None,
         phone=None,
     )
-    db.session.add_all(
-        [cust_oliver, cust_priya, cust_marcus, cust_sofia, cust_liam, cust_grace]
-    )
+    db.session.add_all([cust_oliver, cust_priya, cust_marcus, cust_sofia, cust_liam, cust_grace])
     db.session.flush()
 
     # ---- Vehicles ---------------------------------------------
@@ -434,7 +419,7 @@ def seed() -> None:
     veh_corolla = make_vehicle(cust_liam, "LO22 HYB", "Toyota", "Corolla", 2022, 12400)
     # cust_priya also gets a second, brand-new vehicle with no MOT history
     # yet (MOT status "unknown").
-    veh_id3 = make_vehicle(cust_priya, "PS73 EVX", "Volkswagen", "ID.3", 2023, 6100)
+    make_vehicle(cust_priya, "PS73 EVX", "Volkswagen", "ID.3", 2023, 6100)
     db.session.flush()
 
     # ---- MOT records ---------------------------------------
@@ -458,51 +443,90 @@ def seed() -> None:
 
     # Focus: 3 years of history, current certificate expiring in ~18 days
     # -> "expiring soon".
-    add_mot(veh_focus, TODAY - timedelta(days=730), TODAY - timedelta(days=365),
-            "PASS", "No advisories.")
+    add_mot(
+        veh_focus,
+        TODAY - timedelta(days=730),
+        TODAY - timedelta(days=365),
+        "PASS",
+        "No advisories.",
+    )
     # A FAIL grants no new expiry - it's stored as its own mot_date (zero
     # forward validity), not the retest's eventual expiry.
-    add_mot(veh_focus, TODAY - timedelta(days=365), TODAY - timedelta(days=365),
-            "FAIL", "Failed on offside headlamp aim; rectified and re-tested "
-            "18 days later.")
-    add_mot(veh_focus, TODAY - timedelta(days=347), TODAY + timedelta(days=18),
-            "PASS", "Advisory: nearside front tyre worn close to limit (2.5mm).")
+    add_mot(
+        veh_focus,
+        TODAY - timedelta(days=365),
+        TODAY - timedelta(days=365),
+        "FAIL",
+        "Failed on offside headlamp aim; rectified and re-tested 18 days later.",
+    )
+    add_mot(
+        veh_focus,
+        TODAY - timedelta(days=347),
+        TODAY + timedelta(days=18),
+        "PASS",
+        "Advisory: nearside front tyre worn close to limit (2.5mm).",
+    )
     sync_expiry(veh_focus)
 
     # Audi: last (passed) certificate lapsed 3 weeks ago -> "expired". The
     # subsequent FAIL is a lapsed-MOT retest that didn't pass, so it must not
     # grant a new expiry either - sync_expiry correctly falls back to the
     # older PASS's real expiry, not the FAIL's placeholder date.
-    add_mot(veh_audi, TODAY - timedelta(days=386), TODAY - timedelta(days=21),
-            "PASS", "Advisory: light corrosion on rear subframe.")
-    add_mot(veh_audi, TODAY - timedelta(days=5), TODAY - timedelta(days=5),
-            "FAIL", "Excessive play in nearside front lower suspension arm "
-            "ball joint (dangerous). MOT had already lapsed before this retest.")
+    add_mot(
+        veh_audi,
+        TODAY - timedelta(days=386),
+        TODAY - timedelta(days=21),
+        "PASS",
+        "Advisory: light corrosion on rear subframe.",
+    )
+    add_mot(
+        veh_audi,
+        TODAY - timedelta(days=5),
+        TODAY - timedelta(days=5),
+        "FAIL",
+        "Excessive play in nearside front lower suspension arm "
+        "ball joint (dangerous). MOT had already lapsed before this retest.",
+    )
     sync_expiry(veh_audi)
 
     # Golf: healthy, ~10 months left -> "valid".
-    add_mot(veh_golf, TODAY - timedelta(days=60), TODAY + timedelta(days=305),
-            "PASS", "No defects.")
+    add_mot(
+        veh_golf, TODAY - timedelta(days=60), TODAY + timedelta(days=305), "PASS", "No defects."
+    )
     sync_expiry(veh_golf)
 
     # BMW: comfortably valid.
-    add_mot(veh_bmw, TODAY - timedelta(days=120), TODAY + timedelta(days=245),
-            "PASS", "Advisory: front brake discs worn, pitted or scored.")
+    add_mot(
+        veh_bmw,
+        TODAY - timedelta(days=120),
+        TODAY + timedelta(days=245),
+        "PASS",
+        "Advisory: front brake discs worn, pitted or scored.",
+    )
     sync_expiry(veh_bmw)
 
     # Transit: due very soon (~6 days) -> "expiring soon".
-    add_mot(veh_transit, TODAY - timedelta(days=359), TODAY + timedelta(days=6),
-            "PASS", "Advisory: oil leak, not excessive.")
+    add_mot(
+        veh_transit,
+        TODAY - timedelta(days=359),
+        TODAY + timedelta(days=6),
+        "PASS",
+        "Advisory: oil leak, not excessive.",
+    )
     sync_expiry(veh_transit)
 
     # Fiat: valid.
-    add_mot(veh_fiat, TODAY - timedelta(days=90), TODAY + timedelta(days=275),
-            "PASS")
+    add_mot(veh_fiat, TODAY - timedelta(days=90), TODAY + timedelta(days=275), "PASS")
     sync_expiry(veh_fiat)
 
     # Corolla: valid, clean.
-    add_mot(veh_corolla, TODAY - timedelta(days=200), TODAY + timedelta(days=165),
-            "PASS", "No advisories.")
+    add_mot(
+        veh_corolla,
+        TODAY - timedelta(days=200),
+        TODAY + timedelta(days=165),
+        "PASS",
+        "No advisories.",
+    )
     sync_expiry(veh_corolla)
 
     # veh_id3 and (customer Grace has none) -> mot_expiry_date stays NULL
@@ -511,8 +535,7 @@ def seed() -> None:
     db.session.flush()
 
     # ---- Appointments -----------------------------------
-    def make_appt(employee, customer, appt_type, start, end, status, vehicle=None,
-                  notes=None):
+    def make_appt(employee, customer, appt_type, start, end, status, vehicle=None, notes=None):
         a = Appointment(
             garage_id=garage.id,
             employee_id=employee.id,
@@ -528,50 +551,112 @@ def seed() -> None:
         return a
 
     appt_completed_mot = make_appt(
-        tom, cust_oliver, type_mot, at(-6, 9, 0), at(-6, 9, 45), "COMPLETED",
-        vehicle=veh_focus, notes="Passed with one advisory. Certificate issued.",
+        tom,
+        cust_oliver,
+        type_mot,
+        at(-6, 9, 0),
+        at(-6, 9, 45),
+        "COMPLETED",
+        vehicle=veh_focus,
+        notes="Passed with one advisory. Certificate issued.",
     )
     appt_completed_service = make_appt(
-        greg, cust_priya, type_service, at(-5, 10, 0), at(-5, 11, 30), "COMPLETED",
-        vehicle=veh_golf, notes="Service completed. Air filter replaced.",
+        greg,
+        cust_priya,
+        type_service,
+        at(-5, 10, 0),
+        at(-5, 11, 30),
+        "COMPLETED",
+        vehicle=veh_golf,
+        notes="Service completed. Air filter replaced.",
     )
     appt_action_needed = make_appt(
-        greg, cust_marcus, type_brakes, at(-3, 14, 0), at(-3, 15, 0), "ACTION_NEEDED",
+        greg,
+        cust_marcus,
+        type_brakes,
+        at(-3, 14, 0),
+        at(-3, 15, 0),
+        "ACTION_NEEDED",
         vehicle=veh_bmw,
         notes="Dangerous front brakes found. Awaiting customer approval for "
         "pads + discs before road test.",
     )
     make_appt(
-        tom, cust_sofia, type_diagnostic, at(-2, 11, 0), at(-2, 11, 30), "NO_SHOW",
-        vehicle=veh_fiat, notes="Customer did not attend; left voicemail.",
+        tom,
+        cust_sofia,
+        type_diagnostic,
+        at(-2, 11, 0),
+        at(-2, 11, 30),
+        "NO_SHOW",
+        vehicle=veh_fiat,
+        notes="Customer did not attend; left voicemail.",
     )
     make_appt(
-        greg, cust_priya, type_mot_service, at(-1, 15, 0), at(-1, 17, 0), "CANCELLED",
-        vehicle=veh_golf, notes="Customer rescheduled - see booking next week.",
+        greg,
+        cust_priya,
+        type_mot_service,
+        at(-1, 15, 0),
+        at(-1, 17, 0),
+        "CANCELLED",
+        vehicle=veh_golf,
+        notes="Customer rescheduled - see booking next week.",
     )
     appt_in_progress = make_appt(
-        tom, cust_liam, type_mot, at(0, 8, 30), at(0, 9, 15), "IN_PROGRESS",
+        tom,
+        cust_liam,
+        type_mot,
+        at(0, 8, 30),
+        at(0, 9, 15),
+        "IN_PROGRESS",
         vehicle=veh_corolla,
     )
     make_appt(
-        greg, cust_oliver, type_service, at(0, 13, 0), at(0, 14, 30), "BOOKED",
-        vehicle=veh_focus, notes="While-you-wait service.",
+        greg,
+        cust_oliver,
+        type_service,
+        at(0, 13, 0),
+        at(0, 14, 30),
+        "BOOKED",
+        vehicle=veh_focus,
+        notes="While-you-wait service.",
     )
     # BOOKED with no vehicle attached yet - customer will confirm which car.
     make_appt(
-        tom, cust_grace, type_mot, at(1, 9, 0), at(1, 9, 45), "BOOKED",
-        vehicle=None, notes="New customer - vehicle details to follow.",
+        tom,
+        cust_grace,
+        type_mot,
+        at(1, 9, 0),
+        at(1, 9, 45),
+        "BOOKED",
+        vehicle=None,
+        notes="New customer - vehicle details to follow.",
     )
     make_appt(
-        greg, cust_marcus, type_mot_service, at(3, 10, 0), at(3, 12, 0), "BOOKED",
+        greg,
+        cust_marcus,
+        type_mot_service,
+        at(3, 10, 0),
+        at(3, 12, 0),
+        "BOOKED",
         vehicle=veh_transit,
     )
     make_appt(
-        rachel, cust_sofia, type_diagnostic, at(5, 9, 30), at(5, 10, 0), "REQUESTED",
-        vehicle=veh_fiat, notes="Submitted via the online booking form - needs confirming.",
+        rachel,
+        cust_sofia,
+        type_diagnostic,
+        at(5, 9, 30),
+        at(5, 10, 0),
+        "REQUESTED",
+        vehicle=veh_fiat,
+        notes="Submitted via the online booking form - needs confirming.",
     )
     make_appt(
-        greg, cust_liam, type_brakes, at(8, 16, 0), at(8, 17, 0), "BOOKED",
+        greg,
+        cust_liam,
+        type_brakes,
+        at(8, 16, 0),
+        at(8, 17, 0),
+        "BOOKED",
         vehicle=veh_corolla,
     )
     db.session.flush()
@@ -579,8 +664,7 @@ def seed() -> None:
     # ---- Per-appointment checklists (snapshots) --------
     # Snapshot template rows onto an appointment, then apply logged results.
     # `results` maps template-item order -> (status, notes, [media_types]).
-    def snapshot_checklist(appointment, template_rows, completed_by, completed_at,
-                           results):
+    def snapshot_checklist(appointment, template_rows, completed_by, completed_at, results):
         checklist = AppointmentChecklist(
             garage_id=garage.id,
             appointment_id=appointment.id,
@@ -590,9 +674,7 @@ def seed() -> None:
         db.session.flush()
 
         for trow in template_rows:
-            status, notes, media_types = results.get(
-                trow.order, ("NOT_CHECKED", None, [])
-            )
+            status, notes, media_types = results.get(trow.order, ("NOT_CHECKED", None, []))
             logged = status != "NOT_CHECKED"
             item = AppointmentChecklistItem(
                 garage_id=garage.id,
@@ -630,7 +712,10 @@ def seed() -> None:
 
     # Completed MOT: a clean pass with a single tyre advisory.
     snapshot_checklist(
-        appt_completed_mot, mot_items, tom, at(-6, 9, 40),
+        appt_completed_mot,
+        mot_items,
+        tom,
+        at(-6, 9, 40),
         {
             1: ("PASS", "Pads 6mm front / 5mm rear. Discs within tolerance.", ["PHOTO"]),
             2: ("ADVISORY", "Nearside front tyre 2.5mm - advise replacement soon.", ["PHOTO"]),
@@ -647,7 +732,10 @@ def seed() -> None:
     # Completed Full Service: mix of pass / rectified / advisory / recommended
     # / customer-declined.
     snapshot_checklist(
-        appt_completed_service, service_items, greg, at(-5, 11, 20),
+        appt_completed_service,
+        service_items,
+        greg,
+        at(-5, 11, 20),
         {
             1: ("PASS", "5W-30 fully synthetic, 4.2L. Filter replaced.", []),
             2: ("RECTIFIED", "Filter blocked - replaced with new element.", ["PHOTO"]),
@@ -663,10 +751,16 @@ def seed() -> None:
     # Brake Repair, still ACTION_NEEDED: dangerous + major findings logged,
     # road test deferred (left NOT_CHECKED).
     snapshot_checklist(
-        appt_action_needed, brake_items, greg, at(-3, 14, 45),
+        appt_action_needed,
+        brake_items,
+        greg,
+        at(-3, 14, 45),
         {
-            1: ("DANGEROUS", "Offside front pads worn to backing plate - metal to metal.",
-                ["PHOTO", "VIDEO"]),
+            1: (
+                "DANGEROUS",
+                "Offside front pads worn to backing plate - metal to metal.",
+                ["PHOTO", "VIDEO"],
+            ),
             2: ("MAJOR", "Offside front disc scored, 2.1mm under minimum thickness.", ["PHOTO"]),
             3: ("PASS", "Hoses and pipes sound, no corrosion or chafing.", []),
             4: ("MINOR", "Excessive handbrake travel - adjust after pad replacement.", []),
@@ -677,7 +771,10 @@ def seed() -> None:
 
     # In-progress MOT: first checks done, one N/A, the rest not yet checked.
     snapshot_checklist(
-        appt_in_progress, mot_items, tom, at(0, 8, 55),
+        appt_in_progress,
+        mot_items,
+        tom,
+        at(0, 8, 55),
         {
             1: ("PASS", "Brakes tested on rollers - balanced, efficiency OK.", []),
             2: ("PASS", "All tyres 4mm+, no damage.", []),
@@ -747,22 +844,14 @@ def seed() -> None:
     counts = {
         "roles": Role.query.filter_by(garage_id=garage.id).count(),
         "employees": Employee.query.filter_by(garage_id=garage.id).count(),
-        "appointment types": GarageAppointmentType.query.filter_by(
-            garage_id=garage.id
-        ).count(),
-        "checklist templates": ChecklistTemplate.query.filter_by(
-            garage_id=garage.id
-        ).count(),
+        "appointment types": GarageAppointmentType.query.filter_by(garage_id=garage.id).count(),
+        "checklist templates": ChecklistTemplate.query.filter_by(garage_id=garage.id).count(),
         "customers": Customer.query.filter_by(garage_id=garage.id).count(),
         "vehicles": Vehicle.query.filter_by(garage_id=garage.id).count(),
         "MOT records": MOTRecord.query.filter_by(garage_id=garage.id).count(),
         "appointments": Appointment.query.filter_by(garage_id=garage.id).count(),
-        "appointment checklists": AppointmentChecklist.query.filter_by(
-            garage_id=garage.id
-        ).count(),
-        "checklist item media": ChecklistItemMedia.query.filter_by(
-            garage_id=garage.id
-        ).count(),
+        "appointment checklists": AppointmentChecklist.query.filter_by(garage_id=garage.id).count(),
+        "checklist item media": ChecklistItemMedia.query.filter_by(garage_id=garage.id).count(),
         "reminders": Reminder.query.filter_by(garage_id=garage.id).count(),
     }
 

@@ -34,12 +34,11 @@ conversation_blp = Blueprint(
     "the real booking/communications engine with no Twilio involved.",
 )
 
-_AUTH_DOC = {"security": [{"bearerAuth": []}]}
+_AUTH_DOC: dict[str, list[dict[str, list[str]]]] = {"security": [{"bearerAuth": []}]}
 
 
 @conversation_blp.route("/simulate")
 class SimulateMessage(MethodView):
-
     @jwt_required()
     @conversation_blp.doc(**_AUTH_DOC)
     @conversation_blp.arguments(SimulateMessageSchema)

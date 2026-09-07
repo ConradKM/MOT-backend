@@ -43,17 +43,11 @@ def seed_default_schedule(garage_id, session) -> None:
 
     No-op if a settings row already exists, so it is safe to call more than once.
     """
-    existing = (
-        session.query(GarageScheduleSettings.id)
-        .filter_by(garage_id=garage_id)
-        .first()
-    )
+    existing = session.query(GarageScheduleSettings.id).filter_by(garage_id=garage_id).first()
     if existing is not None:
         return
 
-    session.add(
-        GarageScheduleSettings(garage_id=garage_id, **DEFAULT_SETTINGS)
-    )
+    session.add(GarageScheduleSettings(garage_id=garage_id, **DEFAULT_SETTINGS))
     for weekday, (opens_at, closes_at, is_closed) in DEFAULT_OPENING_HOURS.items():
         session.add(
             GarageOpeningHours(

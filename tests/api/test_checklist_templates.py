@@ -15,7 +15,9 @@ def _create_type(client, name="MOT"):
 def test_owner_can_create_checklist_template(authenticated_user):
     appt_type = _create_type(authenticated_user.client)
 
-    resp = authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    resp = authenticated_user.client.post(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template"
+    )
 
     assert resp.status_code == 201
     body = resp.get_json()
@@ -27,14 +29,18 @@ def test_creating_a_second_template_for_the_same_type_conflicts(authenticated_us
     appt_type = _create_type(authenticated_user.client)
     authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
 
-    resp = authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    resp = authenticated_user.client.post(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template"
+    )
     assert resp.status_code == 409
 
 
 def test_get_checklist_template_before_creation_returns_404(authenticated_user):
     appt_type = _create_type(authenticated_user.client)
 
-    resp = authenticated_user.client.get(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    resp = authenticated_user.client.get(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template"
+    )
     assert resp.status_code == 404
 
 
@@ -185,10 +191,14 @@ def test_owner_can_delete_checklist_template(authenticated_user):
     appt_type = _create_type(authenticated_user.client)
     authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
 
-    resp = authenticated_user.client.delete(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    resp = authenticated_user.client.delete(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template"
+    )
     assert resp.status_code == 204
 
-    get_resp = authenticated_user.client.get(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    get_resp = authenticated_user.client.get(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template"
+    )
     assert get_resp.status_code == 404
 
 
@@ -231,7 +241,9 @@ def test_add_item_invalid_media_required_for_statuses(authenticated_user):
 
 
 def test_create_template_for_nonexistent_appointment_type_returns_404(authenticated_user):
-    resp = authenticated_user.client.post(f"/api/appointment-types/{uuid.uuid4()}/checklist-template")
+    resp = authenticated_user.client.post(
+        f"/api/appointment-types/{uuid.uuid4()}/checklist-template"
+    )
     assert resp.status_code == 404
 
 
@@ -251,7 +263,9 @@ def test_staff_cannot_create_checklist_template(authenticated_user, session):
     authenticated_user.user.roles = []
     session.commit()
 
-    resp = authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    resp = authenticated_user.client.post(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template"
+    )
     assert resp.status_code == 403
 
 
@@ -280,5 +294,7 @@ def test_user_a_cannot_see_garage_bs_checklist_template(
     b_type = _create_type(second_authenticated_client, "Garage B Type")
     second_authenticated_client.post(f"/api/appointment-types/{b_type['id']}/checklist-template")
 
-    resp = authenticated_user.client.get(f"/api/appointment-types/{b_type['id']}/checklist-template")
+    resp = authenticated_user.client.get(
+        f"/api/appointment-types/{b_type['id']}/checklist-template"
+    )
     assert resp.status_code == 404

@@ -43,7 +43,7 @@ mot_reminders_blp = Blueprint(
     "and the per-garage reminder schedule.",
 )
 
-_AUTH_DOC = {"security": [{"bearerAuth": []}]}
+_AUTH_DOC: dict[str, list[dict[str, list[str]]]] = {"security": [{"bearerAuth": []}]}
 
 
 def _garage_id():
@@ -51,11 +51,14 @@ def _garage_id():
 
 
 def _ensure_settings(garage_id) -> MOTReminderSettings:
-    row = MOTReminderSettings.query.filter_by(garage_id=garage_id).first()
+    row: MOTReminderSettings | None = MOTReminderSettings.query.filter_by(
+        garage_id=garage_id
+    ).first()
     if row is None:
         seed_mot_reminder_settings(garage_id, db.session)
         db.session.commit()
         row = MOTReminderSettings.query.filter_by(garage_id=garage_id).first()
+    assert row is not None, "seed_mot_reminder_settings must create exactly one row"
     return row
 
 
@@ -95,7 +98,6 @@ def _reject_duplicate_intervals(row: MOTReminderSettings) -> None:
 
 @mot_reminders_blp.route("/")
 class MOTReminderList(MethodView):
-
     @jwt_required()
     @mot_reminders_blp.doc(**_AUTH_DOC)
     @mot_reminders_blp.response(200, MOTReminderRowSchema(many=True))
@@ -113,9 +115,7 @@ class MOTReminderList(MethodView):
             .order_by(Vehicle.mot_expiry_date)
             .all()
         )
-        customers = {
-            c.id: c for c in Customer.query.filter_by(garage_id=garage_id).all()
-        }
+        customers = {c.id: c for c in Customer.query.filter_by(garage_id=garage_id).all()}
 
         events_by_vehicle = defaultdict(list)
         all_events = Reminder.query.filter(
@@ -128,9 +128,7 @@ class MOTReminderList(MethodView):
         rows = []
         for v in vehicles:
             customer = customers.get(v.customer_id)
-            booking_active = mot_booking_active_for(
-                v.id, garage_id, v.mot_expiry_date, db.session
-            )
+            booking_active = mot_booking_active_for(v.id, garage_id, v.mot_expiry_date, db.session)
             state = compute_reminder_state(
                 vehicle=v,
                 settings=settings,
@@ -143,9 +141,7 @@ class MOTReminderList(MethodView):
                     "vehicle_id": v.id,
                     "customer_id": v.customer_id,
                     "customer_name": (
-                        f"{customer.first_name} {customer.last_name}"
-                        if customer
-                        else "—"
+                        f"{customer.first_name} {customer.last_name}" if customer else "—"
                     ),
                     "customer_email": customer.email if customer else None,
                     "registration_number": v.registration_number,
@@ -161,7 +157,6 @@ class MOTReminderList(MethodView):
 
 @mot_reminders_blp.route("/<uuid:vehicle_id>/send")
 class MOTReminderManualSend(MethodView):
-
     @jwt_required()
     @mot_reminders_blp.doc(**_AUTH_DOC)
     @mot_reminders_blp.arguments(ManualReminderSendSchema)
@@ -170,9 +165,7 @@ class MOTReminderManualSend(MethodView):
         garage_id = _garage_id()
         employee = get_current_employee()
 
-        vehicle = Vehicle.query.filter_by(
-            id=vehicle_id, garage_id=garage_id
-        ).first()
+        vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
         if vehicle is None:
             abort(404, message="Vehicle not found")
 
@@ -202,7 +195,6 @@ class MOTReminderManualSend(MethodView):
 
 @mot_reminders_blp.route("/settings")
 class MOTReminderSettingsResource(MethodView):
-
     @jwt_required()
     @mot_reminders_blp.doc(**_AUTH_DOC)
     @mot_reminders_blp.response(200, MOTReminderSettingsSchema)

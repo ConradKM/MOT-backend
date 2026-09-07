@@ -55,8 +55,7 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "is on {{appointment_date}} at {{appointment_time}}."
     ),
     APPOINTMENT_CANCELLED: (
-        "Your appointment with {{business_name}} on {{appointment_date}} has "
-        "been cancelled."
+        "Your appointment with {{business_name}} on {{appointment_date}} has been cancelled."
     ),
     APPOINTMENT_RESCHEDULED: (
         "Your appointment with {{business_name}} has been moved to "
@@ -85,7 +84,9 @@ _PLACEHOLDER = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 
 
 def _resolve_body(garage, key: str) -> str:
-    custom = GarageMessageTemplate.query.filter_by(garage_id=garage.id, key=key).first()
+    custom: GarageMessageTemplate | None = GarageMessageTemplate.query.filter_by(
+        garage_id=garage.id, key=key
+    ).first()
     if custom is not None:
         return custom.body
     return DEFAULT_TEMPLATES.get(key, "")
@@ -123,7 +124,9 @@ def set_template_body(garage, key: str, body: str) -> GarageMessageTemplate:
     """Saves the owner's override for one template key, replacing any
     previous override (never more than one row per garage/key - enforced by
     the table's own unique constraint, mirrored here as find-or-create)."""
-    row = GarageMessageTemplate.query.filter_by(garage_id=garage.id, key=key).first()
+    row: GarageMessageTemplate | None = GarageMessageTemplate.query.filter_by(
+        garage_id=garage.id, key=key
+    ).first()
     if row is None:
         row = GarageMessageTemplate(garage_id=garage.id, key=key, body=body)
         db.session.add(row)

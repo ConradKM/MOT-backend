@@ -110,7 +110,8 @@ def parse_spec(raw: Any) -> tuple[GarageSpec, OwnerSpec]:
         raise OnboardingError("Onboarding spec must be a mapping/object.")
 
     garage_raw = raw.get("garage", raw)
-    nested = raw.get("garage") if isinstance(raw.get("garage"), dict) else {}
+    nested_value = raw.get("garage")
+    nested = nested_value if isinstance(nested_value, dict) else {}
     forbidden = FORBIDDEN_SPEC_KEYS & (set(raw) | set(nested))
     if forbidden:
         raise OnboardingError(
@@ -151,8 +152,7 @@ def load_spec_file(path: str | Path) -> tuple[GarageSpec, OwnerSpec]:
             import yaml
         except ModuleNotFoundError as exc:  # pragma: no cover - env dependent
             raise OnboardingError(
-                "PyYAML isn't installed - use a .json spec, or "
-                "`pip install pyyaml`."
+                "PyYAML isn't installed - use a .json spec, or `pip install pyyaml`."
             ) from exc
         raw = yaml.safe_load(text)
     else:

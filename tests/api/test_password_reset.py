@@ -36,9 +36,7 @@ def _staff(session, garage, email="tech@garage-a.example", password="TechPass123
 
 
 def test_forgot_password_unknown_email_is_generic(client):
-    resp = client.post(
-        "/api/auth/forgot-password", json={"email": "nobody@example.com"}
-    )
+    resp = client.post("/api/auth/forgot-password", json={"email": "nobody@example.com"})
     assert resp.status_code == 200
     assert GENERIC in resp.get_json()["message"]
     assert PasswordResetToken.query.count() == 0
@@ -116,9 +114,7 @@ def test_reset_token_is_single_use(client, user, monkeypatch):
     client.post("/api/auth/forgot-password", json={"email": user.email})
     token = box["token"]
 
-    client.post(
-        "/api/auth/reset-password", json={"token": token, "password": "FirstReset123!"}
-    )
+    client.post("/api/auth/reset-password", json={"token": token, "password": "FirstReset123!"})
     again = client.post(
         "/api/auth/reset-password", json={"token": token, "password": "SecondReset123!"}
     )
@@ -138,9 +134,7 @@ def test_expired_token_is_rejected(client, session, user):
     session.commit()
 
     assert client.get(f"/api/auth/reset-password?token={raw}").status_code == 400
-    resp = client.post(
-        "/api/auth/reset-password", json={"token": raw, "password": "WontWork123!"}
-    )
+    resp = client.post("/api/auth/reset-password", json={"token": raw, "password": "WontWork123!"})
     assert resp.status_code == 400
 
 
@@ -200,9 +194,10 @@ def test_reset_is_per_user(client, session, garage, user, monkeypatch):
 
 def test_reset_ends_existing_sessions(client, session, user, access_token, monkeypatch):
     # A live token works before the reset...
-    assert client.get(
-        "/api/auth/me", headers={"Authorization": f"Bearer {access_token}"}
-    ).status_code == 200
+    assert (
+        client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"}).status_code
+        == 200
+    )
 
     box = _capture_token(monkeypatch)
     client.post("/api/auth/forgot-password", json={"email": user.email})

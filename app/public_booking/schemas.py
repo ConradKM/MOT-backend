@@ -62,9 +62,7 @@ class PublicGarageDetailSchema(Schema):
     id = fields.UUID(dump_only=True)
     name = fields.Str(dump_only=True)
     slug = fields.Str(dump_only=True)
-    appointment_types = fields.List(
-        fields.Nested(PublicAppointmentTypeSchema), dump_only=True
-    )
+    appointment_types = fields.List(fields.Nested(PublicAppointmentTypeSchema), dump_only=True)
 
 
 _CURRENT_YEAR = datetime.now(UTC).year
@@ -75,23 +73,15 @@ class BookingRequestCreateSchema(Schema):
         # Silently drop anything the client sends that we don't model.
         unknown = EXCLUDE
 
-    customer_first_name = fields.Str(
-        required=True, validate=validate.Length(min=1, max=100)
-    )
-    customer_last_name = fields.Str(
-        required=True, validate=validate.Length(min=1, max=100)
-    )
+    customer_first_name = fields.Str(required=True, validate=validate.Length(min=1, max=100))
+    customer_last_name = fields.Str(required=True, validate=validate.Length(min=1, max=100))
     customer_email = fields.Email(required=True, validate=validate.Length(max=320))
     # Required: SMS reachability is the point of collecting it (see
     # app/phone.py). Normalised to E.164 for storage.
     customer_phone = UKMobileField(required=True, validate=validate.Length(max=40))
 
-    vehicle_registration = fields.Str(
-        required=True, validate=validate.Length(min=1, max=20)
-    )
-    vehicle_make = fields.Str(
-        allow_none=True, load_default=None, validate=validate.Length(max=100)
-    )
+    vehicle_registration = fields.Str(required=True, validate=validate.Length(min=1, max=20))
+    vehicle_make = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
     vehicle_model = fields.Str(
         allow_none=True, load_default=None, validate=validate.Length(max=100)
     )
@@ -100,9 +90,7 @@ class BookingRequestCreateSchema(Schema):
         load_default=None,
         validate=validate.Range(min=1900, max=_CURRENT_YEAR + 1),
     )
-    vehicle_mileage = fields.Int(
-        allow_none=True, load_default=None, validate=validate.Range(min=0)
-    )
+    vehicle_mileage = fields.Int(allow_none=True, load_default=None, validate=validate.Range(min=0))
 
     appointment_type_id = fields.UUID(allow_none=True, load_default=None)
     preferred_date = fields.Date(required=True)
@@ -110,9 +98,7 @@ class BookingRequestCreateSchema(Schema):
     preferred_employee_note = fields.Str(
         allow_none=True, load_default=None, validate=validate.Length(max=200)
     )
-    notes = fields.Str(
-        allow_none=True, load_default=None, validate=validate.Length(max=2000)
-    )
+    notes = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=2000))
 
     # Verified in the route (needs app context / config), not here.
     captcha_token = fields.Str(load_default="", load_only=True)
@@ -121,9 +107,7 @@ class BookingRequestCreateSchema(Schema):
     def _strip_strings(self, data, **kwargs):
         if not isinstance(data, dict):
             return data
-        return {
-            k: (v.strip() if isinstance(v, str) else v) for k, v in data.items()
-        }
+        return {k: (v.strip() if isinstance(v, str) else v) for k, v in data.items()}
 
     @validates("preferred_date")
     def _not_in_the_past(self, value, **kwargs):
@@ -194,9 +178,7 @@ class DaySummarySchema(Schema):
 class AvailabilityRangeSchema(Schema):
     garage = fields.Nested(_GarageRefSchema, dump_only=True)
     rules = fields.Nested(AvailabilityRulesSchema, dump_only=True)
-    opening_hours = fields.List(
-        fields.Nested(PublicOpeningHoursEntrySchema), dump_only=True
-    )
+    opening_hours = fields.List(fields.Nested(PublicOpeningHoursEntrySchema), dump_only=True)
     days = fields.List(fields.Nested(DaySummarySchema), dump_only=True)
 
 

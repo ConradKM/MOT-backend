@@ -36,7 +36,6 @@ def _get_template_or_404(appointment_type_id, garage_id):
 
 @checklist_templates_blp.route("")
 class ChecklistTemplateResource(MethodView):
-
     @jwt_required()
     @checklist_templates_blp.response(200, ChecklistTemplateSchema)
     def get(self, appointment_type_id):
@@ -77,7 +76,6 @@ class ChecklistTemplateResource(MethodView):
 
 @checklist_templates_blp.route("/items")
 class ChecklistTemplateItemList(MethodView):
-
     @jwt_required()
     @checklist_templates_blp.response(200, ChecklistTemplateItemSchema(many=True))
     def get(self, appointment_type_id):
@@ -116,7 +114,6 @@ class ChecklistTemplateItemList(MethodView):
 
 @checklist_templates_blp.route("/items/<uuid:item_id>")
 class ChecklistTemplateItemResource(MethodView):
-
     def _get_owned_item(self, appointment_type_id, garage_id, item_id):
         get_owned_appointment_type(appointment_type_id, garage_id)
         template = _get_template_or_404(appointment_type_id, garage_id)

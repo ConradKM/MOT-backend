@@ -14,8 +14,16 @@ import uuid
 # default a brand-new item gets - see
 # app/models/appointments/checklist_template_item.py.
 _AUTOMOTIVE_RESULT_OPTIONS = [
-    "PASS", "ADVISORY", "MINOR", "MAJOR", "DANGEROUS", "RECTIFIED",
-    "RECOMMENDED", "CUSTOMER_DECLINED", "NOT_APPLICABLE", "NOT_CHECKED",
+    "PASS",
+    "ADVISORY",
+    "MINOR",
+    "MAJOR",
+    "DANGEROUS",
+    "RECTIFIED",
+    "RECOMMENDED",
+    "CUSTOMER_DECLINED",
+    "NOT_APPLICABLE",
+    "NOT_CHECKED",
 ]
 
 
@@ -295,7 +303,9 @@ def test_deleting_template_after_snapshot_preserves_the_checklist_instance(
 ):
     appt_type, appointment = _make_appointment_with_template(authenticated_user, customer)
 
-    resp = authenticated_user.client.delete(f"/api/appointment-types/{appt_type['id']}/checklist-template")
+    resp = authenticated_user.client.delete(
+        f"/api/appointment-types/{appt_type['id']}/checklist-template"
+    )
     assert resp.status_code == 204
 
     refetched = authenticated_user.client.get(f"/api/appointments/{appointment['id']}/checklist")

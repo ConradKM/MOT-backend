@@ -10,6 +10,7 @@ app/garages/schedule/defaults.py), so the feature is safe for existing tenants.
 import uuid
 from datetime import date as date_type
 from datetime import time
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
@@ -28,37 +29,28 @@ from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.garage import Garage
 
-class GarageScheduleSettings(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class GarageScheduleSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """One row per garage - the knobs for how public availability is computed."""
 
     __tablename__ = "garage_schedule_settings"
-    __table_args__ = (
-        UniqueConstraint(
-            "garage_id", name="uq_garage_schedule_settings_garage_id"
-        ),
-    )
+    __table_args__ = (UniqueConstraint("garage_id", name="uq_garage_schedule_settings_garage_id"),)
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("garages.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # Granularity of the start times offered to customers.
-    slot_interval_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=30
-    )
+    slot_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     # How long a booked slot is assumed to occupy when the request has no
     # appointment type, or the type has no default_duration_minutes.
-    default_appointment_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=60
-    )
+    default_appointment_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     # Earliest a customer can book, measured from "now".
-    min_lead_time_hours: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=24
-    )
+    min_lead_time_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
     # How far ahead the booking window extends.
-    max_advance_days: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=60
-    )
+    max_advance_days: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     # Concurrent bookings a single slot can hold. NULL => fall back to the
     # garage's active employee count (appointments need an employee, so that
     # tracks real throughput).
@@ -69,17 +61,15 @@ class GarageScheduleSettings(db.Model, PrimaryKeyMixin, TimestampMixin):
         Numeric(3, 2), nullable=False, default=0.5
     )
 
-    garage = relationship("Garage", back_populates="schedule_settings")
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="schedule_settings")
 
 
-class GarageOpeningHours(db.Model, PrimaryKeyMixin, TimestampMixin):
+class GarageOpeningHours(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """A garage's opening hours for one weekday (0 = Monday ... 6 = Sunday)."""
 
     __tablename__ = "garage_opening_hours"
     __table_args__ = (
-        UniqueConstraint(
-            "garage_id", "weekday", name="uq_garage_opening_hours_garage_weekday"
-        ),
+        UniqueConstraint("garage_id", "weekday", name="uq_garage_opening_hours_garage_weekday"),
     )
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -90,19 +80,17 @@ class GarageOpeningHours(db.Model, PrimaryKeyMixin, TimestampMixin):
     closes_at: Mapped[time] = mapped_column(Time, nullable=False, default=time(17, 0))
     is_closed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    garage = relationship("Garage", back_populates="opening_hours")
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="opening_hours")
 
 
-class GarageScheduleException(db.Model, PrimaryKeyMixin, TimestampMixin):
+class GarageScheduleException(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """A one-off override for a single date - a bank holiday closure, or
     special hours. `is_closed` true (the default) means shut all day;
     otherwise opens_at/closes_at replace that weekday's normal hours."""
 
     __tablename__ = "garage_schedule_exceptions"
     __table_args__ = (
-        UniqueConstraint(
-            "garage_id", "date", name="uq_garage_schedule_exceptions_garage_date"
-        ),
+        UniqueConstraint("garage_id", "date", name="uq_garage_schedule_exceptions_garage_date"),
     )
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -114,4 +102,4 @@ class GarageScheduleException(db.Model, PrimaryKeyMixin, TimestampMixin):
     closes_at: Mapped[time | None] = mapped_column(Time)
     note: Mapped[str | None] = mapped_column(String(200))
 
-    garage = relationship("Garage", back_populates="schedule_exceptions")
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="schedule_exceptions")

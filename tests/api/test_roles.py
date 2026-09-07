@@ -78,9 +78,7 @@ def test_owner_can_rename_a_custom_role(authenticated_user):
 def test_owner_role_cannot_be_renamed(authenticated_user):
     owner_role_id = authenticated_user.user.roles[0].id
 
-    resp = authenticated_user.client.patch(
-        f"/api/roles/{owner_role_id}", json={"name": "Boss"}
-    )
+    resp = authenticated_user.client.patch(f"/api/roles/{owner_role_id}", json={"name": "Boss"})
 
     assert resp.status_code == 403
 
@@ -117,20 +115,14 @@ def test_deleting_a_role_unassigns_it_from_employees(authenticated_user, staff_r
 
 
 def test_edit_unknown_role_returns_404(authenticated_user):
-    resp = authenticated_user.client.patch(
-        f"/api/roles/{uuid.uuid4()}", json={"name": "Ghost"}
-    )
+    resp = authenticated_user.client.patch(f"/api/roles/{uuid.uuid4()}", json={"name": "Ghost"})
 
     assert resp.status_code == 404
 
 
-def test_user_b_cannot_edit_garage_as_role(
-    authenticated_user, second_authenticated_client
-):
+def test_user_b_cannot_edit_garage_as_role(authenticated_user, second_authenticated_client):
     role = authenticated_user.client.post("/api/roles/", json={"name": "Mechanic"}).get_json()
 
-    resp = second_authenticated_client.patch(
-        f"/api/roles/{role['id']}", json={"name": "Hijacked"}
-    )
+    resp = second_authenticated_client.patch(f"/api/roles/{role['id']}", json={"name": "Hijacked"})
 
     assert resp.status_code == 404

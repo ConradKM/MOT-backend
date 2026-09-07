@@ -1,4 +1,5 @@
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Uuid
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -7,6 +8,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.appointments.checklist_template import ChecklistTemplate
+    from app.models.garage import Garage
 
 MEDIA_TYPES = ("NONE", "PHOTO", "VIDEO", "EITHER")
 
@@ -35,7 +40,7 @@ CHECKLIST_ITEM_STATUSES = (
 GENERIC_RESULT_OPTIONS = ("NOT_CHECKED", "DONE", "NOT_APPLICABLE")
 
 
-class ChecklistTemplateItem(db.Model, PrimaryKeyMixin, TimestampMixin):
+class ChecklistTemplateItem(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "checklist_template_items"
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -77,5 +82,7 @@ class ChecklistTemplateItem(db.Model, PrimaryKeyMixin, TimestampMixin):
     # would just clutter the customer's view.
     visible_to_customer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    garage = relationship("Garage")
-    checklist_template = relationship("ChecklistTemplate", back_populates="items")
+    garage: Mapped["Garage"] = relationship("Garage")
+    checklist_template: Mapped["ChecklistTemplate"] = relationship(
+        "ChecklistTemplate", back_populates="items"
+    )

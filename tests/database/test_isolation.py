@@ -17,9 +17,7 @@ def test_two_garages_have_independent_users(garage, user, second_garage, second_
     assert user.garage_id != second_user.garage_id
 
 
-def test_two_garages_have_independent_customers(
-    garage, customer, second_garage, second_customer
-):
+def test_two_garages_have_independent_customers(garage, customer, second_garage, second_customer):
     assert customer.garage_id == garage.id
     assert second_customer.garage_id == second_garage.id
     assert customer.garage_id != second_customer.garage_id
@@ -66,8 +64,15 @@ def test_full_tenant_tree_is_isolated(
 
 
 def test_querying_by_garage_id_never_returns_the_other_tenants_rows(
-    session, garage, customer, vehicle, mot_record,
-    second_garage, second_customer, second_vehicle, second_mot_record,
+    session,
+    garage,
+    customer,
+    vehicle,
+    mot_record,
+    second_garage,
+    second_customer,
+    second_vehicle,
+    second_mot_record,
 ):
     assert Customer.query.filter_by(garage_id=garage.id).all() == [customer]
     assert Vehicle.query.filter_by(garage_id=garage.id).all() == [vehicle]
@@ -79,7 +84,13 @@ def test_querying_by_garage_id_never_returns_the_other_tenants_rows(
 
 
 def test_deleting_one_garage_does_not_affect_the_other(
-    session, garage, customer, vehicle, mot_record, second_garage, second_customer,
+    session,
+    garage,
+    customer,
+    vehicle,
+    mot_record,
+    second_garage,
+    second_customer,
 ):
     session.delete(garage)
     session.commit()

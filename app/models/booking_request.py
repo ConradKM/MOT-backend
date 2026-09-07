@@ -1,6 +1,7 @@
 import uuid
 from datetime import date, datetime, time
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Date,
@@ -19,6 +20,14 @@ from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.appointments.appointment import Appointment
+    from app.models.appointments.appointment_type import GarageAppointmentType
+    from app.models.customer import Customer
+    from app.models.employee import Employee
+    from app.models.garage import Garage
+    from app.models.vehicle import Vehicle
+
 # PENDING: awaiting staff review, and still reserving capacity for its
 # preferred slot (see app/public_booking/availability.py). APPROVED: staff
 # accepted it and the linked customer/vehicle/appointment rows were created.
@@ -30,7 +39,7 @@ from .mixins import PrimaryKeyMixin, TimestampMixin
 BOOKING_REQUEST_STATUSES = ("PENDING", "APPROVED", "REJECTED", "EXPIRED")
 
 
-class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
+class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """An unauthenticated public booking submission, held for staff review.
 
     Deliberately a flat snapshot of what the public form collected - it never
@@ -46,9 +55,7 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="PENDING", index=True
-    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
 
     # --- what the public form submitted -------------------------------------
     customer_first_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -109,9 +116,9 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
         Uuid, ForeignKey("appointments.id", ondelete="SET NULL")
     )
 
-    garage = relationship("Garage")
-    appointment_type = relationship("GarageAppointmentType")
-    reviewed_by = relationship("Employee")
-    customer = relationship("Customer")
-    vehicle = relationship("Vehicle")
-    appointment = relationship("Appointment")
+    garage: Mapped["Garage"] = relationship("Garage")
+    appointment_type: Mapped["GarageAppointmentType | None"] = relationship("GarageAppointmentType")
+    reviewed_by: Mapped["Employee | None"] = relationship("Employee")
+    customer: Mapped["Customer | None"] = relationship("Customer")
+    vehicle: Mapped["Vehicle | None"] = relationship("Vehicle")
+    appointment: Mapped["Appointment | None"] = relationship("Appointment")

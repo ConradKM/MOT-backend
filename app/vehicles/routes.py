@@ -37,18 +37,13 @@ def _get_owned_customer(customer_id, garage_id):
 def _is_referenced(vehicle_id) -> bool:
     """True if deleting this vehicle would cascade away real history (MOT
     records) or leave appointments dangling - see VehicleResource.delete."""
-    has_mot_record = (
-        MOTRecord.query.filter_by(vehicle_id=vehicle_id).first() is not None
-    )
-    has_appointment = (
-        Appointment.query.filter_by(vehicle_id=vehicle_id).first() is not None
-    )
+    has_mot_record = MOTRecord.query.filter_by(vehicle_id=vehicle_id).first() is not None
+    has_appointment = Appointment.query.filter_by(vehicle_id=vehicle_id).first() is not None
     return has_mot_record or has_appointment
 
 
 @vehicles_blp.route("/")
 class VehicleList(MethodView):
-
     @jwt_required()
     @vehicles_blp.arguments(VehicleQueryArgsSchema, location="query")
     @vehicles_blp.response(200, VehicleSchema(many=True))
@@ -104,7 +99,6 @@ class VehicleList(MethodView):
 
 @vehicles_blp.route("/<uuid:vehicle_id>")
 class VehicleResource(MethodView):
-
     @jwt_required()
     @vehicles_blp.response(200, VehicleSchema)
     def get(self, vehicle_id):

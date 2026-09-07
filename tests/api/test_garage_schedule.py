@@ -14,7 +14,7 @@ from werkzeug.security import generate_password_hash
 
 from app.models.employee import Employee
 
-FUTURE = (datetime.date.today() + datetime.timedelta(days=20)).isoformat()
+FUTURE = (datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=20)).isoformat()
 
 
 def test_get_returns_seeded_defaults(authenticated_client):
@@ -97,10 +97,7 @@ def test_add_and_delete_exception(authenticated_client):
     assert [e["date"] for e in body["exceptions"]] == [FUTURE]
 
     assert (
-        authenticated_client.delete(
-            f"/api/garage/schedule/exceptions/{exc_id}"
-        ).status_code
-        == 204
+        authenticated_client.delete(f"/api/garage/schedule/exceptions/{exc_id}").status_code == 204
     )
     body = authenticated_client.get("/api/garage/schedule").get_json()
     assert body["exceptions"] == []
@@ -109,15 +106,11 @@ def test_add_and_delete_exception(authenticated_client):
 def test_add_exception_duplicate_date_returns_409(authenticated_client):
     payload = {"date": FUTURE, "is_closed": True}
     assert (
-        authenticated_client.post(
-            "/api/garage/schedule/exceptions", json=payload
-        ).status_code
+        authenticated_client.post("/api/garage/schedule/exceptions", json=payload).status_code
         == 201
     )
     assert (
-        authenticated_client.post(
-            "/api/garage/schedule/exceptions", json=payload
-        ).status_code
+        authenticated_client.post("/api/garage/schedule/exceptions", json=payload).status_code
         == 409
     )
 
@@ -141,9 +134,7 @@ def test_non_owner_cannot_write(client, session, garage, staff_role):
     assert resp.status_code == 403
 
 
-def test_schedule_is_tenant_scoped(
-    authenticated_client, second_authenticated_client
-):
+def test_schedule_is_tenant_scoped(authenticated_client, second_authenticated_client):
     created = authenticated_client.post(
         "/api/garage/schedule/exceptions",
         json={"date": FUTURE, "is_closed": True},
@@ -153,8 +144,6 @@ def test_schedule_is_tenant_scoped(
     other = second_authenticated_client.get("/api/garage/schedule").get_json()
     assert other["exceptions"] == []
     assert (
-        second_authenticated_client.delete(
-            f"/api/garage/schedule/exceptions/{exc_id}"
-        ).status_code
+        second_authenticated_client.delete(f"/api/garage/schedule/exceptions/{exc_id}").status_code
         == 404
     )

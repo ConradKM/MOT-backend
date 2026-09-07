@@ -111,8 +111,10 @@ def test_cli_update_garage_details_updates_only_the_named_garage(
     result = runner.invoke(
         args=[
             "update-garage-details",
-            "--garage", garage.slug,
-            "--phone", "+44 20 9999 0000",
+            "--garage",
+            garage.slug,
+            "--phone",
+            "+44 20 9999 0000",
         ]
     )
 

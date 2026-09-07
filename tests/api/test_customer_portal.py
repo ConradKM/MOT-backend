@@ -10,9 +10,7 @@ _END = "2026-10-01T{hour:02d}:30:00+00:00"
 
 def _create_appointment(staff, *, customer_id, vehicle_id=None, hour=9, name="MOT"):
     """Create an appointment for `customer_id` via the staff API. Returns its JSON."""
-    appt_type = staff.client.post(
-        "/api/appointment-types/", json={"name": name}
-    ).get_json()
+    appt_type = staff.client.post("/api/appointment-types/", json={"name": name}).get_json()
 
     payload = {
         "employee_id": str(staff.user.id),
@@ -61,7 +59,9 @@ def test_account_lists_vehicles_with_mot_history(customer_client, vehicle, mot_r
     regs = [v["registration_number"] for v in body["vehicles"]]
     assert vehicle.registration_number in regs
 
-    car = next(v for v in body["vehicles"] if v["registration_number"] == vehicle.registration_number)
+    car = next(
+        v for v in body["vehicles"] if v["registration_number"] == vehicle.registration_number
+    )
     assert len(car["mot_records"]) == 1
     assert car["mot_records"][0]["result"] == "PASS"
 
@@ -69,9 +69,7 @@ def test_account_lists_vehicles_with_mot_history(customer_client, vehicle, mot_r
 def test_account_lists_the_customers_appointments(
     customer_client, authenticated_user, customer, vehicle
 ):
-    appt = _create_appointment(
-        authenticated_user, customer_id=customer.id, vehicle_id=vehicle.id
-    )
+    appt = _create_appointment(authenticated_user, customer_id=customer.id, vehicle_id=vehicle.id)
 
     body = customer_client.get("/api/customer/account").get_json()
 
@@ -82,9 +80,7 @@ def test_account_lists_the_customers_appointments(
     assert mine["vehicle_registration"] == vehicle.registration_number
 
 
-def test_account_excludes_other_customers_data(
-    customer_client, authenticated_user, customer
-):
+def test_account_excludes_other_customers_data(customer_client, authenticated_user, customer):
     _, _ = _add_customer_with_vehicle(authenticated_user)
     other_customer, other_vehicle = _add_customer_with_vehicle(
         authenticated_user, email="third@example.com", reg="TH1RD01"
@@ -120,9 +116,7 @@ def test_account_requires_a_token(client):
 def test_appointment_detail_for_own_appointment(
     customer_client, authenticated_user, customer, vehicle
 ):
-    appt = _create_appointment(
-        authenticated_user, customer_id=customer.id, vehicle_id=vehicle.id
-    )
+    appt = _create_appointment(authenticated_user, customer_id=customer.id, vehicle_id=vehicle.id)
 
     resp = customer_client.get(f"/api/customer/appointments/{appt['id']}")
 
@@ -150,18 +144,12 @@ def test_appointment_detail_for_another_customers_appointment_is_404(
 
 
 def test_appointment_detail_unknown_id_is_404(customer_client):
-    resp = customer_client.get(
-        "/api/customer/appointments/00000000-0000-0000-0000-000000000000"
-    )
+    resp = customer_client.get("/api/customer/appointments/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404
 
 
-def test_appointment_detail_rejects_an_employee_token(
-    authenticated_user, customer, vehicle
-):
-    appt = _create_appointment(
-        authenticated_user, customer_id=customer.id, vehicle_id=vehicle.id
-    )
+def test_appointment_detail_rejects_an_employee_token(authenticated_user, customer, vehicle):
+    appt = _create_appointment(authenticated_user, customer_id=customer.id, vehicle_id=vehicle.id)
 
     resp = authenticated_user.client.get(f"/api/customer/appointments/{appt['id']}")
     assert resp.status_code in (401, 403)

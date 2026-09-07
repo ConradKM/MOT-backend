@@ -60,7 +60,7 @@ communications_blp = Blueprint(
     "staff-initiated contact.",
 )
 
-_AUTH_DOC = {"security": [{"bearerAuth": []}]}
+_AUTH_DOC: dict[str, list[dict[str, list[str]]]] = {"security": [{"bearerAuth": []}]}
 
 
 def _resolve_target_customer(garage_id, customer_id):
@@ -73,25 +73,27 @@ def _resolve_target_customer(garage_id, customer_id):
 
 
 def _resolve_target_phone(customer, raw_to) -> str:
+    # flask_smorest.abort always raises (it's typed Any, since flask_smorest
+    # has no stubs - see the mypy override in pyproject.toml), so these never
+    # actually return.
     raw = customer.phone if customer is not None else raw_to
     if not raw:
-        return abort(422, message="This customer has no phone number on file.")
+        return abort(422, message="This customer has no phone number on file.")  # type: ignore[no-any-return]
     try:
         return normalize_uk_mobile(raw)
     except InvalidPhoneNumberError as exc:
-        return abort(422, message=str(exc))
+        return abort(422, message=str(exc))  # type: ignore[no-any-return]
 
 
 def _normalize_path_phone(phone: str) -> str:
     try:
         return normalize_uk_mobile(phone)
     except InvalidPhoneNumberError as exc:
-        return abort(422, message=str(exc))
+        return abort(422, message=str(exc))  # type: ignore[no-any-return]
 
 
 @communications_blp.route("/overview")
 class Overview(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, OverviewSchema)
@@ -102,7 +104,6 @@ class Overview(MethodView):
 
 @communications_blp.route("/unread-count")
 class UnreadCount(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, UnreadCountSchema)
@@ -113,7 +114,6 @@ class UnreadCount(MethodView):
 
 @communications_blp.route("/calls")
 class CallList(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.arguments(CallListQueryArgsSchema, location="query")
@@ -153,7 +153,6 @@ class CallList(MethodView):
 
 @communications_blp.route("/calls/<uuid:call_id>")
 class CallDetail(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, CommunicationLogSchema)
@@ -167,7 +166,6 @@ class CallDetail(MethodView):
 
 @communications_blp.route("/conversations")
 class ConversationList(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.arguments(ConversationListQueryArgsSchema, location="query")
@@ -182,7 +180,6 @@ class ConversationList(MethodView):
 
 @communications_blp.route("/conversations/<string:phone>/messages")
 class ConversationMessages(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.arguments(ConversationMessagesQueryArgsSchema, location="query")
@@ -198,7 +195,6 @@ class ConversationMessages(MethodView):
 
 @communications_blp.route("/conversations/<string:phone>/read")
 class ConversationRead(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, MarkReadResultSchema)
@@ -210,7 +206,6 @@ class ConversationRead(MethodView):
 
 @communications_blp.route("/whatsapp/send")
 class WhatsAppSend(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.arguments(SendWhatsAppSchema)
@@ -235,7 +230,6 @@ class WhatsAppSend(MethodView):
 
 @communications_blp.route("/automation-settings")
 class AutomationSettings(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, AutomationSettingsSchema)
@@ -276,7 +270,6 @@ def _require_known_template_key(key: str) -> None:
 
 @communications_blp.route("/templates")
 class MessageTemplateList(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, MessageTemplateListResponseSchema)
@@ -287,7 +280,6 @@ class MessageTemplateList(MethodView):
 
 @communications_blp.route("/templates/<string:key>")
 class MessageTemplateDetail(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.arguments(UpdateMessageTemplateSchema)
@@ -311,7 +303,6 @@ class MessageTemplateDetail(MethodView):
 
 @communications_blp.route("/templates/<string:key>/preview")
 class MessageTemplatePreview(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.arguments(TemplatePreviewSchema)
@@ -339,7 +330,6 @@ def _resolve_callback_request(garage, callback_id):
 
 @communications_blp.route("/callback-requests")
 class CallbackRequestList(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.arguments(CallbackRequestListQueryArgsSchema, location="query")
@@ -354,7 +344,6 @@ class CallbackRequestList(MethodView):
 
 @communications_blp.route("/callback-requests/<uuid:callback_id>/complete")
 class CallbackRequestComplete(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, CallbackRequestSchema)
@@ -367,7 +356,6 @@ class CallbackRequestComplete(MethodView):
 
 @communications_blp.route("/callback-requests/<uuid:callback_id>/cancel")
 class CallbackRequestCancel(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, CallbackRequestSchema)
@@ -398,7 +386,6 @@ def _automation_status_payload(phone_e164: str, session) -> dict:
 
 @communications_blp.route("/attention-queue")
 class AttentionQueue(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, AttentionQueueResponseSchema)
@@ -412,7 +399,6 @@ class AttentionQueue(MethodView):
 
 @communications_blp.route("/conversations/<string:phone>/automation")
 class ConversationAutomationStatus(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, ConversationAutomationStatusSchema)
@@ -425,7 +411,6 @@ class ConversationAutomationStatus(MethodView):
 
 @communications_blp.route("/conversations/<string:phone>/takeover")
 class ConversationTakeover(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, ConversationAutomationStatusSchema)
@@ -445,7 +430,6 @@ class ConversationTakeover(MethodView):
 
 @communications_blp.route("/conversations/<string:phone>/resume-automation")
 class ConversationResumeAutomation(MethodView):
-
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
     @communications_blp.response(200, ConversationAutomationStatusSchema)

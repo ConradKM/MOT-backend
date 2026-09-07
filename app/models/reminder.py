@@ -51,19 +51,13 @@ STATUS_FAILED = "FAILED"
 STATUS_SKIPPED = "SKIPPED"
 
 
-class Reminder(db.Model, PrimaryKeyMixin, TimestampMixin):
+class Reminder(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "reminders"
 
     garage_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("garages.id"), nullable=False)
-    customer_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("customers.id"), nullable=False
-    )
-    vehicle_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("vehicles.id"), nullable=False
-    )
-    appointment_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("appointments.id")
-    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("customers.id"), nullable=False)
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vehicles.id"), nullable=False)
+    appointment_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("appointments.id"))
     # Set on manual sends - the employee who clicked "Send reminder".
     initiated_by_employee_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("employees.id", ondelete="SET NULL")

@@ -35,7 +35,7 @@ garage_schedule_blp = Blueprint(
     "exceptions that drive the public availability calendar.",
 )
 
-_AUTH_DOC = {"security": [{"bearerAuth": []}]}
+_AUTH_DOC: dict[str, list[dict[str, list[str]]]] = {"security": [{"bearerAuth": []}]}
 
 
 def _garage_id():
@@ -71,7 +71,6 @@ def _schedule_payload(garage_id):
 
 @garage_schedule_blp.route("")
 class GarageScheduleResource(MethodView):
-
     @jwt_required()
     @garage_schedule_blp.doc(**_AUTH_DOC)
     @garage_schedule_blp.response(200, GarageScheduleSchema)
@@ -81,7 +80,6 @@ class GarageScheduleResource(MethodView):
 
 @garage_schedule_blp.route("/settings")
 class GarageScheduleSettingsResource(MethodView):
-
     @jwt_required()
     @owner_required
     @garage_schedule_blp.doc(**_AUTH_DOC)
@@ -98,7 +96,6 @@ class GarageScheduleSettingsResource(MethodView):
 
 @garage_schedule_blp.route("/opening-hours")
 class GarageOpeningHoursResource(MethodView):
-
     @jwt_required()
     @owner_required
     @garage_schedule_blp.doc(**_AUTH_DOC)
@@ -109,15 +106,13 @@ class GarageOpeningHoursResource(MethodView):
         _ensure_seeded(garage_id)
 
         by_weekday = {
-            oh.weekday: oh
-            for oh in GarageOpeningHours.query.filter_by(garage_id=garage_id).all()
+            oh.weekday: oh for oh in GarageOpeningHours.query.filter_by(garage_id=garage_id).all()
         }
         for entry in data["opening_hours"]:
             if entry["opens_at"] >= entry["closes_at"] and not entry["is_closed"]:
                 abort(
                     422,
-                    message=f"weekday {entry['weekday']}: opens_at must be "
-                    "before closes_at.",
+                    message=f"weekday {entry['weekday']}: opens_at must be before closes_at.",
                 )
             row = by_weekday.get(entry["weekday"])
             if row is None:
@@ -133,7 +128,6 @@ class GarageOpeningHoursResource(MethodView):
 
 @garage_schedule_blp.route("/exceptions")
 class GarageScheduleExceptionList(MethodView):
-
     @jwt_required()
     @owner_required
     @garage_schedule_blp.doc(**_AUTH_DOC)
@@ -143,9 +137,7 @@ class GarageScheduleExceptionList(MethodView):
         garage_id = _garage_id()
         _ensure_seeded(garage_id)
 
-        if not data["is_closed"] and (
-            data["opens_at"] is None or data["closes_at"] is None
-        ):
+        if not data["is_closed"] and (data["opens_at"] is None or data["closes_at"] is None):
             abort(
                 422,
                 message="A non-closed exception needs both opens_at and closes_at.",
@@ -170,16 +162,13 @@ class GarageScheduleExceptionList(MethodView):
 
 @garage_schedule_blp.route("/exceptions/<uuid:exception_id>")
 class GarageScheduleExceptionResource(MethodView):
-
     @jwt_required()
     @owner_required
     @garage_schedule_blp.doc(**_AUTH_DOC)
     @garage_schedule_blp.response(204)
     def delete(self, exception_id):
         garage_id = _garage_id()
-        exc = GarageScheduleException.query.filter_by(
-            id=exception_id, garage_id=garage_id
-        ).first()
+        exc = GarageScheduleException.query.filter_by(id=exception_id, garage_id=garage_id).first()
         if exc is None:
             abort(404, message="Schedule exception not found")
         db.session.delete(exc)

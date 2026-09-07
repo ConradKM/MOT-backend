@@ -1,0 +1,233 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, edited, reopened, synchronize]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # Fast, standalone check - no dependency install, no Postgres - so a
+  # badly-titled PR fails in seconds instead of waiting on the full suite.
+  pr-title:
+    name: PR title references an issue
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for an issue reference (e.g. "#38")
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! echo "$TITLE" | grep -qE '#[0-9]+'; then
+            echo "::error::PR title must reference an issue number (e.g. containing \"#38\")."
+            exit 1
+          fi
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          curl -sSL -o gitleaks.tar.gz \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+
+      - name: Run gitleaks
+        run: gitleaks detect --source . --redact -v
+
+  lint:
+    name: Lint, format, types, sanity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: App boots (create_app doesn't raise)
+        run: python -c "from app import create_app; create_app()"
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: mypy
+        run: mypy app tests scripts migrations
+
+  migrations:
+    name: Migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mot
+          POSTGRES_PASSWORD: mot
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: postgresql+psycopg://mot:mot@localhost:5432/mot_garage_ci
+      FLASK_APP: app:create_app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create the target database
+        run: |
+          python -c "
+          import psycopg
+          conn = psycopg.connect('postgresql://mot:mot@localhost:5432/postgres', autocommit=True)
+          conn.execute('CREATE DATABASE mot_garage_ci')
+          "
+
+      - name: flask db upgrade (clean apply from empty)
+        run: flask db upgrade
+
+      - name: flask db heads (exactly one head)
+        run: |
+          heads="$(flask db heads)"
+          echo "$heads"
+          count="$(echo "$heads" | grep -c '(head)')"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Expected exactly one migration head, found $count - two branches likely added migrations against the same parent revision."
+            exit 1
+          fi
+
+      - name: flask db migrate (models match migration history)
+        run: |
+          output="$(flask db migrate -m "ci-drift-check" 2>&1)"
+          echo "$output"
+          if ! echo "$output" | grep -q "No changes in schema detected"; then
+            echo "::error::Migration drift detected - the models and migration history disagree. Run 'flask db migrate' locally against a scratch database and commit the generated migration."
+            exit 1
+          fi
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: mot
+          POSTGRES_PASSWORD: mot
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://mot:mot@localhost:5432/mot_garage_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: pytest
+        run: pytest --cov=app --cov-report=term --cov-report=html
+
+      - name: Upload test result log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: tests/test-results/test.log
+          if-no-files-found: warn
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          if-no-files-found: warn
+
+  openapi:
+    name: OpenAPI spec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate and validate the OpenAPI spec
+        run: |
+          python -c "
+          import json
+          from app import create_app
+
+          app = create_app()
+          with app.test_client() as client:
+              resp = client.get('/api/openapi.json')
+              assert resp.status_code == 200, f'unexpected status {resp.status_code}'
+              spec = json.loads(resp.data)
+              assert spec.get('paths'), 'spec has no paths'
+              print(f\"OK - openapi.json is valid with {len(spec['paths'])} paths\")
+          "
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the api image
+        run: docker build -t mot-garage-backend:ci .

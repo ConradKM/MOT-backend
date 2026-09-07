@@ -63,9 +63,7 @@ def _truncate_all_tables() -> None:
     table_names = [table.name for table in reversed(db.metadata.sorted_tables)]
     if not table_names:
         return
-    db.session.execute(
-        db.text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE")
-    )
+    db.session.execute(db.text(f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE"))
     db.session.commit()
 
 
@@ -365,7 +363,7 @@ def booking_request(session, garage):
         vehicle_model="Civic",
         vehicle_year=2018,
         vehicle_mileage=61000,
-        preferred_date=datetime.date.today() + datetime.timedelta(days=3),
+        preferred_date=datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=3),
         preferred_time=datetime.time(10, 0),
         notes="Please call before 5pm.",
     )
@@ -532,9 +530,7 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     report = outcome.get_result()
 
-    is_relevant = report.when == "call" or (
-        report.when == "setup" and report.outcome != "passed"
-    )
+    is_relevant = report.when == "call" or (report.when == "setup" and report.outcome != "passed")
     if not is_relevant:
         return
 

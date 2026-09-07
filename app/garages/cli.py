@@ -37,8 +37,13 @@ from app.garages.onboarding import (
 
 
 def _specs_from_options(
-    file, name, owner_email, owner_password, owner_first_name,
-    owner_last_name, layout_variant,
+    file,
+    name,
+    owner_email,
+    owner_password,
+    owner_first_name,
+    owner_last_name,
+    layout_variant,
 ) -> tuple[GarageSpec, OwnerSpec]:
     if file:
         return load_spec_file(file)
@@ -53,9 +58,7 @@ def _specs_from_options(
         if not value
     ]
     if missing:
-        raise OnboardingError(
-            f"Provide --file, or all of: {', '.join(missing)}."
-        )
+        raise OnboardingError(f"Provide --file, or all of: {', '.join(missing)}.")
 
     return (
         GarageSpec(name=name, layout_variant=layout_variant),
@@ -92,14 +95,25 @@ def _specs_from_options(
 )
 @with_appcontext
 def onboard_garage_command(
-    file, name, owner_email, owner_password, owner_first_name,
-    owner_last_name, layout_variant, dry_run,
+    file,
+    name,
+    owner_email,
+    owner_password,
+    owner_first_name,
+    owner_last_name,
+    layout_variant,
+    dry_run,
 ):
     """Create a garage tenant and its first OWNER account."""
     try:
         garage_spec, owner_spec = _specs_from_options(
-            file, name, owner_email, owner_password,
-            owner_first_name, owner_last_name, layout_variant,
+            file,
+            name,
+            owner_email,
+            owner_password,
+            owner_first_name,
+            owner_last_name,
+            layout_variant,
         )
 
         if dry_run:
@@ -120,10 +134,7 @@ def onboard_garage_command(
     click.echo(f"  slug:          {result.garage.slug}")
     click.echo(f"  layout:        {result.garage.layout_variant or 'default'}")
     click.echo(f"  owner:         {result.owner.email} (OWNER)")
-    click.echo(
-        "\nThe owner can now sign in at the garage login with the password "
-        "you set."
-    )
+    click.echo("\nThe owner can now sign in at the garage login with the password you set.")
 
 
 @click.command("update-garage-details")
@@ -140,9 +151,7 @@ def onboard_garage_command(
 @click.option("--postcode", default=None)
 @click.option("--website", default=None)
 @with_appcontext
-def update_garage_details_command(
-    identifier, name, email, phone, address, postcode, website
-):
+def update_garage_details_command(identifier, name, email, phone, address, postcode, website):
     """Update ONE tenant's business details (platform-side, read-only to users).
 
     Only the named garage is affected. The public slug is never changed.

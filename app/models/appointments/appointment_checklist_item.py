@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -9,8 +10,15 @@ from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.appointments.appointment_checklist import AppointmentChecklist
+    from app.models.appointments.checklist_item_media import ChecklistItemMedia
+    from app.models.appointments.checklist_template_item import ChecklistTemplateItem
+    from app.models.employee import Employee
+    from app.models.garage import Garage
 
-class AppointmentChecklistItem(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class AppointmentChecklistItem(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """One logged result against a snapshotted checklist step.
 
     label/is_compulsory/media_type/media_required_for_statuses are copied
@@ -63,11 +71,16 @@ class AppointmentChecklistItem(db.Model, PrimaryKeyMixin, TimestampMixin):
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    garage = relationship("Garage")
-    appointment_checklist = relationship("AppointmentChecklist", back_populates="items")
-    checklist_template_item = relationship("ChecklistTemplateItem")
-    completed_by = relationship("Employee")
-    media = relationship(
-        "ChecklistItemMedia", back_populates="appointment_checklist_item",
+    garage: Mapped["Garage"] = relationship("Garage")
+    appointment_checklist: Mapped["AppointmentChecklist"] = relationship(
+        "AppointmentChecklist", back_populates="items"
+    )
+    checklist_template_item: Mapped["ChecklistTemplateItem | None"] = relationship(
+        "ChecklistTemplateItem"
+    )
+    completed_by: Mapped["Employee | None"] = relationship("Employee")
+    media: Mapped[list["ChecklistItemMedia"]] = relationship(
+        "ChecklistItemMedia",
+        back_populates="appointment_checklist_item",
         cascade="all, delete-orphan",
     )

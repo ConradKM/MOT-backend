@@ -32,7 +32,6 @@ def _normalize_registration(value: str) -> str:
 
 @customer_auth_blp.route("/login")
 class CustomerLogin(MethodView):
-
     @customer_auth_blp.arguments(CustomerLoginSchema)
     @customer_auth_blp.response(200, CustomerTokenSchema)
     def post(self, data):
@@ -69,7 +68,6 @@ class CustomerLogin(MethodView):
 
 @customer_auth_blp.route("/refresh")
 class CustomerRefresh(MethodView):
-
     @jwt_required(refresh=True)
     @customer_auth_blp.response(200, CustomerRefreshTokenSchema)
     def post(self):

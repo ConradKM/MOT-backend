@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -5,8 +7,26 @@ from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.appointments.appointment import Appointment
+    from app.models.appointments.appointment_type import GarageAppointmentType
+    from app.models.communications.garage_communication_settings import (
+        GarageCommunicationSettings,
+    )
+    from app.models.customer import Customer
+    from app.models.employee import Employee
+    from app.models.garage_schedule import (
+        GarageOpeningHours,
+        GarageScheduleException,
+        GarageScheduleSettings,
+    )
+    from app.models.mot_record import MOTRecord
+    from app.models.mot_reminder_settings import MOTReminderSettings
+    from app.models.role import Role
+    from app.models.vehicle import Vehicle
 
-class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """A tenant.
 
     Three identifiers, three owners:
@@ -28,9 +48,7 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
     __tablename__ = "garages"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    slug: Mapped[str] = mapped_column(
-        String(120), unique=True, nullable=False, index=True
-    )
+    slug: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
     # NULL -> the shared default layout. A non-null value is a key into
     # app/garages/layouts.py::LAYOUT_VARIANTS. Set only by onboarding.
     layout_variant: Mapped[str | None] = mapped_column(String(50))
@@ -45,50 +63,50 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):
     postcode: Mapped[str | None] = mapped_column(String(20))
     website: Mapped[str | None] = mapped_column(String(200))
 
-    employees = relationship(
+    employees: Mapped[list["Employee"]] = relationship(
         "Employee", back_populates="garage", cascade="all, delete-orphan"
     )
-    customers = relationship(
+    customers: Mapped[list["Customer"]] = relationship(
         "Customer", back_populates="garage", cascade="all, delete-orphan"
     )
-    vehicles = relationship(
+    vehicles: Mapped[list["Vehicle"]] = relationship(
         "Vehicle", back_populates="garage", cascade="all, delete-orphan"
     )
-    mot_records = relationship(
+    mot_records: Mapped[list["MOTRecord"]] = relationship(
         "MOTRecord", back_populates="garage", cascade="all, delete-orphan"
     )
-    appointments = relationship(
+    appointments: Mapped[list["Appointment"]] = relationship(
         "Appointment", back_populates="garage", cascade="all, delete-orphan"
     )
-    appointment_types = relationship(
+    appointment_types: Mapped[list["GarageAppointmentType"]] = relationship(
         "GarageAppointmentType", back_populates="garage", cascade="all, delete-orphan"
     )
-    roles = relationship(
+    roles: Mapped[list["Role"]] = relationship(
         "Role", back_populates="garage", cascade="all, delete-orphan"
     )
-    mot_reminder_settings = relationship(
+    mot_reminder_settings: Mapped["MOTReminderSettings | None"] = relationship(
         "MOTReminderSettings",
         back_populates="garage",
         uselist=False,
         cascade="all, delete-orphan",
     )
-    schedule_settings = relationship(
+    schedule_settings: Mapped["GarageScheduleSettings | None"] = relationship(
         "GarageScheduleSettings",
         back_populates="garage",
         uselist=False,
         cascade="all, delete-orphan",
     )
-    opening_hours = relationship(
+    opening_hours: Mapped[list["GarageOpeningHours"]] = relationship(
         "GarageOpeningHours",
         back_populates="garage",
         cascade="all, delete-orphan",
     )
-    schedule_exceptions = relationship(
+    schedule_exceptions: Mapped[list["GarageScheduleException"]] = relationship(
         "GarageScheduleException",
         back_populates="garage",
         cascade="all, delete-orphan",
     )
-    communication_settings = relationship(
+    communication_settings: Mapped["GarageCommunicationSettings | None"] = relationship(
         "GarageCommunicationSettings",
         back_populates="garage",
         uselist=False,

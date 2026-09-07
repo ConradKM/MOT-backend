@@ -1,4 +1,5 @@
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -7,8 +8,11 @@ from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.garage import Garage
 
-class GarageAppointmentStatus(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class GarageAppointmentStatus(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """A garage-configurable label + colour for an appointment status.
 
     `Appointment.status` stays a plain string - this table just customises how
@@ -36,4 +40,4 @@ class GarageAppointmentStatus(db.Model, PrimaryKeyMixin, TimestampMixin):
     # One of the seven built-ins: its key can't change and it can't be deleted.
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-    garage = relationship("Garage")
+    garage: Mapped["Garage"] = relationship("Garage")

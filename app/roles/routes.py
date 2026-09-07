@@ -20,7 +20,6 @@ roles_blp = Blueprint(
 
 @roles_blp.route("/")
 class RoleList(MethodView):
-
     @jwt_required()
     @roles_blp.response(200, RoleSchema(many=True))
     def get(self):
@@ -49,7 +48,6 @@ class RoleList(MethodView):
 
 @roles_blp.route("/<uuid:role_id>")
 class RoleResource(MethodView):
-
     @jwt_required()
     @owner_required
     @roles_blp.arguments(RoleUpdateSchema)

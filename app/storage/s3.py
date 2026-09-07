@@ -31,17 +31,21 @@ class S3Storage:
         )
 
     def presigned_put_url(self, key: str, content_type: str, expires_in: int) -> str:
-        return self._client.generate_presigned_url(
-            "put_object",
-            Params={"Bucket": self._bucket, "Key": key, "ContentType": content_type},
-            ExpiresIn=expires_in,
+        return str(
+            self._client.generate_presigned_url(
+                "put_object",
+                Params={"Bucket": self._bucket, "Key": key, "ContentType": content_type},
+                ExpiresIn=expires_in,
+            )
         )
 
     def presigned_get_url(self, key: str, expires_in: int) -> str:
-        return self._client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self._bucket, "Key": key},
-            ExpiresIn=expires_in,
+        return str(
+            self._client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": self._bucket, "Key": key},
+                ExpiresIn=expires_in,
+            )
         )
 
     def object_exists(self, key: str) -> bool:

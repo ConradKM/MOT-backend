@@ -43,9 +43,7 @@ def test_list_vehicles(authenticated_user, vehicle):
 
 
 def test_list_vehicles_filter_by_registration(authenticated_user, vehicle):
-    resp = authenticated_user.client.get(
-        "/api/vehicles/", query_string={"registration": "ab12"}
-    )
+    resp = authenticated_user.client.get("/api/vehicles/", query_string={"registration": "ab12"})
 
     assert resp.status_code == 200
     assert any(v["id"] == str(vehicle.id) for v in resp.get_json())
@@ -100,9 +98,7 @@ def test_delete_vehicle_with_an_appointment_is_archived_not_deleted(
 ):
     import datetime
 
-    appt = make_appointment(
-        datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1)
-    )
+    appt = make_appointment(datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1))
     appt.vehicle_id = vehicle.id
     session.commit()
 

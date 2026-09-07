@@ -7,6 +7,7 @@ existing tenants without a data backfill.
 """
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, ForeignKey, Integer, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -15,12 +16,13 @@ from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.garage import Garage
 
-class MOTReminderSettings(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class MOTReminderSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "mot_reminder_settings"
-    __table_args__ = (
-        UniqueConstraint("garage_id", name="uq_mot_reminder_settings_garage_id"),
-    )
+    __table_args__ = (UniqueConstraint("garage_id", name="uq_mot_reminder_settings_garage_id"),)
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -50,4 +52,4 @@ class MOTReminderSettings(db.Model, PrimaryKeyMixin, TimestampMixin):
         Integer, nullable=False, default=1, server_default="1"
     )
 
-    garage = relationship("Garage", back_populates="mot_reminder_settings")
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="mot_reminder_settings")
