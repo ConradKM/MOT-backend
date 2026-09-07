@@ -63,12 +63,25 @@ def test_overview_counts_reflect_real_data(session, garage, authenticated_client
     _log(session, garage, channel="VOICE", direction="INBOUND", status="completed", created_at=now)
     _log(session, garage, channel="VOICE", direction="INBOUND", status="no-answer", created_at=now)
     _log(
-        session, garage, channel="WHATSAPP", direction="INBOUND", status="received",
-        from_address=WHATSAPP_SENDER, to_address=WHATSAPP_SENDER, body="hi", read_at=None,
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        status="received",
+        from_address=WHATSAPP_SENDER,
+        to_address=WHATSAPP_SENDER,
+        body="hi",
+        read_at=None,
     )
     _log(
-        session, garage, channel="WHATSAPP", direction="OUTBOUND", status="queued",
-        from_address=WHATSAPP_SENDER, to_address="whatsapp:+447123400222", created_at=now,
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="OUTBOUND",
+        status="queued",
+        from_address=WHATSAPP_SENDER,
+        to_address="whatsapp:+447123400222",
+        created_at=now,
     )
 
     resp = authenticated_client.get("/api/communications/overview")
@@ -209,9 +222,33 @@ def test_initiate_call_404s_for_other_tenants_customer(authenticated_client, sec
 def test_conversations_group_by_counterpart(session, garage, authenticated_client):
     addr_a = "whatsapp:+447123400001"
     addr_b = "whatsapp:+447123400002"
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=addr_a, to_address=WHATSAPP_SENDER, body="hi")
-    _log(session, garage, channel="WHATSAPP", direction="OUTBOUND", from_address=WHATSAPP_SENDER, to_address=addr_a, body="hello back")
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=addr_b, to_address=WHATSAPP_SENDER, body="different person")
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=addr_a,
+        to_address=WHATSAPP_SENDER,
+        body="hi",
+    )
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="OUTBOUND",
+        from_address=WHATSAPP_SENDER,
+        to_address=addr_a,
+        body="hello back",
+    )
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=addr_b,
+        to_address=WHATSAPP_SENDER,
+        body="different person",
+    )
 
     resp = authenticated_client.get("/api/communications/conversations")
     body = resp.get_json()
@@ -220,13 +257,31 @@ def test_conversations_group_by_counterpart(session, garage, authenticated_clien
     assert phones == {"+447123400001", "+447123400002"}
 
 
-def test_conversations_never_merge_across_tenants(session, garage, second_garage, authenticated_client):
+def test_conversations_never_merge_across_tenants(
+    session, garage, second_garage, authenticated_client
+):
     """The same real-world phone number messaging two different garages must
     show up as two completely separate conversations - see task requirement
     that a shared customer phone number across tenants never merges."""
     shared = "whatsapp:+447123400555"
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=shared, to_address=WHATSAPP_SENDER, body="to garage A")
-    _log(session, second_garage, channel="WHATSAPP", direction="INBOUND", from_address=shared, to_address=WHATSAPP_SENDER, body="to garage B - should never appear")
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=shared,
+        to_address=WHATSAPP_SENDER,
+        body="to garage A",
+    )
+    _log(
+        session,
+        second_garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=shared,
+        to_address=WHATSAPP_SENDER,
+        body="to garage B - should never appear",
+    )
 
     resp = authenticated_client.get("/api/communications/conversations")
     body = resp.get_json()
@@ -236,9 +291,35 @@ def test_conversations_never_merge_across_tenants(session, garage, second_garage
 
 def test_conversations_unread_count(session, garage, authenticated_client):
     addr = "whatsapp:+447123400003"
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=addr, to_address=WHATSAPP_SENDER, body="1", read_at=None)
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=addr, to_address=WHATSAPP_SENDER, body="2", read_at=None)
-    _log(session, garage, channel="WHATSAPP", direction="OUTBOUND", from_address=WHATSAPP_SENDER, to_address=addr, body="reply")
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=addr,
+        to_address=WHATSAPP_SENDER,
+        body="1",
+        read_at=None,
+    )
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=addr,
+        to_address=WHATSAPP_SENDER,
+        body="2",
+        read_at=None,
+    )
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="OUTBOUND",
+        from_address=WHATSAPP_SENDER,
+        to_address=addr,
+        body="reply",
+    )
 
     resp = authenticated_client.get("/api/communications/conversations")
     convo = resp.get_json()["items"][0]
@@ -248,9 +329,36 @@ def test_conversations_unread_count(session, garage, authenticated_client):
 def test_conversation_messages_are_chronological(session, garage, authenticated_client):
     addr = "whatsapp:+447123400004"
     now = datetime.now(UTC)
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=addr, to_address=WHATSAPP_SENDER, body="first", created_at=now - timedelta(minutes=10))
-    _log(session, garage, channel="WHATSAPP", direction="OUTBOUND", from_address=WHATSAPP_SENDER, to_address=addr, body="second", created_at=now - timedelta(minutes=5))
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=addr, to_address=WHATSAPP_SENDER, body="third", created_at=now)
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=addr,
+        to_address=WHATSAPP_SENDER,
+        body="first",
+        created_at=now - timedelta(minutes=10),
+    )
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="OUTBOUND",
+        from_address=WHATSAPP_SENDER,
+        to_address=addr,
+        body="second",
+        created_at=now - timedelta(minutes=5),
+    )
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=addr,
+        to_address=WHATSAPP_SENDER,
+        body="third",
+        created_at=now,
+    )
 
     resp = authenticated_client.get("/api/communications/conversations/+447123400004/messages")
     bodies = [m["body"] for m in resp.get_json()["messages"]]
@@ -261,8 +369,24 @@ def test_conversation_messages_tenant_scoped_even_for_same_number(
     session, garage, second_garage, authenticated_client
 ):
     shared = "whatsapp:+447123400556"
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=shared, to_address=WHATSAPP_SENDER, body="garage A message")
-    _log(session, second_garage, channel="WHATSAPP", direction="INBOUND", from_address=shared, to_address=WHATSAPP_SENDER, body="garage B message")
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=shared,
+        to_address=WHATSAPP_SENDER,
+        body="garage A message",
+    )
+    _log(
+        session,
+        second_garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=shared,
+        to_address=WHATSAPP_SENDER,
+        body="garage B message",
+    )
 
     resp = authenticated_client.get("/api/communications/conversations/+447123400556/messages")
     bodies = [m["body"] for m in resp.get_json()["messages"]]
@@ -284,10 +408,25 @@ def test_mark_conversation_read_updates_only_that_threads_inbound_rows(
     session, garage, authenticated_client
 ):
     addr = "whatsapp:+447123400005"
-    unread = _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=addr, to_address=WHATSAPP_SENDER, body="unread", read_at=None)
+    unread = _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=addr,
+        to_address=WHATSAPP_SENDER,
+        body="unread",
+        read_at=None,
+    )
     other_thread_unread = _log(
-        session, garage, channel="WHATSAPP", direction="INBOUND",
-        from_address="whatsapp:+447123400006", to_address=WHATSAPP_SENDER, body="different thread", read_at=None,
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address="whatsapp:+447123400006",
+        to_address=WHATSAPP_SENDER,
+        body="different thread",
+        read_at=None,
     )
 
     resp = authenticated_client.post("/api/communications/conversations/+447123400005/read")
@@ -302,7 +441,16 @@ def test_mark_conversation_read_updates_only_that_threads_inbound_rows(
 
 def test_mark_conversation_read_is_idempotent(session, garage, authenticated_client):
     addr = "whatsapp:+447123400007"
-    _log(session, garage, channel="WHATSAPP", direction="INBOUND", from_address=addr, to_address=WHATSAPP_SENDER, body="hi", read_at=None)
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=addr,
+        to_address=WHATSAPP_SENDER,
+        body="hi",
+        read_at=None,
+    )
 
     first = authenticated_client.post("/api/communications/conversations/+447123400007/read")
     second = authenticated_client.post("/api/communications/conversations/+447123400007/read")
@@ -316,7 +464,9 @@ def test_mark_conversation_read_is_idempotent(session, garage, authenticated_cli
 # --------------------------------------------------------------------------
 
 
-def test_send_whatsapp_by_customer_id_is_skipped_without_twilio(session, garage, authenticated_client):
+def test_send_whatsapp_by_customer_id_is_skipped_without_twilio(
+    session, garage, authenticated_client
+):
     from app.models.customer import Customer
 
     mobile_customer = Customer(
@@ -362,7 +512,9 @@ def test_send_whatsapp_404s_for_other_tenants_customer(authenticated_client, sec
 def test_send_whatsapp_422s_when_customer_has_no_phone(session, garage, authenticated_client):
     from app.models.customer import Customer
 
-    no_phone_customer = Customer(garage_id=garage.id, first_name="No", last_name="Phone", phone=None)
+    no_phone_customer = Customer(
+        garage_id=garage.id, first_name="No", last_name="Phone", phone=None
+    )
     session.add(no_phone_customer)
     session.commit()
 
@@ -390,7 +542,9 @@ def test_customer_communications_only_shows_that_customers_rows(
     assert ids == [str(mine.id)]
 
 
-def test_customer_communications_404s_for_other_tenants_customer(authenticated_client, second_customer):
+def test_customer_communications_404s_for_other_tenants_customer(
+    authenticated_client, second_customer
+):
     resp = authenticated_client.get(f"/api/customers/{second_customer.id}/communications")
     assert resp.status_code == 404
 

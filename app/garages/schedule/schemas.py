@@ -9,9 +9,7 @@ class ScheduleSettingsSchema(Schema):
     default_appointment_minutes = fields.Int(validate=validate.Range(min=5, max=480))
     min_lead_time_hours = fields.Int(validate=validate.Range(min=0, max=24 * 90))
     max_advance_days = fields.Int(validate=validate.Range(min=1, max=365))
-    capacity_per_slot = fields.Int(
-        allow_none=True, validate=validate.Range(min=1, max=100)
-    )
+    capacity_per_slot = fields.Int(allow_none=True, validate=validate.Range(min=1, max=100))
     limited_threshold_ratio = fields.Float(validate=validate.Range(min=0, max=1))
 
     created_at = fields.DateTime(dump_only=True)
@@ -48,9 +46,7 @@ class ScheduleExceptionSchema(Schema):
     is_closed = fields.Bool(load_default=True)
     opens_at = fields.Time(allow_none=True, load_default=None)
     closes_at = fields.Time(allow_none=True, load_default=None)
-    note = fields.Str(
-        allow_none=True, load_default=None, validate=validate.Length(max=200)
-    )
+    note = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=200))
 
     created_at = fields.DateTime(dump_only=True)
 
@@ -59,9 +55,5 @@ class GarageScheduleSchema(Schema):
     """Full GET /api/garage/schedule payload."""
 
     settings = fields.Nested(ScheduleSettingsSchema, dump_only=True)
-    opening_hours = fields.List(
-        fields.Nested(OpeningHoursEntrySchema), dump_only=True
-    )
-    exceptions = fields.List(
-        fields.Nested(ScheduleExceptionSchema), dump_only=True
-    )
+    opening_hours = fields.List(fields.Nested(OpeningHoursEntrySchema), dump_only=True)
+    exceptions = fields.List(fields.Nested(ScheduleExceptionSchema), dump_only=True)

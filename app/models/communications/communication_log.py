@@ -20,6 +20,7 @@ the one row matching a SID rather than ever inserting a second one.
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -27,6 +28,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.appointments.appointment import Appointment
+    from app.models.booking_request import BookingRequest
+    from app.models.customer import Customer
+    from app.models.garage import Garage
 
 CHANNEL_VOICE = "VOICE"
 CHANNEL_WHATSAPP = "WHATSAPP"
@@ -49,7 +56,7 @@ DIRECTIONS = (DIRECTION_INBOUND, DIRECTION_OUTBOUND, DIRECTION_SYSTEM)
 STATUS_SKIPPED_NOT_CONFIGURED = "SKIPPED_NOT_CONFIGURED"
 
 
-class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):
+class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "communication_logs"
     __table_args__ = (
         Index("ix_communication_logs_garage_id_created_at", "garage_id", "created_at"),
@@ -104,7 +111,7 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):
     # inbound message/call is ever "unread".
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    garage = relationship("Garage")
-    customer = relationship("Customer")
-    appointment = relationship("Appointment")
-    booking_request = relationship("BookingRequest")
+    garage: Mapped["Garage"] = relationship("Garage")
+    customer: Mapped["Customer | None"] = relationship("Customer")
+    appointment: Mapped["Appointment | None"] = relationship("Appointment")
+    booking_request: Mapped["BookingRequest | None"] = relationship("BookingRequest")

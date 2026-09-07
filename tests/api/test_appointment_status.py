@@ -26,7 +26,9 @@ def _make_appointment(authenticated_user, customer):
     return appointment
 
 
-@pytest.mark.parametrize("status", ["REQUESTED", "BOOKED", "IN_PROGRESS", "COMPLETED", "ACTION_NEEDED"])
+@pytest.mark.parametrize(
+    "status", ["REQUESTED", "BOOKED", "IN_PROGRESS", "COMPLETED", "ACTION_NEEDED"]
+)
 def test_appointment_status_accepts_new_values(authenticated_user, customer, status):
     appointment = _make_appointment(authenticated_user, customer)
 

@@ -47,7 +47,9 @@ class CommunicationLogSchema(Schema):
 
     customer = fields.Nested(CommunicationCustomerSchema, dump_only=True, allow_none=True)
     appointment = fields.Nested(CommunicationAppointmentSchema, dump_only=True, allow_none=True)
-    booking_request = fields.Nested(CommunicationBookingRequestSchema, dump_only=True, allow_none=True)
+    booking_request = fields.Nested(
+        CommunicationBookingRequestSchema, dump_only=True, allow_none=True
+    )
 
 
 class CallListQueryArgsSchema(Schema):
@@ -199,7 +201,9 @@ class CallbackRequestSchema(Schema):
 
 
 class CallbackRequestListQueryArgsSchema(Schema):
-    status = fields.Str(load_default=None, validate=validate.OneOf(["PENDING", "COMPLETED", "CANCELLED"]))
+    status = fields.Str(
+        load_default=None, validate=validate.OneOf(["PENDING", "COMPLETED", "CANCELLED"])
+    )
     limit = fields.Int(load_default=None, validate=validate.Range(min=1, max=200))
     offset = fields.Int(load_default=0, validate=validate.Range(min=0))
 

@@ -35,7 +35,6 @@ def get_owned_appointment_type(appointment_type_id, garage_id):
 
 @appointment_types_blp.route("/")
 class AppointmentTypeList(MethodView):
-
     @jwt_required()
     @appointment_types_blp.arguments(AppointmentTypeQueryArgsSchema, location="query")
     @appointment_types_blp.response(200, AppointmentTypeSchema(many=True))
@@ -76,7 +75,6 @@ class AppointmentTypeList(MethodView):
 
 @appointment_types_blp.route("/<uuid:appointment_type_id>")
 class AppointmentTypeResource(MethodView):
-
     @jwt_required()
     @appointment_types_blp.response(200, AppointmentTypeSchema)
     def get(self, appointment_type_id):

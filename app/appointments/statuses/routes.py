@@ -22,9 +22,7 @@ appointment_statuses_blp = Blueprint(
 
 
 def _owned_status(status_id, garage_id):
-    status = GarageAppointmentStatus.query.filter_by(
-        id=status_id, garage_id=garage_id
-    ).first()
+    status = GarageAppointmentStatus.query.filter_by(id=status_id, garage_id=garage_id).first()
     if status is None:
         abort(404, message="Appointment status not found")
     return status
@@ -32,7 +30,6 @@ def _owned_status(status_id, garage_id):
 
 @appointment_statuses_blp.route("/")
 class AppointmentStatusList(MethodView):
-
     @jwt_required()
     @appointment_statuses_blp.response(200, AppointmentStatusSchema(many=True))
     def get(self):
@@ -71,7 +68,6 @@ class AppointmentStatusList(MethodView):
 
 @appointment_statuses_blp.route("/<uuid:status_id>")
 class AppointmentStatusResource(MethodView):
-
     @jwt_required()
     @owner_required
     @appointment_statuses_blp.arguments(AppointmentStatusUpdateSchema)
@@ -96,9 +92,7 @@ class AppointmentStatusResource(MethodView):
         if status.is_system:
             abort(403, message="Built-in statuses can't be deleted.")
 
-        in_use = Appointment.query.filter_by(
-            garage_id=garage_id, status=status.key
-        ).first()
+        in_use = Appointment.query.filter_by(garage_id=garage_id, status=status.key).first()
         if in_use is not None:
             abort(409, message="This status is in use by one or more appointments.")
 

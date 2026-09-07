@@ -54,7 +54,6 @@ def _get_active_appointment_type(garage, appointment_type_id):
 
 @public_booking_blp.route("/<slug>")
 class PublicGarageBySlug(MethodView):
-
     @public_booking_blp.response(200, PublicGarageDetailSchema)
     def get(self, slug):
         garage = _get_garage_by_slug(slug)
@@ -63,28 +62,22 @@ class PublicGarageBySlug(MethodView):
             "id": garage.id,
             "name": garage.name,
             "slug": garage.slug,
-            "appointment_types": [
-                t for t in garage.appointment_types if t.status == "ACTIVE"
-            ],
+            "appointment_types": [t for t in garage.appointment_types if t.status == "ACTIVE"],
         }
 
 
 @public_booking_blp.route("/<slug>/availability")
 class PublicGarageAvailability(MethodView):
-
     @limiter.limit(lambda: current_app.config["PUBLIC_AVAILABILITY_RATELIMIT"])
     @public_booking_blp.arguments(AvailabilityQueryArgsSchema, location="query")
     @public_booking_blp.response(200, AvailabilityRangeSchema)
     def get(self, args, slug):
         garage = _get_garage_by_slug(slug)
-        return availability_range(
-            garage, args.get("from_"), args.get("to"), datetime.now(UTC)
-        )
+        return availability_range(garage, args.get("from_"), args.get("to"), datetime.now(UTC))
 
 
 @public_booking_blp.route("/<slug>/availability/<day>")
 class PublicGarageDayAvailability(MethodView):
-
     @limiter.limit(lambda: current_app.config["PUBLIC_AVAILABILITY_RATELIMIT"])
     @public_booking_blp.arguments(DayAvailabilityQueryArgsSchema, location="query")
     @public_booking_blp.response(200, DaySlotsSchema)
@@ -100,7 +93,6 @@ class PublicGarageDayAvailability(MethodView):
 
 @public_booking_blp.route("/<slug>/booking-requests")
 class BookingRequestSubmit(MethodView):
-
     # Rate-limit before parsing anything. Storage / on-off / the limit string
     # itself are all config-driven (see app/config.py + app/extensions.py).
     @limiter.limit(lambda: current_app.config["PUBLIC_BOOKING_RATELIMIT"])
@@ -141,15 +133,13 @@ class BookingRequestSubmit(MethodView):
                     "too_soon": "That time is inside the garage's minimum "
                     "booking notice. Please pick a later slot.",
                     "out_of_window": "That date is too far ahead to book.",
-                    "full": "This time is no longer available. "
-                    "Please select another time.",
+                    "full": "This time is no longer available. Please select another time.",
                 }
                 abort(
                     409,
                     message=_SLOT_REJECTIONS.get(
                         reason,
-                        "This time is no longer available. "
-                        "Please select another time.",
+                        "This time is no longer available. Please select another time.",
                     ),
                 )
 

@@ -6,9 +6,7 @@ class VehicleSchema(Schema):
     garage_id = fields.UUID(dump_only=True)
 
     customer_id = fields.UUID(required=True)
-    registration_number = fields.Str(
-        required=True, validate=validate.Length(min=1, max=20)
-    )
+    registration_number = fields.Str(required=True, validate=validate.Length(min=1, max=20))
     make = fields.Str(allow_none=True, validate=validate.Length(max=100))
     model = fields.Str(allow_none=True, validate=validate.Length(max=100))
     year = fields.Int(allow_none=True)

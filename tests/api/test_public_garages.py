@@ -33,9 +33,7 @@ def test_unauthenticated_client_can_fetch_one_garage(client, garage):
     }
 
 
-def test_fetch_one_garage_includes_only_active_appointment_types(
-    client, garage, session
-):
+def test_fetch_one_garage_includes_only_active_appointment_types(client, garage, session):
     from app.models.appointments.appointment_type import GarageAppointmentType
 
     active = GarageAppointmentType(garage_id=garage.id, name="Haircut", status="ACTIVE")

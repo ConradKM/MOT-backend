@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -9,8 +10,13 @@ from app.extensions import db
 from .mixins import PrimaryKeyMixin, TimestampMixin
 from .role import employee_roles
 
+if TYPE_CHECKING:
+    from app.models.appointments.appointment import Appointment
+    from app.models.garage import Garage
+    from app.models.role import Role
 
-class Employee(db.Model, PrimaryKeyMixin, TimestampMixin):
+
+class Employee(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "employees"
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -41,20 +47,18 @@ class Employee(db.Model, PrimaryKeyMixin, TimestampMixin):
     )
     # Access/refresh tokens issued before this instant are rejected - set on a
     # password reset so the reset also ends any live sessions.
-    tokens_valid_from: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    tokens_valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    garage = relationship(
+    garage: Mapped["Garage"] = relationship(
         "Garage",
         back_populates="employees",
     )
-    appointments = relationship(
+    appointments: Mapped[list["Appointment"]] = relationship(
         "Appointment",
         back_populates="employee",
         cascade="all, delete-orphan",
     )
-    roles = relationship(
+    roles: Mapped[list["Role"]] = relationship(
         "Role",
         secondary=employee_roles,
         back_populates="employees",

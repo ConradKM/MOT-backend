@@ -126,18 +126,22 @@ def test_communication_log_external_id_allows_many_nulls(session, garage):
     SKIPPED_NOT_CONFIGURED rows (no provider SID) must not collide."""
     session.add(
         CommunicationLog(
-            garage_id=garage.id, channel=CHANNEL_VOICE, direction=DIRECTION_OUTBOUND,
-            status="SKIPPED_NOT_CONFIGURED", external_id=None,
+            garage_id=garage.id,
+            channel=CHANNEL_VOICE,
+            direction=DIRECTION_OUTBOUND,
+            status="SKIPPED_NOT_CONFIGURED",
+            external_id=None,
         )
     )
     session.add(
         CommunicationLog(
-            garage_id=garage.id, channel=CHANNEL_VOICE, direction=DIRECTION_OUTBOUND,
-            status="SKIPPED_NOT_CONFIGURED", external_id=None,
+            garage_id=garage.id,
+            channel=CHANNEL_VOICE,
+            direction=DIRECTION_OUTBOUND,
+            status="SKIPPED_NOT_CONFIGURED",
+            external_id=None,
         )
     )
     session.commit()  # must not raise
 
-    assert (
-        CommunicationLog.query.filter_by(garage_id=garage.id, external_id=None).count() == 2
-    )
+    assert CommunicationLog.query.filter_by(garage_id=garage.id, external_id=None).count() == 2

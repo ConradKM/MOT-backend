@@ -64,7 +64,6 @@ def _sync_vehicle_mot_expiry(vehicle):
 
 @mot_records_blp.route("/")
 class MOTRecordList(MethodView):
-
     @jwt_required()
     @mot_records_blp.response(200, MOTRecordSchema(many=True))
     def get(self, vehicle_id):
@@ -109,7 +108,6 @@ class MOTRecordList(MethodView):
 
 @mot_records_blp.route("/<uuid:record_id>")
 class MOTRecordResource(MethodView):
-
     @jwt_required()
     @mot_records_blp.response(200, MOTRecordSchema)
     def get(self, vehicle_id, record_id):

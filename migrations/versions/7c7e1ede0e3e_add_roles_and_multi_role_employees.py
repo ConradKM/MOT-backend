@@ -5,37 +5,39 @@ Revises: de3750c5d620
 Create Date: 2026-09-01 23:57:24.791581
 
 """
-from alembic import op
-import sqlalchemy as sa
 
+import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = '7c7e1ede0e3e'
-down_revision = 'de3750c5d620'
+revision = "7c7e1ede0e3e"
+down_revision = "de3750c5d620"
 branch_labels = None
 depends_on = None
 
 
 def upgrade():
-    op.create_table('roles',
-    sa.Column('garage_id', sa.Uuid(), nullable=False),
-    sa.Column('name', sa.String(length=50), nullable=False),
-    sa.Column('id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['garage_id'], ['garages.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('garage_id', 'name', name='uq_roles_garage_id_name')
+    op.create_table(
+        "roles",
+        sa.Column("garage_id", sa.Uuid(), nullable=False),
+        sa.Column("name", sa.String(length=50), nullable=False),
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["garage_id"], ["garages.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("garage_id", "name", name="uq_roles_garage_id_name"),
     )
-    with op.batch_alter_table('roles', schema=None) as batch_op:
-        batch_op.create_index(batch_op.f('ix_roles_garage_id'), ['garage_id'], unique=False)
+    with op.batch_alter_table("roles", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_roles_garage_id"), ["garage_id"], unique=False)
 
-    op.create_table('employee_roles',
-    sa.Column('employee_id', sa.Uuid(), nullable=False),
-    sa.Column('role_id', sa.Uuid(), nullable=False),
-    sa.ForeignKeyConstraint(['employee_id'], ['employees.id'], ondelete='CASCADE'),
-    sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ondelete='CASCADE'),
-    sa.PrimaryKeyConstraint('employee_id', 'role_id')
+    op.create_table(
+        "employee_roles",
+        sa.Column("employee_id", sa.Uuid(), nullable=False),
+        sa.Column("role_id", sa.Uuid(), nullable=False),
+        sa.ForeignKeyConstraint(["employee_id"], ["employees.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["role_id"], ["roles.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("employee_id", "role_id"),
     )
 
     # --- employees.role: single string -> employee_roles (many-to-many) ---
@@ -64,8 +66,8 @@ def upgrade():
         """
     )
 
-    with op.batch_alter_table('employees', schema=None) as batch_op:
-        batch_op.drop_column('role')
+    with op.batch_alter_table("employees", schema=None) as batch_op:
+        batch_op.drop_column("role")
 
 
 def downgrade():

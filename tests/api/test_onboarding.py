@@ -139,17 +139,13 @@ def test_onboard_defaults_layout_variant_to_null(session):
 
 
 def test_onboard_accepts_a_registered_layout_variant(session):
-    result = onboard_garage(
-        garage=_garage_spec(layout_variant="default"), owner=_owner_spec()
-    )
+    result = onboard_garage(garage=_garage_spec(layout_variant="default"), owner=_owner_spec())
     assert result.garage.layout_variant == "default"
 
 
 def test_onboard_rejects_an_unknown_layout_variant(session):
     with pytest.raises(OnboardingError):
-        onboard_garage(
-            garage=_garage_spec(layout_variant="bespoke-nope"), owner=_owner_spec()
-        )
+        onboard_garage(garage=_garage_spec(layout_variant="bespoke-nope"), owner=_owner_spec())
     assert Garage.query.count() == 0
 
 
@@ -176,9 +172,7 @@ def test_onboard_duplicate_owner_email_leaves_no_orphan_garage(session):
     before = Garage.query.count()
 
     with pytest.raises(OnboardingEmailInUse):
-        onboard_garage(
-            garage=_garage_spec(name="Second Garage"), owner=_owner_spec()
-        )
+        onboard_garage(garage=_garage_spec(name="Second Garage"), owner=_owner_spec())
 
     assert Garage.query.count() == before
     assert Garage.query.filter_by(name="Second Garage").first() is None
@@ -211,9 +205,7 @@ def test_onboard_two_tenants_are_isolated(session):
     assert a.garage.slug != b.garage.slug
     assert a.owner.garage_id == a.garage.id
     assert b.owner.garage_id == b.garage.id
-    assert (
-        Role.query.filter_by(garage_id=a.garage.id, name="OWNER").count() == 1
-    )
+    assert Role.query.filter_by(garage_id=a.garage.id, name="OWNER").count() == 1
 
 
 # --------------------------------------------------------------------------
@@ -244,7 +236,11 @@ def test_parse_spec_accepts_the_flat_shape():
 def test_parse_spec_rejects_a_top_level_slug():
     with pytest.raises(OnboardingError):
         parse_spec(
-            {"name": "X", "slug": "hand-picked", "owner": {"email": "a@b.co", "password": "longenough1"}}
+            {
+                "name": "X",
+                "slug": "hand-picked",
+                "owner": {"email": "a@b.co", "password": "longenough1"},
+            }
         )
 
 
@@ -353,9 +349,12 @@ def test_cli_onboards_from_inline_options(app, session):
     result = runner.invoke(
         args=[
             "onboard-garage",
-            "--name", "Inline Garage",
-            "--owner-email", "owner@inline.example",
-            "--owner-password", "longenough1",
+            "--name",
+            "Inline Garage",
+            "--owner-email",
+            "owner@inline.example",
+            "--owner-password",
+            "longenough1",
         ]
     )
 

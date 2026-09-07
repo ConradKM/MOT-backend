@@ -7,9 +7,7 @@ back to the built-in default set.
 
 
 def _make_appointment(staff, customer, status=None):
-    appt_type = staff.client.post(
-        "/api/appointment-types/", json={"name": "MOT"}
-    ).get_json()
+    appt_type = staff.client.post("/api/appointment-types/", json={"name": "MOT"}).get_json()
     payload = {
         "employee_id": str(staff.user.id),
         "customer_id": str(customer.id),
@@ -30,16 +28,18 @@ def _make_appointment(staff, customer, status=None):
 def test_register_seeds_the_built_in_status_set(client):
     client.post(
         "/api/auth/register",
-        json={"garage_name": "Fresh Garage", "email": "fresh@example.com", "password": "password-12"},
+        json={
+            "garage_name": "Fresh Garage",
+            "email": "fresh@example.com",
+            "password": "password-12",
+        },
     )
     token = client.post(
         "/api/auth/login",
         json={"email": "fresh@example.com", "password": "password-12"},
     ).get_json()["access_token"]
 
-    resp = client.get(
-        "/api/appointment-statuses/", headers={"Authorization": f"Bearer {token}"}
-    )
+    resp = client.get("/api/appointment-statuses/", headers={"Authorization": f"Bearer {token}"})
     keys = [s["key"] for s in resp.get_json()]
     assert keys == [
         "REQUESTED",
@@ -90,8 +90,9 @@ def test_create_duplicate_key_conflicts(authenticated_user, seeded_statuses):
 
 
 def test_staff_cannot_create_a_status(client, garage, staff_role, session):
-    from werkzeug.security import generate_password_hash
     from flask_jwt_extended import create_access_token
+    from werkzeug.security import generate_password_hash
+
     from app.models.employee import Employee
 
     staff = Employee(
@@ -170,9 +171,7 @@ def test_cross_garage_status_is_404(
         == 404
     )
     assert (
-        second_authenticated_client.delete(
-            f"/api/appointment-statuses/{status_id}"
-        ).status_code
+        second_authenticated_client.delete(f"/api/appointment-statuses/{status_id}").status_code
         == 404
     )
 
@@ -197,9 +196,7 @@ def test_appointment_rejects_an_unknown_status(authenticated_user, customer):
     assert resp.status_code == 422
 
 
-def test_appointment_still_accepts_default_statuses_without_seeding(
-    authenticated_user, customer
-):
+def test_appointment_still_accepts_default_statuses_without_seeding(authenticated_user, customer):
     # authenticated_user's garage has no status rows -> falls back to defaults.
     resp = _make_appointment(authenticated_user, customer, status="IN_PROGRESS")
     assert resp.status_code == 201

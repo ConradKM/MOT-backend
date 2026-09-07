@@ -12,6 +12,7 @@ rule this is designed around.
 
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -19,6 +20,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.customer import Customer
+    from app.models.garage import Garage
 
 CHANNEL_VOICE = "VOICE"
 CHANNEL_WHATSAPP = "WHATSAPP"
@@ -31,14 +36,17 @@ STATUS_HUMAN_HANDOFF = "HUMAN_HANDOFF"
 STATUSES = (STATUS_ACTIVE, STATUS_EXPIRED, STATUS_COMPLETED, STATUS_HUMAN_HANDOFF)
 
 
-class ConversationSession(db.Model, PrimaryKeyMixin, TimestampMixin):
+class ConversationSession(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "conversation_sessions"
     __table_args__ = (
         # The engine's first job on any inbound message is "find my active
         # session for this garage+channel+number" - this is that lookup.
         Index(
             "ix_conversation_sessions_lookup",
-            "garage_id", "channel", "customer_phone", "status",
+            "garage_id",
+            "channel",
+            "customer_phone",
+            "status",
         ),
     )
 
@@ -84,5 +92,5 @@ class ConversationSession(db.Model, PrimaryKeyMixin, TimestampMixin):
     last_external_message_id: Mapped[str | None] = mapped_column(String(100))
     last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
-    garage = relationship("Garage")
-    customer = relationship("Customer")
+    garage: Mapped["Garage"] = relationship("Garage")
+    customer: Mapped["Customer | None"] = relationship("Customer")

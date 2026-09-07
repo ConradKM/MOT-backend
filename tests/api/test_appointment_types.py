@@ -115,7 +115,9 @@ def test_list_filtered_by_status_excludes_others(authenticated_user):
         "/api/appointment-types/", json={"name": "Old MOT", "status": "HIDDEN"}
     ).get_json()
 
-    resp = authenticated_user.client.get("/api/appointment-types/", query_string={"status": "ACTIVE"})
+    resp = authenticated_user.client.get(
+        "/api/appointment-types/", query_string={"status": "ACTIVE"}
+    )
 
     ids = {t["id"] for t in resp.get_json()}
     assert active["id"] in ids

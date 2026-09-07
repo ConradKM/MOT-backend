@@ -13,23 +13,21 @@ UTC = datetime.UTC
 
 
 def _future_weekday(min_days=5):
-    d = datetime.date.today() + datetime.timedelta(days=min_days)
+    d = datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=min_days)
     while d.weekday() >= 5:  # Sat / Sun
         d += datetime.timedelta(days=1)
     return d
 
 
 def _future_weekend(min_days=3):
-    d = datetime.date.today() + datetime.timedelta(days=min_days)
+    d = datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=min_days)
     while d.weekday() < 5:
         d += datetime.timedelta(days=1)
     return d
 
 
 def _at(day, hour, minute=0):
-    return datetime.datetime.combine(
-        day, datetime.time(hour, minute), tzinfo=UTC
-    )
+    return datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=UTC)
 
 
 # --------------------------------------------------------------------------
@@ -48,14 +46,17 @@ def test_range_shape_with_default_schedule(client, garage):
         "booking_window_start",
         "booking_window_end",
     }
-    assert body["rules"]["booking_window_start"] == datetime.date.today().isoformat()
+    assert (
+        body["rules"]["booking_window_start"]
+        == datetime.datetime.now(datetime.UTC).date().isoformat()
+    )
 
     hours = {h["weekday"]: h for h in body["opening_hours"]}
     assert len(hours) == 7
     assert hours[0]["is_closed"] is False
     assert hours[5]["is_closed"] is True and hours[6]["is_closed"] is True
 
-    assert body["days"][0]["date"] == datetime.date.today().isoformat()
+    assert body["days"][0]["date"] == datetime.datetime.now(datetime.UTC).date().isoformat()
     assert {d["level"] for d in body["days"]} <= {
         "available",
         "limited",
@@ -66,7 +67,7 @@ def test_range_shape_with_default_schedule(client, garage):
 
 
 def test_range_respects_from_and_to(client, garage):
-    start = datetime.date.today() + datetime.timedelta(days=3)
+    start = datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=3)
     end = start + datetime.timedelta(days=4)
     body = client.get(
         f"/api/public/{garage.slug}/availability",
@@ -79,7 +80,7 @@ def test_range_respects_from_and_to(client, garage):
 
 
 def test_range_caps_to_at_booking_window_end(client, garage):
-    far = (datetime.date.today() + datetime.timedelta(days=999)).isoformat()
+    far = (datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=999)).isoformat()
     body = client.get(
         f"/api/public/{garage.slug}/availability", query_string={"to": far}
     ).get_json()
@@ -88,12 +89,14 @@ def test_range_caps_to_at_booking_window_end(client, garage):
 
 
 def test_range_clamps_past_from_to_today(client, garage):
-    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    yesterday = (
+        datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=1)
+    ).isoformat()
     body = client.get(
         f"/api/public/{garage.slug}/availability", query_string={"from": yesterday}
     ).get_json()
 
-    assert body["days"][0]["date"] == datetime.date.today().isoformat()
+    assert body["days"][0]["date"] == datetime.datetime.now(datetime.UTC).date().isoformat()
 
 
 def test_weekend_day_is_closed(client, garage):
@@ -109,9 +112,7 @@ def test_weekend_day_is_closed(client, garage):
 
 def test_unknown_slug_returns_404(client):
     assert client.get("/api/public/nope/availability").status_code == 404
-    assert (
-        client.get("/api/public/nope/availability/2026-09-10").status_code == 404
-    )
+    assert client.get("/api/public/nope/availability/2026-09-10").status_code == 404
 
 
 # --------------------------------------------------------------------------
@@ -121,9 +122,7 @@ def test_unknown_slug_returns_404(client):
 
 def test_day_slots_listed_for_an_open_weekday(client, garage):
     day = _future_weekday()
-    body = client.get(
-        f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-    ).get_json()
+    body = client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()
 
     assert body["is_open"] is True
     # 09:00-17:00, 30-min interval, 60-min duration -> 09:00 .. 16:00 = 15 slots
@@ -145,9 +144,9 @@ def test_booked_appointment_marks_the_slot(client, garage, make_appointment):
 
     slots = {
         s["start"]: s
-        for s in client.get(
-            f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-        ).get_json()["slots"]
+        for s in client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()[
+            "slots"
+        ]
     }
 
     assert slots["10:00"]["status"] == "booked"
@@ -156,24 +155,20 @@ def test_booked_appointment_marks_the_slot(client, garage, make_appointment):
     assert slots["09:00"]["status"] == "available"
 
 
-def test_cancelled_appointment_does_not_consume_capacity(
-    client, garage, make_appointment
-):
+def test_cancelled_appointment_does_not_consume_capacity(client, garage, make_appointment):
     day = _future_weekday()
     make_appointment(_at(day, 10, 0), minutes=60, status="CANCELLED")
 
     slots = {
         s["start"]: s
-        for s in client.get(
-            f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-        ).get_json()["slots"]
+        for s in client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()[
+            "slots"
+        ]
     }
     assert slots["10:00"]["status"] == "available"
 
 
-def test_capacity_and_limited_threshold(
-    client, session, garage, garage_schedule, make_appointment
-):
+def test_capacity_and_limited_threshold(client, session, garage, garage_schedule, make_appointment):
     garage_schedule.capacity_per_slot = 3
     garage_schedule.limited_threshold_ratio = 0.5  # floor(3 * .5) = 1
     session.commit()
@@ -184,9 +179,9 @@ def test_capacity_and_limited_threshold(
 
     slot = next(
         s
-        for s in client.get(
-            f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-        ).get_json()["slots"]
+        for s in client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()[
+            "slots"
+        ]
         if s["start"] == "10:00"
     )
     assert slot["status"] == "limited"
@@ -195,9 +190,9 @@ def test_capacity_and_limited_threshold(
     make_appointment(_at(day, 10, 0), minutes=60)
     slot = next(
         s
-        for s in client.get(
-            f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-        ).get_json()["slots"]
+        for s in client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()[
+            "slots"
+        ]
         if s["start"] == "10:00"
     )
     assert slot["status"] == "booked"
@@ -220,9 +215,9 @@ def test_pending_booking_request_consumes_capacity(client, session, garage):
 
     slots = {
         s["start"]: s
-        for s in client.get(
-            f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-        ).get_json()["slots"]
+        for s in client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()[
+            "slots"
+        ]
     }
     assert slots["10:00"]["status"] == "booked"
 
@@ -231,9 +226,9 @@ def test_pending_booking_request_consumes_capacity(client, session, garage):
     session.commit()
     slots = {
         s["start"]: s
-        for s in client.get(
-            f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-        ).get_json()["slots"]
+        for s in client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()[
+            "slots"
+        ]
     }
     assert slots["10:00"]["status"] == "available"
 
@@ -243,30 +238,22 @@ def test_lead_time_hides_near_slots(client, session, garage, garage_schedule):
 
     garage_schedule.min_lead_time_hours = 24 * 400  # past the window
     session.commit()
-    body = client.get(
-        f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-    ).get_json()
+    body = client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()
     assert body["slots"] == []
     assert body["level"] == "full"
 
     garage_schedule.min_lead_time_hours = 0
     session.commit()
-    body = client.get(
-        f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-    ).get_json()
+    body = client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()
     assert len(body["slots"]) == 15
 
 
 def test_schedule_exception_closes_a_day(client, session, garage, garage_schedule):
     day = _future_weekday()
-    session.add(
-        GarageScheduleException(garage_id=garage.id, date=day, is_closed=True)
-    )
+    session.add(GarageScheduleException(garage_id=garage.id, date=day, is_closed=True))
     session.commit()
 
-    body = client.get(
-        f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-    ).get_json()
+    body = client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()
     assert body["is_open"] is False
     assert body["level"] == "closed"
     assert body["slots"] == []
@@ -305,9 +292,7 @@ def test_day_slots_use_the_selected_appointment_types_duration(client, session, 
 
 def test_no_type_selected_falls_back_to_the_garages_generic_duration(client, garage):
     day = _future_weekday()
-    body = client.get(
-        f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-    ).get_json()
+    body = client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()
     assert body["slots"][-1]["start"] == "16:00"
 
 
@@ -427,8 +412,8 @@ def test_tenant_isolation(client, session, garage, second_garage):
 
     slots = {
         s["start"]: s
-        for s in client.get(
-            f"/api/public/{garage.slug}/availability/{day.isoformat()}"
-        ).get_json()["slots"]
+        for s in client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()[
+            "slots"
+        ]
     }
     assert slots["10:00"]["status"] == "available"

@@ -18,9 +18,7 @@ class Config:
 
     OPENAPI_URL_PREFIX = "/api"
     OPENAPI_SWAGGER_UI_PATH = "/docs"
-    OPENAPI_SWAGGER_UI_URL = (
-        "https://cdn.jsdelivr.net/npm/swagger-ui-dist/"
-    )
+    OPENAPI_SWAGGER_UI_URL = "https://cdn.jsdelivr.net/npm/swagger-ui-dist/"
 
     # --- Public booking (see app/public_booking) --------------------------
     # CAPTCHA verification for POST /api/public/<slug>/booking-requests.
@@ -31,33 +29,21 @@ class Config:
     CAPTCHA_VERIFY_URL = os.getenv("CAPTCHA_VERIFY_URL", "")
 
     # Rate limiting (Flask-Limiter). Falls back to Redis, then in-memory.
-    RATELIMIT_STORAGE_URI = os.getenv(
-        "RATELIMIT_STORAGE_URI", os.getenv("REDIS_URL", "memory://")
-    )
+    RATELIMIT_STORAGE_URI = os.getenv("RATELIMIT_STORAGE_URI", os.getenv("REDIS_URL", "memory://"))
     RATELIMIT_ENABLED = os.getenv("RATELIMIT_ENABLED", "true").lower() != "false"
-    PUBLIC_BOOKING_RATELIMIT = os.getenv(
-        "PUBLIC_BOOKING_RATELIMIT", "5 per hour;20 per day"
-    )
+    PUBLIC_BOOKING_RATELIMIT = os.getenv("PUBLIC_BOOKING_RATELIMIT", "5 per hour;20 per day")
     # Garage auth: login attempts and password-reset requests.
-    AUTH_LOGIN_RATELIMIT = os.getenv(
-        "AUTH_LOGIN_RATELIMIT", "10 per minute;100 per hour"
-    )
-    AUTH_RESET_RATELIMIT = os.getenv(
-        "AUTH_RESET_RATELIMIT", "5 per hour;20 per day"
-    )
+    AUTH_LOGIN_RATELIMIT = os.getenv("AUTH_LOGIN_RATELIMIT", "10 per minute;100 per hour")
+    AUTH_RESET_RATELIMIT = os.getenv("AUTH_RESET_RATELIMIT", "5 per hour;20 per day")
     # The availability calendar is a read endpoint the wizard polls as the
     # customer clicks around - a much looser limit than the write path.
-    PUBLIC_AVAILABILITY_RATELIMIT = os.getenv(
-        "PUBLIC_AVAILABILITY_RATELIMIT", "60 per minute"
-    )
+    PUBLIC_AVAILABILITY_RATELIMIT = os.getenv("PUBLIC_AVAILABILITY_RATELIMIT", "60 per minute")
 
     # --- Garage onboarding (see app/garages/onboarding.py) --------------
     # The supported way to create a tenant is the `flask onboard-garage` CLI.
     # POST /api/auth/register calls the same onboarding service; set this to
     # "false" to make onboarding CLI-only (the HTTP endpoint then 404s).
-    ONBOARDING_HTTP_ENABLED = (
-        os.getenv("ONBOARDING_HTTP_ENABLED", "true").lower() != "false"
-    )
+    ONBOARDING_HTTP_ENABLED = os.getenv("ONBOARDING_HTTP_ENABLED", "true").lower() != "false"
 
     # --- Checklist evidence storage (see app/storage) --------------------
     # "s3" for any S3-compatible bucket (AWS / Cloudflare R2 / MinIO), "none"
@@ -80,9 +66,7 @@ class Config:
     EMAIL_FROM = os.getenv("EMAIL_FROM", "no-reply@localhost")
     EMAIL_API_KEY = os.getenv("EMAIL_API_KEY", "")
     # Reset tokens live ~30 minutes.
-    PASSWORD_RESET_TOKEN_MINUTES = int(
-        os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30")
-    )
+    PASSWORD_RESET_TOKEN_MINUTES = int(os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30"))
 
     # --- Twilio communications (see app/communications) ------------------
     # CoMaz OS's own (master) Twilio account. Both unset (the default) is a
@@ -95,16 +79,12 @@ class Config:
     # signature before trusting the payload (app/communications/security.py).
     # Only ever set to "false" for local/manual testing with a client that
     # can't produce a real Twilio signature - production must leave this true.
-    TWILIO_WEBHOOK_VALIDATE = (
-        os.getenv("TWILIO_WEBHOOK_VALIDATE", "true").lower() != "false"
-    )
+    TWILIO_WEBHOOK_VALIDATE = os.getenv("TWILIO_WEBHOOK_VALIDATE", "true").lower() != "false"
     # If true, an inbound WhatsApp message that resolves to a garage gets an
     # immediate generic acknowledgement reply. Off by default - no CoMaz OS
     # deployment should send an automated WhatsApp reply until someone
     # deliberately turns it on for that environment.
-    TWILIO_WHATSAPP_AUTO_ACK = (
-        os.getenv("TWILIO_WHATSAPP_AUTO_ACK", "false").lower() == "true"
-    )
+    TWILIO_WHATSAPP_AUTO_ACK = os.getenv("TWILIO_WHATSAPP_AUTO_ACK", "false").lower() == "true"
     # This deployment's own public HTTPS origin (no trailing slash) - used only
     # to print the exact webhook URLs to give Twilio when configuring a number
     # (`flask twilio-webhook-urls`). Twilio itself is never told this by the

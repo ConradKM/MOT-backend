@@ -286,9 +286,7 @@ def test_me_requires_authentication(client):
 
 
 def test_me_rejects_an_invalid_token(client):
-    resp = client.get(
-        "/api/auth/me", headers={"Authorization": "Bearer not-a-real-token"}
-    )
+    resp = client.get("/api/auth/me", headers={"Authorization": "Bearer not-a-real-token"})
     assert resp.status_code in (401, 422)
 
 

@@ -50,9 +50,7 @@ class CustomerAppointmentSummarySchema(Schema):
 class CustomerAccountSchema(Schema):
     customer = fields.Nested(CustomerProfileSchema, dump_only=True)
     vehicles = fields.List(fields.Nested(CustomerVehicleSchema), dump_only=True)
-    appointments = fields.List(
-        fields.Nested(CustomerAppointmentSummarySchema), dump_only=True
-    )
+    appointments = fields.List(fields.Nested(CustomerAppointmentSummarySchema), dump_only=True)
 
 
 class CustomerAppointmentVehicleSchema(Schema):

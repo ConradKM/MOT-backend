@@ -26,10 +26,7 @@ def _employee_token_revoked(_jwt_header, jwt_payload) -> bool:
         return True
 
     valid_from = employee.tokens_valid_from
-    return (
-        valid_from is not None
-        and jwt_payload.get("iat", 0) < valid_from.timestamp()
-    )
+    return valid_from is not None and jwt_payload.get("iat", 0) < valid_from.timestamp()
 
 
 def create_app(config_class=Config):

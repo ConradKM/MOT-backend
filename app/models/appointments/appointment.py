@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -8,6 +9,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.appointments.appointment_checklist import AppointmentChecklist
+    from app.models.appointments.appointment_type import GarageAppointmentType
+    from app.models.customer import Customer
+    from app.models.employee import Employee
+    from app.models.garage import Garage
+    from app.models.vehicle import Vehicle
 
 # REQUESTED/IN_PROGRESS/ACTION_NEEDED cover the appointment's day-to-day lifecycle in
 # the staff app; CANCELLED/NO_SHOW are terminal states. Default stays BOOKED rather than
@@ -24,11 +33,9 @@ APPOINTMENT_STATUSES = (
 )
 
 
-class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):
+class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "appointments"
-    __table_args__ = (
-        Index("ix_appointments_garage_id_start_time", "garage_id", "start_time"),
-    )
+    __table_args__ = (Index("ix_appointments_garage_id_start_time", "garage_id", "start_time"),)
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -78,12 +85,14 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):
     # creation and never move just because default_duration_minutes changes.
     price_at_booking: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
 
-    garage = relationship("Garage", back_populates="appointments")
-    employee = relationship("Employee", back_populates="appointments")
-    customer = relationship("Customer", back_populates="appointments")
-    vehicle = relationship("Vehicle", back_populates="appointments")
-    appointment_type = relationship("GarageAppointmentType", back_populates="appointments")
-    checklist = relationship(
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="appointments")
+    employee: Mapped["Employee"] = relationship("Employee", back_populates="appointments")
+    customer: Mapped["Customer"] = relationship("Customer", back_populates="appointments")
+    vehicle: Mapped["Vehicle | None"] = relationship("Vehicle", back_populates="appointments")
+    appointment_type: Mapped["GarageAppointmentType"] = relationship(
+        "GarageAppointmentType", back_populates="appointments"
+    )
+    checklist: Mapped["AppointmentChecklist | None"] = relationship(
         "AppointmentChecklist",
         back_populates="appointment",
         uselist=False,

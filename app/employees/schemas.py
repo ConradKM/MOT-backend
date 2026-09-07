@@ -15,9 +15,7 @@ class EmployeeSchema(Schema):
     # (see EmployeesList.tsx) - that's where real garage usage happens.
     first_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
     last_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
-    password = fields.Str(
-        required=True, load_only=True, validate=validate.Length(min=8)
-    )
+    password = fields.Str(required=True, load_only=True, validate=validate.Length(min=8))
     role_ids = fields.List(fields.UUID(), load_only=True, load_default=list)
 
     is_active = fields.Bool(dump_only=True)

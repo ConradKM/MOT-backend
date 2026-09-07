@@ -73,7 +73,9 @@ def test_templates_list_defaults_to_built_in_wording(authenticated_client):
     items = {item["key"]: item for item in resp.get_json()["items"]}
     assert "booking_acknowledgement" in items
     assert items["booking_acknowledgement"]["is_custom"] is False
-    assert items["booking_acknowledgement"]["body"] == items["booking_acknowledgement"]["default_body"]
+    assert (
+        items["booking_acknowledgement"]["body"] == items["booking_acknowledgement"]["default_body"]
+    )
 
 
 def test_template_put_saves_a_custom_override(authenticated_client):
@@ -161,7 +163,9 @@ def test_callback_requests_list_filters_by_status(session, garage, authenticated
 def test_callback_request_complete_marks_it_done(session, garage, authenticated_client):
     callback = _make_callback(session, garage)
 
-    resp = authenticated_client.post(f"/api/communications/callback-requests/{callback.id}/complete")
+    resp = authenticated_client.post(
+        f"/api/communications/callback-requests/{callback.id}/complete"
+    )
     assert resp.status_code == 200
     assert resp.get_json()["status"] == "COMPLETED"
     session.refresh(callback)
@@ -180,7 +184,9 @@ def test_callback_request_404s_for_other_tenants_row(
     session, garage, second_garage, authenticated_client
 ):
     callback = _make_callback(session, second_garage)
-    resp = authenticated_client.post(f"/api/communications/callback-requests/{callback.id}/complete")
+    resp = authenticated_client.post(
+        f"/api/communications/callback-requests/{callback.id}/complete"
+    )
     assert resp.status_code == 404
 
 
@@ -210,7 +216,9 @@ def test_takeover_hands_an_active_engine_session_to_a_human(
     # A real in-progress bot conversation, driven through the actual engine -
     # not a hand-built row - so this proves the API acts on the same session
     # the engine itself would find on the customer's next message.
-    r1 = engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now())
+    r1 = engine.handle_message(
+        garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now()
+    )
     assert r1.workflow_step is not None  # a real in-progress flow, not an immediate handoff
 
     resp = authenticated_client.post(f"/api/communications/conversations/{PHONE_RAW}/takeover")
@@ -219,7 +227,9 @@ def test_takeover_hands_an_active_engine_session_to_a_human(
     assert body["status"] == "HUMAN_HANDOFF"
     assert "Taken over by" in body["handoff_reason"]
 
-    conv_session = ConversationSession.query.filter_by(garage_id=garage.id, customer_phone=PHONE_RAW).one()
+    conv_session = ConversationSession.query.filter_by(
+        garage_id=garage.id, customer_phone=PHONE_RAW
+    ).one()
     assert conv_session.status == "HUMAN_HANDOFF"
 
     # The engine must not reply automatically to the next message either.
@@ -233,21 +243,31 @@ def test_takeover_hands_an_active_engine_session_to_a_human(
 def test_resume_automation_requires_a_handed_off_session(
     garage, garage_schedule, appointment_type, user, authenticated_client
 ):
-    r1 = engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now())
+    r1 = engine.handle_message(
+        garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now()
+    )
     assert r1.workflow_step is not None  # a real in-progress flow, not an immediate handoff
 
-    resp = authenticated_client.post(f"/api/communications/conversations/{PHONE_RAW}/resume-automation")
+    resp = authenticated_client.post(
+        f"/api/communications/conversations/{PHONE_RAW}/resume-automation"
+    )
     assert resp.status_code == 404  # still ACTIVE, nothing to resume
 
 
 def test_resume_automation_clears_the_handoff(garage, authenticated_client):
-    engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="speak to a human", now=_now())
+    engine.handle_message(
+        garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="speak to a human", now=_now()
+    )
     assert (
-        ConversationSession.query.filter_by(garage_id=garage.id, customer_phone=PHONE_RAW).one().status
+        ConversationSession.query.filter_by(garage_id=garage.id, customer_phone=PHONE_RAW)
+        .one()
+        .status
         == "HUMAN_HANDOFF"
     )
 
-    resp = authenticated_client.post(f"/api/communications/conversations/{PHONE_RAW}/resume-automation")
+    resp = authenticated_client.post(
+        f"/api/communications/conversations/{PHONE_RAW}/resume-automation"
+    )
     assert resp.status_code == 200
     assert resp.get_json()["status"] == "ACTIVE"
     assert resp.get_json()["handoff_reason"] is None
@@ -256,9 +276,13 @@ def test_resume_automation_clears_the_handoff(garage, authenticated_client):
 def test_attention_queue_lists_only_human_handoff_conversations(
     garage, garage_schedule, appointment_type, user, authenticated_client
 ):
-    engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now())
+    engine.handle_message(
+        garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now()
+    )
     other_phone = "+447123400600"
-    engine.handle_message(garage, channel="WHATSAPP", phone_e164=other_phone, text="speak to a human", now=_now())
+    engine.handle_message(
+        garage, channel="WHATSAPP", phone_e164=other_phone, text="speak to a human", now=_now()
+    )
 
     resp = authenticated_client.get("/api/communications/attention-queue")
     assert resp.status_code == 200
@@ -269,28 +293,49 @@ def test_attention_queue_lists_only_human_handoff_conversations(
 
 
 def test_attention_queue_empties_once_resumed(garage, authenticated_client):
-    engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="speak to a human", now=_now())
-    assert len(authenticated_client.get("/api/communications/attention-queue").get_json()["items"]) == 1
+    engine.handle_message(
+        garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="speak to a human", now=_now()
+    )
+    assert (
+        len(authenticated_client.get("/api/communications/attention-queue").get_json()["items"])
+        == 1
+    )
 
     authenticated_client.post(f"/api/communications/conversations/{PHONE_RAW}/resume-automation")
 
     assert authenticated_client.get("/api/communications/attention-queue").get_json()["items"] == []
 
 
-def test_attention_queue_is_tenant_scoped(garage, second_garage, authenticated_client, second_authenticated_client):
-    engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="speak to a human", now=_now())
+def test_attention_queue_is_tenant_scoped(
+    garage, second_garage, authenticated_client, second_authenticated_client
+):
+    engine.handle_message(
+        garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="speak to a human", now=_now()
+    )
 
     resp = second_authenticated_client.get("/api/communications/attention-queue")
     assert resp.get_json()["items"] == []
 
 
 def test_conversation_automation_endpoints_are_tenant_scoped(
-    garage, garage_schedule, appointment_type, user, second_garage, authenticated_client, second_authenticated_client
+    garage,
+    garage_schedule,
+    appointment_type,
+    user,
+    second_garage,
+    authenticated_client,
+    second_authenticated_client,
 ):
-    engine.handle_message(garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now())
+    engine.handle_message(
+        garage, channel="WHATSAPP", phone_e164=PHONE_RAW, text="I need an MOT", now=_now()
+    )
 
-    resp = second_authenticated_client.get(f"/api/communications/conversations/{PHONE_RAW}/automation")
+    resp = second_authenticated_client.get(
+        f"/api/communications/conversations/{PHONE_RAW}/automation"
+    )
     assert resp.get_json()["status"] is None  # second garage never sees the first garage's session
 
-    resp = second_authenticated_client.post(f"/api/communications/conversations/{PHONE_RAW}/takeover")
+    resp = second_authenticated_client.post(
+        f"/api/communications/conversations/{PHONE_RAW}/takeover"
+    )
     assert resp.status_code == 404

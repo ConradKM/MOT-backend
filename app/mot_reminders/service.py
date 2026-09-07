@@ -64,9 +64,7 @@ def _as_utc_bounds(d1: date, d2: date) -> tuple[datetime, datetime]:
     )
 
 
-def mot_booking_active_for(
-    vehicle_id, garage_id, mot_expiry: date | None, session=None
-) -> bool:
+def mot_booking_active_for(vehicle_id, garage_id, mot_expiry: date | None, session=None) -> bool:
     """True if ``vehicle_id`` has a non-cancelled MOT appointment dated around
     ``mot_expiry`` (this cycle). Re-evaluated live before every send, never
     cached on the reminder."""
@@ -96,7 +94,7 @@ def mot_booking_active_for(
             Appointment.start_time <= end_dt,
         )
     )
-    return session.query(exists_q.exists()).scalar()
+    return bool(session.query(exists_q.exists()).scalar())
 
 
 # --------------------------------------------------------------------------
@@ -252,19 +250,18 @@ def compute_reminder_state(
                 "enabled": enabled,
                 "state": state,
                 "sent_at": sent_stage_dates.get(key),
-                "scheduled_for": (
-                    send_on if state == "scheduled" and send_on else None
-                ),
+                "scheduled_for": (send_on if state == "scheduled" and send_on else None),
             }
         )
 
-    sent_events = [e for e in events if e.sent_at is not None]
-    last_reminder_sent = max((e.sent_at for e in sent_events), default=None)
+    last_reminder_sent = max((e.sent_at for e in events if e.sent_at is not None), default=None)
 
     next_scheduled = None
     if not booking_active and not expired and expiry is not None:
         candidates = [
-            s["scheduled_for"] for s in stages if s["state"] == "scheduled"
+            sf
+            for s in stages
+            if s["state"] == "scheduled" and isinstance(sf := s["scheduled_for"], date)
         ]
         next_scheduled = min(candidates) if candidates else None
 
@@ -290,9 +287,7 @@ def compute_reminder_state(
             "detail": e.detail,
             "initiated_by": getattr(e, "_initiated_by_name", None),
         }
-        for e in sorted(
-            events, key=lambda e: e.sent_at or e.scheduled_at, reverse=True
-        )
+        for e in sorted(events, key=lambda e: e.sent_at or e.scheduled_at, reverse=True)
     ]
 
     return {

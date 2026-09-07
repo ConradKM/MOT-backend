@@ -49,8 +49,7 @@ auth_blp = Blueprint(
 # Shown for every forgot-password call so the response can't be used to tell
 # whether an email is registered.
 _GENERIC_RESET_MESSAGE = (
-    "If an account exists for this email address, a password reset link "
-    "has been sent."
+    "If an account exists for this email address, a password reset link has been sent."
 )
 
 
@@ -98,7 +97,6 @@ class Register(MethodView):
 
 @auth_blp.route("/login")
 class Login(MethodView):
-
     @limiter.limit(lambda: current_app.config["AUTH_LOGIN_RATELIMIT"])
     @auth_blp.arguments(LoginSchema)
     @auth_blp.response(200, TokenSchema)
@@ -122,7 +120,6 @@ class Login(MethodView):
 
 @auth_blp.route("/refresh")
 class Refresh(MethodView):
-
     @jwt_required(refresh=True)
     @auth_blp.response(200, RefreshTokenSchema)
     def post(self):
@@ -131,7 +128,6 @@ class Refresh(MethodView):
 
 @auth_blp.route("/me")
 class Me(MethodView):
-
     @jwt_required()
     @auth_blp.response(200, EmployeeSchema)
     def get(self):
@@ -148,7 +144,6 @@ class Me(MethodView):
 
 @auth_blp.route("/forgot-password")
 class ForgotPassword(MethodView):
-
     @limiter.limit(lambda: current_app.config["AUTH_RESET_RATELIMIT"])
     @auth_blp.arguments(ForgotPasswordSchema)
     @auth_blp.response(200, MessageSchema)
@@ -164,7 +159,6 @@ class ForgotPassword(MethodView):
 
 @auth_blp.route("/reset-password")
 class ResetPassword(MethodView):
-
     @auth_blp.arguments(ResetTokenStatusSchema(only=()), location="query")
     @auth_blp.response(200, ResetTokenStatusSchema)
     def get(self, _args):
@@ -196,7 +190,4 @@ class ResetPassword(MethodView):
         consume_token_and_set_password(row, data["password"])
         db.session.commit()
 
-        return {
-            "message": "Your password has been reset successfully. "
-            "You can now log in."
-        }
+        return {"message": "Your password has been reset successfully. You can now log in."}

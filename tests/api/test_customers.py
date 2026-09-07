@@ -110,9 +110,7 @@ def test_delete_customer_with_an_appointment_is_archived_not_deleted(
     assert appt.customer_id == customer.id
 
 
-def test_archived_customer_is_excluded_from_the_default_list(
-    authenticated_user, customer, vehicle
-):
+def test_archived_customer_is_excluded_from_the_default_list(authenticated_user, customer, vehicle):
     authenticated_user.client.delete(f"/api/customers/{customer.id}")
 
     listed = authenticated_user.client.get("/api/customers/").get_json()
@@ -187,9 +185,7 @@ def test_list_customers_requires_auth(client):
 
 
 def test_create_customer_requires_auth(client):
-    resp = client.post(
-        "/api/customers/", json={"first_name": "A", "last_name": "B"}
-    )
+    resp = client.post("/api/customers/", json={"first_name": "A", "last_name": "B"})
     assert resp.status_code == 401
 
 

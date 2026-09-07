@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -7,6 +8,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.appointments.appointment import Appointment
+    from app.models.appointments.checklist_template import ChecklistTemplate
+    from app.models.garage import Garage
 
 # ACTIVE: offered normally. HIDDEN: temporarily not offered for new bookings
 # (e.g. paused), but not otherwise final - the garage may re-enable it.
@@ -16,7 +22,7 @@ from ..mixins import PrimaryKeyMixin, TimestampMixin
 APPOINTMENT_TYPE_STATUSES = ("ACTIVE", "HIDDEN", "DEPRECATED")
 
 
-class GarageAppointmentType(db.Model, PrimaryKeyMixin, TimestampMixin):
+class GarageAppointmentType(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """A garage-defined kind of appointment (e.g. "MOT", "Full Service").
 
     Replaces the old fixed, global appointment_type enum - every garage
@@ -43,11 +49,13 @@ class GarageAppointmentType(db.Model, PrimaryKeyMixin, TimestampMixin):
     # derived from start_time + this duration (see appointments/routes.py).
     default_duration_minutes: Mapped[int | None] = mapped_column(Integer)
 
-    garage = relationship("Garage", back_populates="appointment_types")
-    checklist_template = relationship(
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="appointment_types")
+    checklist_template: Mapped["ChecklistTemplate | None"] = relationship(
         "ChecklistTemplate",
         back_populates="appointment_type",
         uselist=False,
         cascade="all, delete-orphan",
     )
-    appointments = relationship("Appointment", back_populates="appointment_type")
+    appointments: Mapped[list["Appointment"]] = relationship(
+        "Appointment", back_populates="appointment_type"
+    )

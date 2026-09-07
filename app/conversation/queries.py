@@ -39,7 +39,10 @@ def list_callback_requests(
 
 
 def get_callback_request(garage, callback_id) -> CallbackRequest | None:
-    return CallbackRequest.query.filter_by(garage_id=garage.id, id=callback_id).first()
+    result: CallbackRequest | None = CallbackRequest.query.filter_by(
+        garage_id=garage.id, id=callback_id
+    ).first()
+    return result
 
 
 def complete_callback_request(callback: CallbackRequest) -> None:
@@ -52,20 +55,19 @@ def cancel_callback_request(callback: CallbackRequest) -> None:
     db.session.commit()
 
 
-def list_handoff_sessions(
-    garage, *, channel: str = CHANNEL_WHATSAPP
-) -> list[ConversationSession]:
+def list_handoff_sessions(garage, *, channel: str = CHANNEL_WHATSAPP) -> list[ConversationSession]:
     """The "attention queue" (Part 39): every conversation automation could
     not resolve and handed to a human, most recently handed off first - a
     human, never a timer, ever clears one of these (see
     session_service.is_stale's HUMAN_HANDOFF carve-out)."""
-    return (
+    rows: list[ConversationSession] = (
         ConversationSession.query.filter_by(
             garage_id=garage.id, channel=channel, status=STATUS_HUMAN_HANDOFF
         )
         .order_by(ConversationSession.last_activity_at.desc())
         .all()
     )
+    return rows
 
 
 def get_conversation_session(
@@ -74,10 +76,11 @@ def get_conversation_session(
     """The most recent session behind this phone's conversation, if any - so
     the staff "take over" / "resume automation" controls know what state
     they're acting on (and act on the right row, not a stale earlier one)."""
-    return (
+    result: ConversationSession | None = (
         ConversationSession.query.filter_by(
             garage_id=garage.id, channel=channel, customer_phone=phone_e164
         )
         .order_by(ConversationSession.created_at.desc())
         .first()
     )
+    return result

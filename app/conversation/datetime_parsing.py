@@ -20,17 +20,24 @@ import re
 from datetime import date, datetime, time, timedelta
 
 _WEEKDAYS = {
-    "monday": 0, "mon": 0,
-    "tuesday": 1, "tue": 1, "tues": 1,
-    "wednesday": 2, "wed": 2,
-    "thursday": 3, "thu": 3, "thurs": 3,
-    "friday": 4, "fri": 4,
-    "saturday": 5, "sat": 5,
-    "sunday": 6, "sun": 6,
+    "monday": 0,
+    "mon": 0,
+    "tuesday": 1,
+    "tue": 1,
+    "tues": 1,
+    "wednesday": 2,
+    "wed": 2,
+    "thursday": 3,
+    "thu": 3,
+    "thurs": 3,
+    "friday": 4,
+    "fri": 4,
+    "saturday": 5,
+    "sat": 5,
+    "sunday": 6,
+    "sun": 6,
 }
-_WEEKDAY_PATTERN = re.compile(
-    r"\b(next\s+)?(" + "|".join(_WEEKDAYS) + r")\b", re.IGNORECASE
-)
+_WEEKDAY_PATTERN = re.compile(r"\b(next\s+)?(" + "|".join(_WEEKDAYS) + r")\b", re.IGNORECASE)
 
 
 def parse_date_phrase(text: str, *, now: datetime) -> date | None:

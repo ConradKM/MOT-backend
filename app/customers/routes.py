@@ -29,15 +29,12 @@ def _is_referenced(customer_id) -> bool:
     """True if deleting this customer would cascade away real history
     (vehicles and/or appointments) - see CustomerResource.delete."""
     has_vehicle = Vehicle.query.filter_by(customer_id=customer_id).first() is not None
-    has_appointment = (
-        Appointment.query.filter_by(customer_id=customer_id).first() is not None
-    )
+    has_appointment = Appointment.query.filter_by(customer_id=customer_id).first() is not None
     return has_vehicle or has_appointment
 
 
 @customers_blp.route("/")
 class CustomerList(MethodView):
-
     @jwt_required()
     @customers_blp.arguments(CustomerQueryArgsSchema, location="query")
     @customers_blp.response(200, CustomerSchema(many=True))
@@ -85,7 +82,6 @@ class CustomerList(MethodView):
 
 @customers_blp.route("/<uuid:customer_id>")
 class CustomerResource(MethodView):
-
     @jwt_required()
     @customers_blp.response(200, CustomerSchema)
     def get(self, customer_id):
@@ -155,7 +151,6 @@ class CustomerResource(MethodView):
 
 @customers_blp.route("/<uuid:customer_id>/communications")
 class CustomerCommunications(MethodView):
-
     @jwt_required()
     @customers_blp.response(200, CommunicationLogSchema(many=True))
     def get(self, customer_id):

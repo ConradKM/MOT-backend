@@ -11,3 +11,7 @@ target-version = "py312"
 python_version = "3.12"
 warn_return_any = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["flask_smorest.*", "flask_migrate.*", "boto3.*", "botocore.*", "celery.*", "twilio.*", "yaml.*"]
+ignore_missing_imports = true

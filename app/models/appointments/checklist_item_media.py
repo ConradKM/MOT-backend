@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -8,10 +9,14 @@ from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.appointments.appointment_checklist_item import AppointmentChecklistItem
+    from app.models.garage import Garage
+
 MEDIA_TYPES = ("PHOTO", "VIDEO")
 
 
-class ChecklistItemMedia(db.Model, PrimaryKeyMixin, TimestampMixin):
+class ChecklistItemMedia(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """A photo/video attached to a checklist item.
 
     The bytes live in object storage (see app/storage); this row holds only
@@ -41,8 +46,8 @@ class ChecklistItemMedia(db.Model, PrimaryKeyMixin, TimestampMixin):
     original_filename: Mapped[str | None] = mapped_column(String(255))
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    garage = relationship("Garage")
-    appointment_checklist_item = relationship(
+    garage: Mapped["Garage"] = relationship("Garage")
+    appointment_checklist_item: Mapped["AppointmentChecklistItem"] = relationship(
         "AppointmentChecklistItem", back_populates="media"
     )
 

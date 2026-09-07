@@ -54,9 +54,7 @@ class ManualReminderSendSchema(Schema):
     """Body for POST /api/mot-reminders/<vehicle_id>/send."""
 
     # Reserved for future channel selection; email is the only channel today.
-    channel = fields.Str(
-        load_default=None, validate=validate.OneOf(["email"]), allow_none=True
-    )
+    channel = fields.Str(load_default=None, validate=validate.OneOf(["email"]), allow_none=True)
     # Send even though an MOT booking exists (requires a deliberate confirm).
     acknowledge_booking = fields.Bool(load_default=False)
 
@@ -107,11 +105,7 @@ class MOTReminderSettingsSchema(Schema):
         ]
         if not all(days in data for _, days in trios):
             return
-        enabled_days = [
-            data[days]
-            for enabled, days in trios
-            if data.get(enabled, True)
-        ]
+        enabled_days = [data[days] for enabled, days in trios if data.get(enabled, True)]
         if len(enabled_days) != len(set(enabled_days)):
             raise ValidationError(
                 "Enabled reminder stages must use different intervals.",

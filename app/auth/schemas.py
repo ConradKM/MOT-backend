@@ -6,9 +6,7 @@ class RegisterSchema(Schema):
 
     garage_name = fields.Str(required=True, validate=validate.Length(min=1, max=200))
     email = fields.Email(required=True)
-    password = fields.Str(
-        required=True, load_only=True, validate=validate.Length(min=8)
-    )
+    password = fields.Str(required=True, load_only=True, validate=validate.Length(min=8))
     first_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
     last_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
 
@@ -33,9 +31,7 @@ class ForgotPasswordSchema(Schema):
 
 class ResetPasswordSchema(Schema):
     token = fields.Str(required=True)
-    password = fields.Str(
-        required=True, load_only=True, validate=validate.Length(min=8)
-    )
+    password = fields.Str(required=True, load_only=True, validate=validate.Length(min=8))
 
 
 class MessageSchema(Schema):

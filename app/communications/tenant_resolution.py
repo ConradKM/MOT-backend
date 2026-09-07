@@ -27,9 +27,7 @@ def resolve_garage_by_voice_number(to_number: str) -> Garage | None:
     ``To`` field of an incoming call), or ``None`` if it matches no garage."""
     if not to_number:
         return None
-    settings = GarageCommunicationSettings.query.filter_by(
-        voice_phone_number=to_number
-    ).first()
+    settings = GarageCommunicationSettings.query.filter_by(voice_phone_number=to_number).first()
     return settings.garage if settings else None
 
 
@@ -39,9 +37,7 @@ def resolve_garage_by_whatsapp_sender(to_number: str) -> Garage | None:
     or ``None`` if it matches no garage."""
     if not to_number:
         return None
-    settings = GarageCommunicationSettings.query.filter_by(
-        whatsapp_sender=to_number
-    ).first()
+    settings = GarageCommunicationSettings.query.filter_by(whatsapp_sender=to_number).first()
     return settings.garage if settings else None
 
 

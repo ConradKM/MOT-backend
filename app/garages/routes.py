@@ -30,7 +30,6 @@ public_garages_blp = Blueprint(
 
 @garages_blp.route("")
 class GarageResource(MethodView):
-
     @jwt_required()
     @garages_blp.response(200, GarageSchema)
     def get(self):
@@ -56,7 +55,6 @@ class GarageResource(MethodView):
 
 @garages_blp.route("/capacity/summary")
 class GarageCapacitySummary(MethodView):
-
     @jwt_required()
     @garages_blp.response(200, CapacitySummarySchema)
     def get(self):
@@ -66,7 +64,6 @@ class GarageCapacitySummary(MethodView):
 
 @public_garages_blp.route("/")
 class PublicGarageList(MethodView):
-
     @public_garages_blp.response(200, PublicGarageSchema(many=True))
     def get(self):
         return Garage.query.order_by(Garage.name).all()
@@ -74,7 +71,6 @@ class PublicGarageList(MethodView):
 
 @public_garages_blp.route("/<uuid:garage_id>")
 class PublicGarageResource(MethodView):
-
     @public_garages_blp.response(200, PublicGarageSchema)
     def get(self, garage_id):
         garage = db.session.get(Garage, garage_id)

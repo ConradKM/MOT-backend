@@ -173,9 +173,7 @@ def test_new_staff_employee_can_list_but_not_create(authenticated_user, client):
 
 
 def test_create_employee_missing_email(authenticated_user):
-    resp = authenticated_user.client.post(
-        "/api/employees/", json={"password": "password123"}
-    )
+    resp = authenticated_user.client.post("/api/employees/", json={"password": "password123"})
 
     assert resp.status_code == 422
     assert "email" in resp.get_json()["errors"]["json"]
@@ -223,9 +221,7 @@ def test_create_employee_unknown_role_id(authenticated_user):
     assert resp.status_code == 422
 
 
-def test_create_employee_cannot_use_another_garages_role_id(
-    authenticated_user, second_owner_role
-):
+def test_create_employee_cannot_use_another_garages_role_id(authenticated_user, second_owner_role):
     resp = authenticated_user.client.post(
         "/api/employees/",
         json={
@@ -367,9 +363,7 @@ def test_editing_employee_requires_owner(authenticated_user, staff_role, client)
 def test_edit_employee_requires_auth(client, authenticated_user, staff_role):
     employee = _create_staff(authenticated_user)
 
-    resp = client.patch(
-        f"/api/employees/{employee['id']}", json={"email": "nope@garage-a.example"}
-    )
+    resp = client.patch(f"/api/employees/{employee['id']}", json={"email": "nope@garage-a.example"})
 
     assert resp.status_code == 401
 
@@ -441,14 +435,10 @@ def test_owner_can_deactivate_and_reactivate_an_employee(authenticated_user):
         json={"email": "toggle@garage-a.example", "password": "password123"},
     ).get_json()
 
-    off = authenticated_user.client.patch(
-        f"/api/employees/{emp['id']}", json={"is_active": False}
-    )
+    off = authenticated_user.client.patch(f"/api/employees/{emp['id']}", json={"is_active": False})
     assert off.status_code == 200 and off.get_json()["is_active"] is False
 
-    on = authenticated_user.client.patch(
-        f"/api/employees/{emp['id']}", json={"is_active": True}
-    )
+    on = authenticated_user.client.patch(f"/api/employees/{emp['id']}", json={"is_active": True})
     assert on.status_code == 200 and on.get_json()["is_active"] is True
 
 
@@ -457,11 +447,11 @@ def test_deactivated_employee_cannot_log_in(authenticated_user):
         "/api/employees/",
         json={"email": "gone@garage-a.example", "password": "password123"},
     )
-    emp_id = [
+    emp_id = next(
         e["id"]
         for e in authenticated_user.client.get("/api/employees/").get_json()
         if e["email"] == "gone@garage-a.example"
-    ][0]
+    )
     authenticated_user.client.patch(f"/api/employees/{emp_id}", json={"is_active": False})
 
     resp = authenticated_user.client.post(
@@ -494,9 +484,7 @@ def test_owner_can_deactivate_self_when_another_active_owner_exists(authenticate
     assert resp.status_code == 200
 
 
-def test_a_normal_employee_cannot_toggle_activation(
-    authenticated_user, staff_role, client
-):
+def test_a_normal_employee_cannot_toggle_activation(authenticated_user, staff_role, client):
     from werkzeug.security import generate_password_hash
 
     from app.extensions import db

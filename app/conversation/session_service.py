@@ -30,7 +30,7 @@ def get_active_session(garage, channel: str, phone_e164: str) -> ConversationSes
     being found on every subsequent message (Part 20) so the bot never
     starts a fresh automated reply alongside - or instead of - the human
     who's now handling it."""
-    return (
+    result: ConversationSession | None = (
         ConversationSession.query.filter_by(
             garage_id=garage.id, channel=channel, customer_phone=phone_e164
         )
@@ -38,6 +38,7 @@ def get_active_session(garage, channel: str, phone_e164: str) -> ConversationSes
         .order_by(ConversationSession.created_at.desc())
         .first()
     )
+    return result
 
 
 def is_stale(session: ConversationSession, *, now: datetime | None = None) -> bool:
@@ -132,7 +133,9 @@ def complete_session(session: ConversationSession) -> None:
     db.session.commit()
 
 
-def handoff_to_human(session: ConversationSession, reason: str, *, now: datetime | None = None) -> None:
+def handoff_to_human(
+    session: ConversationSession, reason: str, *, now: datetime | None = None
+) -> None:
     session.status = STATUS_HUMAN_HANDOFF
     session.handoff_reason = reason
     session.last_activity_at = now or datetime.now(UTC)

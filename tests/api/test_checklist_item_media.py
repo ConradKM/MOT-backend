@@ -12,9 +12,7 @@ def _checklist_item(authenticated_user, customer, media_type="PHOTO"):
     appt_type = authenticated_user.client.post(
         "/api/appointment-types/", json={"name": "MOT"}
     ).get_json()
-    authenticated_user.client.post(
-        f"/api/appointment-types/{appt_type['id']}/checklist-template"
-    )
+    authenticated_user.client.post(f"/api/appointment-types/{appt_type['id']}/checklist-template")
     authenticated_user.client.post(
         f"/api/appointment-types/{appt_type['id']}/checklist-template/items",
         json={"label": "Brakes", "media_type": media_type},
@@ -38,9 +36,7 @@ def _checklist_item(authenticated_user, customer, media_type="PHOTO"):
 def _request_url(client, item_id, **overrides):
     payload = {"media_type": "PHOTO", "content_type": "image/jpeg"}
     payload.update(overrides)
-    return client.post(
-        f"/api/appointment-checklist-items/{item_id}/media", json=payload
-    )
+    return client.post(f"/api/appointment-checklist-items/{item_id}/media", json=payload)
 
 
 # --------------------------------------------------------------------------
@@ -204,22 +200,16 @@ def test_delete_media(authenticated_user, customer):
     )
 
 
-def test_media_is_garage_scoped(
-    authenticated_user, second_authenticated_client, customer
-):
+def test_media_is_garage_scoped(authenticated_user, second_authenticated_client, customer):
     _, item = _checklist_item(authenticated_user, customer)
     ticket = _request_url(authenticated_user.client, item["id"]).get_json()
 
     assert (
-        second_authenticated_client.get(
-            f"/api/checklist-item-media/{ticket['id']}"
-        ).status_code
+        second_authenticated_client.get(f"/api/checklist-item-media/{ticket['id']}").status_code
         == 404
     )
     assert (
-        second_authenticated_client.delete(
-            f"/api/checklist-item-media/{ticket['id']}"
-        ).status_code
+        second_authenticated_client.delete(f"/api/checklist-item-media/{ticket['id']}").status_code
         == 404
     )
 

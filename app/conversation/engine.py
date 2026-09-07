@@ -112,8 +112,14 @@ def handle_message(
 
     intent_guess = _resolver.resolve(text) if text else UNKNOWN
     _log_turn(
-        garage, channel, phone_e164, DIRECTION_INBOUND, text,
-        customer=customer, intent=intent_guess, external_id=external_message_id,
+        garage,
+        channel,
+        phone_e164,
+        DIRECTION_INBOUND,
+        text,
+        customer=customer,
+        intent=intent_guess,
+        external_id=external_message_id,
     )
 
     if session.status == STATUS_HUMAN_HANDOFF:
@@ -128,14 +134,21 @@ def handle_message(
         )
 
     ctx = ConversationContext(
-        garage=garage, session=session, channel=channel, phone_e164=phone_e164, customer=customer, now=now,
+        garage=garage,
+        session=session,
+        channel=channel,
+        phone_e164=phone_e164,
+        customer=customer,
+        now=now,
     )
     intent, result = _dispatch(ctx, text, intent_guess)
 
     _finalize(session, intent, result, now=now)
 
     if result.response_text:
-        _log_turn(garage, channel, phone_e164, DIRECTION_OUTBOUND, result.response_text, customer=customer)
+        _log_turn(
+            garage, channel, phone_e164, DIRECTION_OUTBOUND, result.response_text, customer=customer
+        )
     for description in result.actions_performed:
         _log_turn(garage, channel, phone_e164, DIRECTION_SYSTEM, description, customer=customer)
 
@@ -164,7 +177,11 @@ def _dispatch(ctx: ConversationContext, text: str, intent_guess: str) -> tuple[s
         handler = workflows.STEP_HANDLERS.get(session.workflow_step)
         if handler is not None:
             return session.intent or UNKNOWN, handler(ctx, text)
-        logger.warning("[conversation] session %s has unknown workflow_step %r", session.id, session.workflow_step)
+        logger.warning(
+            "[conversation] session %s has unknown workflow_step %r",
+            session.id,
+            session.workflow_step,
+        )
 
     return intent_guess, _start_intent(ctx, intent_guess, text)
 
@@ -235,8 +252,15 @@ def _finalize(session, intent: str, result: StepResult, *, now: datetime) -> Non
 
 
 def _log_turn(
-    garage, channel: str, phone_e164: str, direction: str, body: str,
-    *, customer=None, intent=None, external_id=None,
+    garage,
+    channel: str,
+    phone_e164: str,
+    direction: str,
+    body: str,
+    *,
+    customer=None,
+    intent=None,
+    external_id=None,
 ) -> None:
     model_channel = _CHANNEL_MODEL_VALUES.get(channel, CHANNEL_WHATSAPP)
     address = f"whatsapp:{phone_e164}" if model_channel == CHANNEL_WHATSAPP else phone_e164

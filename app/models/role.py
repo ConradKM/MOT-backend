@@ -1,4 +1,5 @@
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -6,6 +7,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.models.employee import Employee
+    from app.models.garage import Garage
 
 # "OWNER" is a reserved role name - every garage gets one at creation, it
 # can't be renamed or deleted (see app/roles/routes.py), and having it
@@ -23,7 +28,7 @@ employee_roles = db.Table(
 )
 
 
-class Role(db.Model, PrimaryKeyMixin, TimestampMixin):
+class Role(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "roles"
     __table_args__ = (UniqueConstraint("garage_id", "name", name="uq_roles_garage_id_name"),)
 
@@ -32,8 +37,10 @@ class Role(db.Model, PrimaryKeyMixin, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(50), nullable=False)
 
-    garage = relationship("Garage", back_populates="roles")
-    employees = relationship("Employee", secondary=employee_roles, back_populates="roles")
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="roles")
+    employees: Mapped[list["Employee"]] = relationship(
+        "Employee", secondary=employee_roles, back_populates="roles"
+    )
 
     @property
     def is_protected(self) -> bool:

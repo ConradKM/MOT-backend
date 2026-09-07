@@ -47,7 +47,19 @@ AWAITING_RESCHEDULE_CONFIRMATION = "AWAITING_RESCHEDULE_CONFIRMATION"
 
 AWAITING_CALLBACK_REASON = "AWAITING_CALLBACK_REASON"
 
-_YES_WORDS = {"yes", "yep", "yeah", "yup", "correct", "confirm", "confirmed", "please", "sure", "ok", "okay"}
+_YES_WORDS = {
+    "yes",
+    "yep",
+    "yeah",
+    "yup",
+    "correct",
+    "confirm",
+    "confirmed",
+    "please",
+    "sure",
+    "ok",
+    "okay",
+}
 _NO_WORDS = {"no", "nope", "not", "cancel", "nah"}
 
 
@@ -96,7 +108,7 @@ def _format_slots(slots: list[dict], limit: int = 4) -> str:
     return ", ".join(times)
 
 
-def _get_appointment_type(garage, type_id: str | None) -> GarageAppointmentType | None:
+def _get_appointment_type(garage: Garage, type_id: str | None) -> GarageAppointmentType | None:
     if not type_id:
         return None
     for t in garage.appointment_types:
@@ -124,7 +136,7 @@ def start_booking(ctx: ConversationContext, text: str) -> StepResult:
         )
 
     match = match_appointment_type(ctx.garage, text)
-    if match.is_confident:
+    if match.matched is not None:
         return _after_type_resolved(ctx, match.matched)
 
     if match.is_ambiguous:
@@ -142,8 +154,13 @@ def start_booking(ctx: ConversationContext, text: str) -> StepResult:
     )
 
 
-def _after_type_resolved(ctx: ConversationContext, appointment_type: GarageAppointmentType) -> StepResult:
-    updates = {"appointment_type_id": str(appointment_type.id), "appointment_type_name": appointment_type.name}
+def _after_type_resolved(
+    ctx: ConversationContext, appointment_type: GarageAppointmentType
+) -> StepResult:
+    updates = {
+        "appointment_type_id": str(appointment_type.id),
+        "appointment_type_name": appointment_type.name,
+    }
 
     if ctx.customer is None:
         return StepResult(
@@ -165,7 +182,9 @@ def handle_awaiting_type(ctx: ConversationContext, text: str) -> StepResult:
 
 def handle_awaiting_type_choice(ctx: ConversationContext, text: str) -> StepResult:
     candidate_ids = ctx.slots.get("candidate_type_ids", [])
-    candidates = [t for t in actions.get_appointment_types(ctx.garage) if str(t.id) in candidate_ids]
+    candidates = [
+        t for t in actions.get_appointment_types(ctx.garage) if str(t.id) in candidate_ids
+    ]
     match = match_appointment_type(ctx.garage, text)
     if match.matched and str(match.matched.id) in candidate_ids:
         return _after_type_resolved(ctx, match.matched)
@@ -197,9 +216,13 @@ def handle_awaiting_name(ctx: ConversationContext, text: str) -> StepResult:
     )
 
 
-def _offer_times_for_date(ctx: ConversationContext, day: date, updates: dict, time_window=None) -> StepResult:
+def _offer_times_for_date(
+    ctx: ConversationContext, day: date, updates: dict, time_window=None
+) -> StepResult:
     appointment_type = _get_appointment_type(ctx.garage, ctx.slots.get("appointment_type_id"))
-    payload = actions.get_availability_for_day(ctx.garage, day, appointment_type=appointment_type, now=ctx.now)
+    payload = actions.get_availability_for_day(
+        ctx.garage, day, appointment_type=appointment_type, now=ctx.now
+    )
 
     slots = payload["slots"] if payload["is_open"] else []
     if time_window is not None:
@@ -271,7 +294,9 @@ def handle_awaiting_time(ctx: ConversationContext, text: str) -> StepResult:
         )
 
     appointment_type = _get_appointment_type(ctx.garage, ctx.slots.get("appointment_type_id"))
-    reason = actions.revalidate_slot(ctx.garage, day, exact, appointment_type=appointment_type, now=ctx.now)
+    reason = actions.revalidate_slot(
+        ctx.garage, day, exact, appointment_type=appointment_type, now=ctx.now
+    )
     if reason is not None:
         return _offer_times_for_date(ctx, day, {}, time_window=None)
 
@@ -326,6 +351,13 @@ def handle_awaiting_vehicle_confirm(ctx: ConversationContext, text: str) -> Step
 
 
 def handle_awaiting_vehicle_choice(ctx: ConversationContext, text: str) -> StepResult:
+    if ctx.customer is None:
+        return StepResult(
+            response_text="I'll get a member of staff to look into that for you.",
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="Vehicle choice from unrecognised number.",
+        )
     ids = ctx.slots.get("candidate_vehicle_ids", [])
     vehicles = [v for v in actions.find_vehicles_for_customer(ctx.customer) if str(v.id) in ids]
     chosen = _pick_from_list(text, vehicles)
@@ -379,7 +411,11 @@ def _to_confirmation(ctx: ConversationContext, updates: dict) -> StepResult:
             if str(v.id) == slots["vehicle_id"]:
                 vehicle_desc = v.registration_number
 
-    price_text = f"£{appointment_type.base_price}" if appointment_type and appointment_type.base_price else "to be confirmed"
+    price_text = (
+        f"£{appointment_type.base_price}"
+        if appointment_type and appointment_type.base_price
+        else "to be confirmed"
+    )
     duration_text = (
         f"Approx. {appointment_type.default_duration_minutes} minutes"
         if appointment_type and appointment_type.default_duration_minutes
@@ -387,7 +423,9 @@ def _to_confirmation(ctx: ConversationContext, updates: dict) -> StepResult:
     )
 
     summary_lines = [
-        appointment_type.name if appointment_type else slots.get("appointment_type_name", "Appointment"),
+        appointment_type.name
+        if appointment_type
+        else slots.get("appointment_type_name", "Appointment"),
         _format_date(day),
         slot_time.strftime("%H:%M"),
         vehicle_desc or "(vehicle not given)",
@@ -397,7 +435,9 @@ def _to_confirmation(ctx: ConversationContext, updates: dict) -> StepResult:
         summary_lines.append(duration_text)
 
     return StepResult(
-        response_text="Here's what I have:\n" + "\n".join(summary_lines) + "\n\nShall I go ahead and request this booking?",
+        response_text="Here's what I have:\n"
+        + "\n".join(summary_lines)
+        + "\n\nShall I go ahead and request this booking?",
         workflow_step=AWAITING_BOOKING_CONFIRMATION,
         context_updates=updates,
     )
@@ -421,7 +461,9 @@ def handle_awaiting_booking_confirmation(ctx: ConversationContext, text: str) ->
     day = date.fromisoformat(slots["preferred_date"])
     slot_time = time.fromisoformat(slots["preferred_time"])
 
-    first_name = slots.get("customer_first_name") or (ctx.customer.first_name if ctx.customer else "")
+    first_name = slots.get("customer_first_name") or (
+        ctx.customer.first_name if ctx.customer else ""
+    )
     last_name = slots.get("customer_last_name") or (ctx.customer.last_name if ctx.customer else "")
     email = ctx.customer.email if ctx.customer else None
     registration = slots.get("vehicle_registration")
@@ -447,14 +489,18 @@ def handle_awaiting_booking_confirmation(ctx: ConversationContext, text: str) ->
     )
 
     if booking_request is None:
-        return _offer_times_for_date(ctx, day, {}, time_window=None) if reason == "full" else StepResult(
-            response_text=(
-                "I'm sorry, that time's no longer available - I'll get a member of "
-                "staff to help you find another slot."
-            ),
-            workflow_step=None,
-            needs_human=True,
-            handoff_reason=f"Slot became unavailable at confirmation ({reason}).",
+        return (
+            _offer_times_for_date(ctx, day, {}, time_window=None)
+            if reason == "full"
+            else StepResult(
+                response_text=(
+                    "I'm sorry, that time's no longer available - I'll get a member of "
+                    "staff to help you find another slot."
+                ),
+                workflow_step=None,
+                needs_human=True,
+                handoff_reason=f"Slot became unavailable at confirmation ({reason}).",
+            )
         )
 
     return StepResult(
@@ -571,8 +617,19 @@ def start_cancel(ctx: ConversationContext, text: str) -> StepResult:
 
 
 def handle_awaiting_cancel_choice(ctx: ConversationContext, text: str) -> StepResult:
+    if ctx.customer is None:
+        return StepResult(
+            response_text="I'll get a member of staff to look into that for you.",
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="Cancel choice from unrecognised number.",
+        )
     ids = ctx.slots.get("candidate_appointment_ids", [])
-    upcoming = [a for a in actions.get_upcoming_appointments(ctx.garage, ctx.customer, now=ctx.now) if str(a.id) in ids]
+    upcoming = [
+        a
+        for a in actions.get_upcoming_appointments(ctx.garage, ctx.customer, now=ctx.now)
+        if str(a.id) in ids
+    ]
     chosen = _pick_from_list(text, upcoming)
     if chosen is None:
         return StepResult(
@@ -687,11 +744,24 @@ def start_reschedule(ctx: ConversationContext, text: str) -> StepResult:
 
 
 def handle_awaiting_reschedule_choice(ctx: ConversationContext, text: str) -> StepResult:
+    if ctx.customer is None:
+        return StepResult(
+            response_text="I'll get a member of staff to look into that for you.",
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="Reschedule choice from unrecognised number.",
+        )
     ids = ctx.slots.get("candidate_appointment_ids", [])
-    upcoming = [a for a in actions.get_upcoming_appointments(ctx.garage, ctx.customer, now=ctx.now) if str(a.id) in ids]
+    upcoming = [
+        a
+        for a in actions.get_upcoming_appointments(ctx.garage, ctx.customer, now=ctx.now)
+        if str(a.id) in ids
+    ]
     chosen = _pick_from_list(text, upcoming)
     if chosen is None:
-        return StepResult(response_text="Sorry, which number was that?", workflow_step=AWAITING_RESCHEDULE_CHOICE)
+        return StepResult(
+            response_text="Sorry, which number was that?", workflow_step=AWAITING_RESCHEDULE_CHOICE
+        )
     return StepResult(
         response_text="What day would you like to move it to?",
         workflow_step=AWAITING_RESCHEDULE_DATE,
@@ -711,7 +781,10 @@ def handle_awaiting_reschedule_date(ctx: ConversationContext, text: str) -> Step
 
     day = parse_date_phrase(text, now=ctx.now)
     if day is None or day < ctx.now.date():
-        return StepResult(response_text="Sorry, what day would you like instead?", workflow_step=AWAITING_RESCHEDULE_DATE)
+        return StepResult(
+            response_text="Sorry, what day would you like instead?",
+            workflow_step=AWAITING_RESCHEDULE_DATE,
+        )
 
     return _offer_reschedule_slots(ctx, appointment, day)
 
@@ -750,7 +823,10 @@ def handle_awaiting_reschedule_time(ctx: ConversationContext, text: str) -> Step
     day = date.fromisoformat(ctx.slots["new_date"])
     exact = parse_exact_time_phrase(text)
     if exact is None:
-        return StepResult(response_text="Sorry, what time would you like (e.g. 10:30)?", workflow_step=AWAITING_RESCHEDULE_TIME)
+        return StepResult(
+            response_text="Sorry, what time would you like (e.g. 10:30)?",
+            workflow_step=AWAITING_RESCHEDULE_TIME,
+        )
 
     return StepResult(
         response_text=(
@@ -763,7 +839,11 @@ def handle_awaiting_reschedule_time(ctx: ConversationContext, text: str) -> Step
 
 def handle_awaiting_reschedule_confirmation(ctx: ConversationContext, text: str) -> StepResult:
     if not _is_yes(text):
-        return StepResult(response_text="No problem, I've left your appointment as it is.", workflow_step=None, complete=True)
+        return StepResult(
+            response_text="No problem, I've left your appointment as it is.",
+            workflow_step=None,
+            complete=True,
+        )
 
     appointment = _find_appointment(ctx, ctx.slots.get("target_appointment_id"))
     if appointment is None:
@@ -810,10 +890,12 @@ RESCHEDULE_STEP_HANDLERS = {
 
 def handle_price_query(ctx: ConversationContext, text: str) -> StepResult:
     match = match_appointment_type(ctx.garage, text)
-    if match.is_confident:
+    if match.matched is not None:
         t = match.matched
         if t.base_price is not None:
-            return StepResult(response_text=f"{t.name} is £{t.base_price}.", workflow_step=None, complete=True)
+            return StepResult(
+                response_text=f"{t.name} is £{t.base_price}.", workflow_step=None, complete=True
+            )
         return StepResult(
             response_text=f"Pricing for {t.name} is confirmed by the business - I'll get someone to call you back with a price.",
             workflow_step=None,
@@ -825,15 +907,26 @@ def handle_price_query(ctx: ConversationContext, text: str) -> StepResult:
 
     types = actions.get_appointment_types(ctx.garage)
     names = ", ".join(f"{t.name} (£{t.base_price})" if t.base_price else t.name for t in types)
-    return StepResult(response_text=f"Here's what we offer: {names}", workflow_step=None, complete=True)
+    return StepResult(
+        response_text=f"Here's what we offer: {names}", workflow_step=None, complete=True
+    )
 
 
 def handle_appointment_type_query(ctx: ConversationContext, text: str) -> StepResult:
     types = actions.get_appointment_types(ctx.garage)
     if not types:
-        return StepResult(response_text="I'll get a member of staff to tell you what's available.", workflow_step=None, needs_human=True, handoff_reason="No appointment types configured.")
+        return StepResult(
+            response_text="I'll get a member of staff to tell you what's available.",
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="No appointment types configured.",
+        )
     names = ", ".join(t.name for t in types)
-    return StepResult(response_text=f"We offer: {names}. Would you like to book one?", workflow_step=None, complete=True)
+    return StepResult(
+        response_text=f"We offer: {names}. Would you like to book one?",
+        workflow_step=None,
+        complete=True,
+    )
 
 
 _WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -847,8 +940,14 @@ def handle_business_hours_query(ctx: ConversationContext, text: str) -> StepResu
         if is_closed:
             lines.append(f"{_WEEKDAY_NAMES[wd]}: closed")
         else:
-            lines.append(f"{_WEEKDAY_NAMES[wd]}: {opens_at.strftime('%H:%M')}-{closes_at.strftime('%H:%M')}")
-    return StepResult(response_text="Our opening hours are:\n" + "\n".join(lines), workflow_step=None, complete=True)
+            lines.append(
+                f"{_WEEKDAY_NAMES[wd]}: {opens_at.strftime('%H:%M')}-{closes_at.strftime('%H:%M')}"
+            )
+    return StepResult(
+        response_text="Our opening hours are:\n" + "\n".join(lines),
+        workflow_step=None,
+        complete=True,
+    )
 
 
 def handle_business_location_query(ctx: ConversationContext, text: str) -> StepResult:
@@ -860,7 +959,9 @@ def handle_business_location_query(ctx: ConversationContext, text: str) -> StepR
             needs_human=True,
             handoff_reason="No business address configured.",
         )
-    return StepResult(response_text=f"We're at {', '.join(bits)}.", workflow_step=None, complete=True)
+    return StepResult(
+        response_text=f"We're at {', '.join(bits)}.", workflow_step=None, complete=True
+    )
 
 
 def handle_mot_expiry_query(ctx: ConversationContext, text: str) -> StepResult:
@@ -871,7 +972,10 @@ def handle_mot_expiry_query(ctx: ConversationContext, text: str) -> StepResult:
         )
     vehicles = actions.find_vehicles_for_customer(ctx.customer)
     if not vehicles:
-        return StepResult(response_text="I don't have a vehicle on file for you yet - what's the registration number?", workflow_step=AWAITING_VEHICLE_REG_FOR_MOT)
+        return StepResult(
+            response_text="I don't have a vehicle on file for you yet - what's the registration number?",
+            workflow_step=AWAITING_VEHICLE_REG_FOR_MOT,
+        )
     if len(vehicles) > 1:
         lines = "\n".join(f"{i + 1}. {v.registration_number}" for i, v in enumerate(vehicles))
         return StepResult(
@@ -903,19 +1007,40 @@ def _mot_expiry_reply(vehicle: Vehicle) -> StepResult:
 
 def handle_awaiting_vehicle_reg_for_mot(ctx: ConversationContext, text: str) -> StepResult:
     if ctx.customer is None:
-        return StepResult(response_text="I'll get a member of staff to look into that for you.", workflow_step=None, needs_human=True, handoff_reason="MOT query from unrecognised number.")
+        return StepResult(
+            response_text="I'll get a member of staff to look into that for you.",
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="MOT query from unrecognised number.",
+        )
     vehicle = actions.find_customer_vehicle_by_registration(ctx.customer, text)
     if vehicle is None:
-        return StepResult(response_text="I can't find that registration on your account - I'll get someone to check for you.", workflow_step=None, needs_human=True, handoff_reason="Vehicle not found for MOT query.")
+        return StepResult(
+            response_text="I can't find that registration on your account - I'll get someone to check for you.",
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="Vehicle not found for MOT query.",
+        )
     return _mot_expiry_reply(vehicle)
 
 
 def handle_awaiting_mot_vehicle_choice(ctx: ConversationContext, text: str) -> StepResult:
+    if ctx.customer is None:
+        return StepResult(
+            response_text="I'll get a member of staff to look into that for you.",
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="MOT vehicle choice from unrecognised number.",
+        )
     ids = ctx.slots.get("candidate_vehicle_ids", [])
     vehicles = [v for v in actions.find_vehicles_for_customer(ctx.customer) if str(v.id) in ids]
-    chosen = _pick_from_list(text, vehicles) or actions.find_customer_vehicle_by_registration(ctx.customer, text)
+    chosen = _pick_from_list(text, vehicles) or actions.find_customer_vehicle_by_registration(
+        ctx.customer, text
+    )
     if chosen is None:
-        return StepResult(response_text="Sorry, which number was that?", workflow_step=AWAITING_MOT_VEHICLE_CHOICE)
+        return StepResult(
+            response_text="Sorry, which number was that?", workflow_step=AWAITING_MOT_VEHICLE_CHOICE
+        )
     return _mot_expiry_reply(chosen)
 
 
@@ -927,7 +1052,11 @@ MOT_STEP_HANDLERS = {
 
 def handle_customer_details_query(ctx: ConversationContext, text: str) -> StepResult:
     if ctx.customer is None:
-        return StepResult(response_text="I don't have an account on file for this number yet.", workflow_step=None, complete=True)
+        return StepResult(
+            response_text="I don't have an account on file for this number yet.",
+            workflow_step=None,
+            complete=True,
+        )
     vehicles = actions.find_vehicles_for_customer(ctx.customer)
     if vehicles:
         reg_list = ", ".join(v.registration_number for v in vehicles)
@@ -936,7 +1065,11 @@ def handle_customer_details_query(ctx: ConversationContext, text: str) -> StepRe
             workflow_step=None,
             complete=True,
         )
-    return StepResult(response_text=f"Hi {ctx.customer.first_name}, I don't have any vehicles on file for you yet.", workflow_step=None, complete=True)
+    return StepResult(
+        response_text=f"Hi {ctx.customer.first_name}, I don't have any vehicles on file for you yet.",
+        workflow_step=None,
+        complete=True,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -963,7 +1096,11 @@ def start_callback(ctx: ConversationContext, text: str) -> StepResult:
 def handle_awaiting_callback_reason(ctx: ConversationContext, text: str) -> StepResult:
     reason = None if _is_no(text) else text.strip()
     callback = actions.create_callback_request(
-        ctx.garage, customer=ctx.customer, phone_e164=ctx.phone_e164, reason=reason, session=ctx.session
+        ctx.garage,
+        customer=ctx.customer,
+        phone_e164=ctx.phone_e164,
+        reason=reason,
+        session=ctx.session,
     )
     return StepResult(
         response_text="Thanks - someone will call you back shortly.",

@@ -217,7 +217,9 @@ def test_send_whatsapp_records_twilio_failure(app, comms_settings, garage, monke
 
 
 def test_initiate_voice_call_skips_when_not_configured(garage):
-    log = initiate_voice_call(garage=garage, to="07123456789", twiml_url="https://example.test/twiml")
+    log = initiate_voice_call(
+        garage=garage, to="07123456789", twiml_url="https://example.test/twiml"
+    )
     assert log.status == STATUS_SKIPPED_NOT_CONFIGURED
     assert log.channel == CHANNEL_VOICE
 
@@ -231,7 +233,9 @@ def test_initiate_voice_call_success_records_log(app, comms_settings, garage, mo
         "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
     )
 
-    log = initiate_voice_call(garage=garage, to="07123456789", twiml_url="https://example.test/twiml")
+    log = initiate_voice_call(
+        garage=garage, to="07123456789", twiml_url="https://example.test/twiml"
+    )
 
     assert log.status == "queued"
     assert log.external_id == "CA123"
@@ -246,8 +250,11 @@ def test_initiate_voice_call_success_records_log(app, comms_settings, garage, mo
 
 def test_update_communication_status_updates_matching_row(session, garage):
     log = CommunicationLog(
-        garage_id=garage.id, channel=CHANNEL_VOICE, direction=DIRECTION_OUTBOUND,
-        status="queued", external_id="CA999",
+        garage_id=garage.id,
+        channel=CHANNEL_VOICE,
+        direction=DIRECTION_OUTBOUND,
+        status="queued",
+        external_id="CA999",
     )
     session.add(log)
     session.commit()
@@ -264,8 +271,11 @@ def test_update_communication_status_updates_matching_row(session, garage):
 def test_update_communication_status_is_idempotent_across_duplicate_callbacks(session, garage):
     session.add(
         CommunicationLog(
-            garage_id=garage.id, channel=CHANNEL_VOICE, direction=DIRECTION_OUTBOUND,
-            status="queued", external_id="CA998",
+            garage_id=garage.id,
+            channel=CHANNEL_VOICE,
+            direction=DIRECTION_OUTBOUND,
+            status="queued",
+            external_id="CA998",
         )
     )
     session.commit()
@@ -307,7 +317,9 @@ def test_find_customer_by_phone_is_tenant_scoped(second_garage, customer):
 
 
 def test_resolve_garage_by_voice_number(session, garage):
-    session.add(GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111"))
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111")
+    )
     session.commit()
 
     resolved = resolve_garage_by_voice_number("+441111111111")
@@ -320,9 +332,13 @@ def test_resolve_garage_by_voice_number_unknown_number_returns_none(garage):
 
 
 def test_resolve_garage_by_whatsapp_sender_is_tenant_isolated(session, garage, second_garage):
-    session.add(GarageCommunicationSettings(garage_id=garage.id, whatsapp_sender="whatsapp:+10000000001"))
     session.add(
-        GarageCommunicationSettings(garage_id=second_garage.id, whatsapp_sender="whatsapp:+10000000002")
+        GarageCommunicationSettings(garage_id=garage.id, whatsapp_sender="whatsapp:+10000000001")
+    )
+    session.add(
+        GarageCommunicationSettings(
+            garage_id=second_garage.id, whatsapp_sender="whatsapp:+10000000002"
+        )
     )
     session.commit()
 

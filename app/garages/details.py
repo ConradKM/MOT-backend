@@ -27,7 +27,7 @@ def resolve_garage(identifier: str, session=None) -> Garage:
     :class:`GarageNotFoundError` if nothing matches."""
     session = session or db.session
 
-    garage = Garage.query.filter_by(slug=identifier).first()
+    garage: Garage | None = Garage.query.filter_by(slug=identifier).first()
     if garage is None:
         try:
             import uuid
@@ -41,9 +41,7 @@ def resolve_garage(identifier: str, session=None) -> Garage:
     return garage
 
 
-def update_garage_details(
-    garage: Garage, *, session=None, commit: bool = True, **fields
-) -> Garage:
+def update_garage_details(garage: Garage, *, session=None, commit: bool = True, **fields) -> Garage:
     """Apply the given business-detail fields to one garage (that tenant only).
 
     Unknown keys and ``None``-only omissions are ignored; an empty string is a
@@ -53,9 +51,7 @@ def update_garage_details(
 
     unknown = set(fields) - set(EDITABLE_FIELDS)
     if unknown:
-        raise ValueError(
-            f"Not editable: {sorted(unknown)}. Allowed: {list(EDITABLE_FIELDS)}."
-        )
+        raise ValueError(f"Not editable: {sorted(unknown)}. Allowed: {list(EDITABLE_FIELDS)}.")
 
     applied = {}
     for key in EDITABLE_FIELDS:

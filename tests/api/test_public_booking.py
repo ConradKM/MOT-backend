@@ -9,14 +9,15 @@ import json
 import urllib.error
 
 from app.extensions import db
-from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.appointments.appointment import Appointment
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
 from app.models.vehicle import Vehicle
 
+
 def _future_weekday(days_ahead=7):
-    d = datetime.date.today() + datetime.timedelta(days=days_ahead)
+    d = datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=days_ahead)
     while d.weekday() >= 5:  # keep off Sat/Sun - the default schedule is closed
         d += datetime.timedelta(days=1)
     return d
@@ -90,9 +91,7 @@ def test_get_public_garage_unknown_slug_returns_404(client):
 
 
 def test_submit_creates_a_pending_booking_request(client, session, garage):
-    resp = client.post(
-        f"/api/public/{garage.slug}/booking-requests", json=_valid_payload()
-    )
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_valid_payload())
 
     assert resp.status_code == 201
     body = resp.get_json()
@@ -171,9 +170,7 @@ def test_submit_strips_surrounding_whitespace(client, session, garage):
 
 
 def test_submit_unknown_slug_returns_404(client):
-    resp = client.post(
-        "/api/public/no-such-garage/booking-requests", json=_valid_payload()
-    )
+    resp = client.post("/api/public/no-such-garage/booking-requests", json=_valid_payload())
     assert resp.status_code == 404
 
 
@@ -186,7 +183,9 @@ def test_submit_missing_required_field_returns_422(client, garage):
 
 
 def test_submit_past_date_returns_422(client, garage):
-    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    yesterday = (
+        datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=1)
+    ).isoformat()
 
     resp = client.post(
         f"/api/public/{garage.slug}/booking-requests",
@@ -218,13 +217,9 @@ def test_submit_inactive_appointment_type_returns_422(client, session, garage):
 
 
 def test_submit_rejected_captcha_returns_400(client, garage, monkeypatch):
-    monkeypatch.setattr(
-        "app.public_booking.routes.verify_captcha", lambda token: False
-    )
+    monkeypatch.setattr("app.public_booking.routes.verify_captcha", lambda token: False)
 
-    resp = client.post(
-        f"/api/public/{garage.slug}/booking-requests", json=_valid_payload()
-    )
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_valid_payload())
     assert resp.status_code == 400
     assert BookingRequest.query.count() == 0
 
@@ -254,9 +249,7 @@ def _stub_siteverify(monkeypatch, *, success=True, raises=None):
             raise raises
         return _FakeResp({"success": success})
 
-    monkeypatch.setattr(
-        "app.public_booking.captcha.urllib.request.urlopen", fake_urlopen
-    )
+    monkeypatch.setattr("app.public_booking.captcha.urllib.request.urlopen", fake_urlopen)
 
 
 def test_turnstile_valid_token_creates_the_request(app, client, garage, monkeypatch):
@@ -291,9 +284,7 @@ def test_turnstile_missing_token_returns_400_without_calling_provider(
     def explode(*a, **k):  # pragma: no cover - must not be reached
         raise AssertionError("provider should not be called with no token")
 
-    monkeypatch.setattr(
-        "app.public_booking.captcha.urllib.request.urlopen", explode
-    )
+    monkeypatch.setattr("app.public_booking.captcha.urllib.request.urlopen", explode)
 
     payload = _valid_payload()
     payload.pop("captcha_token", None)
@@ -321,9 +312,7 @@ def test_turnstile_network_failure_fails_closed(app, client, garage, monkeypatch
 
 def _future_dt(hour, minute=0):
     day = datetime.date.fromisoformat(FUTURE_DATE)
-    return datetime.datetime.combine(
-        day, datetime.time(hour, minute), tzinfo=datetime.UTC
-    )
+    return datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=datetime.UTC)
 
 
 def test_submit_into_a_full_slot_returns_409(client, session, garage, make_appointment):
@@ -340,9 +329,7 @@ def test_submit_into_a_full_slot_returns_409(client, session, garage, make_appoi
     assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
 
 
-def test_submit_into_a_free_slot_still_succeeds(
-    client, session, garage, make_appointment
-):
+def test_submit_into_a_free_slot_still_succeeds(client, session, garage, make_appointment):
     make_appointment(_future_dt(14, 0), minutes=60)
 
     resp = client.post(
@@ -352,9 +339,7 @@ def test_submit_into_a_free_slot_still_succeeds(
     assert resp.status_code == 201
 
 
-def test_submit_without_a_time_skips_the_slot_check(
-    client, session, garage, make_appointment
-):
+def test_submit_without_a_time_skips_the_slot_check(client, session, garage, make_appointment):
     make_appointment(_future_dt(9, 30), minutes=60)
 
     resp = client.post(
@@ -373,9 +358,7 @@ def test_a_pending_request_blocks_the_same_slot(client, garage):
 
     second = client.post(
         f"/api/public/{garage.slug}/booking-requests",
-        json=_valid_payload(
-            customer_email="someone.else@example.com", preferred_time="09:30:00"
-        ),
+        json=_valid_payload(customer_email="someone.else@example.com", preferred_time="09:30:00"),
     )
     assert second.status_code == 409
 
@@ -402,45 +385,46 @@ def test_submit_snapshots_the_selected_types_duration_and_price(client, session,
     assert str(row.requested_price) == "189.00"
 
 
-def test_a_90_minute_type_is_rejected_when_it_would_not_fit_before_closing(
-    client, session, garage
-):
+def test_a_90_minute_type_is_rejected_when_it_would_not_fit_before_closing(client, session, garage):
     """Item 14: the submit-time re-check must use the *selected type's* full
     duration, not just a flat default - a slot that fits a short service can
     still be too late in the day for a long one."""
     long_type = GarageAppointmentType(
-        garage_id=garage.id, name="Full Service", status="ACTIVE", default_duration_minutes=90,
+        garage_id=garage.id,
+        name="Full Service",
+        status="ACTIVE",
+        default_duration_minutes=90,
     )
     session.add(long_type)
     session.commit()
 
     resp = client.post(
         f"/api/public/{garage.slug}/booking-requests",
-        json=_valid_payload(
-            appointment_type_id=str(long_type.id), preferred_time="16:00:00"
-        ),
+        json=_valid_payload(appointment_type_id=str(long_type.id), preferred_time="16:00:00"),
     )
     assert resp.status_code == 409
     assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
 
 
-def test_a_pending_90_minute_request_blocks_a_later_30_minute_submission(
-    client, session, garage
-):
+def test_a_pending_90_minute_request_blocks_a_later_30_minute_submission(client, session, garage):
     long_type = GarageAppointmentType(
-        garage_id=garage.id, name="Full Service", status="ACTIVE", default_duration_minutes=90,
+        garage_id=garage.id,
+        name="Full Service",
+        status="ACTIVE",
+        default_duration_minutes=90,
     )
     short_type = GarageAppointmentType(
-        garage_id=garage.id, name="Diagnostic", status="ACTIVE", default_duration_minutes=30,
+        garage_id=garage.id,
+        name="Diagnostic",
+        status="ACTIVE",
+        default_duration_minutes=30,
     )
     session.add_all([long_type, short_type])
     session.commit()
 
     first = client.post(
         f"/api/public/{garage.slug}/booking-requests",
-        json=_valid_payload(
-            appointment_type_id=str(long_type.id), preferred_time="10:00:00"
-        ),
+        json=_valid_payload(appointment_type_id=str(long_type.id), preferred_time="10:00:00"),
     )
     assert first.status_code == 201
 

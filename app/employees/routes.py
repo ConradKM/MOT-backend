@@ -15,17 +15,15 @@ from .service import create_employee_account
 
 
 def _active_owner_count(garage_id, exclude_id=None):
-    q = (
-        Employee.query.join(Employee.roles)
-        .filter(
-            Employee.garage_id == garage_id,
-            Employee.is_active.is_(True),
-            Role.name == "OWNER",
-        )
+    q = Employee.query.join(Employee.roles).filter(
+        Employee.garage_id == garage_id,
+        Employee.is_active.is_(True),
+        Role.name == "OWNER",
     )
     if exclude_id is not None:
         q = q.filter(Employee.id != exclude_id)
     return q.count()
+
 
 employees_blp = Blueprint(
     "employees",
@@ -50,17 +48,12 @@ def _resolve_roles(role_ids, garage_id):
 
 @employees_blp.route("/")
 class EmployeeList(MethodView):
-
     @jwt_required()
     @employees_blp.response(200, EmployeeSchema(many=True))
     def get(self):
         garage_id = get_current_employee().garage_id
 
-        return (
-            Employee.query.filter_by(garage_id=garage_id)
-            .order_by(Employee.email)
-            .all()
-        )
+        return Employee.query.filter_by(garage_id=garage_id).order_by(Employee.email).all()
 
     @jwt_required()
     @owner_required
@@ -76,9 +69,7 @@ class EmployeeList(MethodView):
         else:
             # No roles specified - default to the garage's STAFF role, same as
             # before roles existed, unless it's been renamed/deleted.
-            default_role = Role.query.filter_by(
-                garage_id=garage_id, name="STAFF"
-            ).first()
+            default_role = Role.query.filter_by(garage_id=garage_id, name="STAFF").first()
             roles = [default_role] if default_role else []
 
         employee = create_employee_account(
@@ -95,7 +86,6 @@ class EmployeeList(MethodView):
 
 @employees_blp.route("/<uuid:employee_id>")
 class EmployeeResource(MethodView):
-
     @jwt_required()
     @employees_blp.response(200, EmployeeSchema)
     def get(self, employee_id):

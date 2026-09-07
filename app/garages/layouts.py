@@ -40,8 +40,10 @@ def resolve_layout(garage) -> str:
     or names one that isn't registered (e.g. a variant retired after it was
     assigned).
     """
-    variant = getattr(garage, "layout_variant", None)
-    return variant if is_known_variant(variant) else DEFAULT_LAYOUT
+    variant: str | None = getattr(garage, "layout_variant", None)
+    if variant is not None and is_known_variant(variant):
+        return variant
+    return DEFAULT_LAYOUT
 
 
 def validate_layout_variant(variant: str | None) -> None:
@@ -49,6 +51,4 @@ def validate_layout_variant(variant: str | None) -> None:
     non-null value must be a registered key."""
     if variant is not None and not is_known_variant(variant):
         known = ", ".join(sorted(LAYOUT_VARIANTS))
-        raise ValueError(
-            f"Unknown layout_variant {variant!r}. Registered variants: {known}."
-        )
+        raise ValueError(f"Unknown layout_variant {variant!r}. Registered variants: {known}.")

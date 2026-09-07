@@ -127,12 +127,13 @@ def overview_summary(garage) -> dict:
 def unread_whatsapp_count(garage) -> int:
     """Cheap on its own (no recent-list/summary work) - what the nav badge
     polls, separately from the full overview page."""
-    return CommunicationLog.query.filter_by(
+    count: int = CommunicationLog.query.filter_by(
         garage_id=garage.id,
         channel=CHANNEL_WHATSAPP,
         direction=DIRECTION_INBOUND,
         read_at=None,
     ).count()
+    return count
 
 
 def list_calls(
@@ -178,9 +179,10 @@ def list_calls(
 
 
 def get_call_detail(garage, call_id) -> CommunicationLog | None:
-    return CommunicationLog.query.filter_by(
+    result: CommunicationLog | None = CommunicationLog.query.filter_by(
         garage_id=garage.id, channel=CHANNEL_VOICE, id=call_id
     ).first()
+    return result
 
 
 def list_conversations(
@@ -249,7 +251,9 @@ def get_conversation_messages(
     address = _whatsapp_address(phone_e164)
     rows = (
         CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_WHATSAPP)
-        .filter(or_(CommunicationLog.from_address == address, CommunicationLog.to_address == address))
+        .filter(
+            or_(CommunicationLog.from_address == address, CommunicationLog.to_address == address)
+        )
         .order_by(CommunicationLog.created_at.desc())
         .limit(_clamp_limit(limit))
         .all()
@@ -262,7 +266,7 @@ def mark_conversation_read(garage, phone_e164: str) -> int:
     many rows changed (0 is a normal, valid outcome - already read, or an
     outbound-only/nonexistent thread)."""
     address = _whatsapp_address(phone_e164)
-    updated = CommunicationLog.query.filter(
+    updated: int = CommunicationLog.query.filter(
         CommunicationLog.garage_id == garage.id,
         CommunicationLog.channel == CHANNEL_WHATSAPP,
         CommunicationLog.direction == DIRECTION_INBOUND,
@@ -280,10 +284,11 @@ def list_customer_communications(
     the FK set at log time (see service.py), not by re-matching phone
     strings, so this can never accidentally include another customer's rows.
     """
-    return (
+    rows: list[CommunicationLog] = (
         CommunicationLog.query.filter_by(garage_id=garage.id, customer_id=customer_id)
         .filter(CommunicationLog.channel.in_((CHANNEL_VOICE, CHANNEL_WHATSAPP)))
         .order_by(CommunicationLog.created_at.desc())
         .limit(_clamp_limit(limit))
         .all()
     )
+    return rows

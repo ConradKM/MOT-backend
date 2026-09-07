@@ -42,9 +42,7 @@ def is_request_stale(booking_request: BookingRequest, now: datetime | None = Non
     return booking_request.preferred_time < now.time()
 
 
-def expire_stale_booking_requests(
-    garage_id=None, now: datetime | None = None, session=None
-) -> int:
+def expire_stale_booking_requests(garage_id=None, now: datetime | None = None, session=None) -> int:
     """Flip every stale PENDING request to EXPIRED (releasing whatever
     capacity it was holding). Returns how many were changed.
 
@@ -75,10 +73,7 @@ def expire_stale_booking_requests(
         BookingRequest.preferred_date < today,
     )
 
-    stale_ids = [
-        row.id
-        for row in query.filter(or_(timed_and_passed, date_only_and_passed)).all()
-    ]
+    stale_ids = [row.id for row in query.filter(or_(timed_and_passed, date_only_and_passed)).all()]
     if not stale_ids:
         return 0
 
@@ -110,6 +105,9 @@ def slot_check_for_request(booking_request: BookingRequest, now: datetime | None
     # only needed the garage's generic slot length, understating what it
     # actually still needs to fit.
     duration = _duration_minutes_for(booking_request)
+    # booking_request.garage_id is a non-nullable FK, so the garage-is-None
+    # branch in _duration_minutes_for is unreachable here.
+    assert duration is not None
     used, capacity = slot_capacity_usage(
         garage,
         booking_request.preferred_date,
@@ -128,7 +126,10 @@ def _duration_minutes_for(booking_request: BookingRequest) -> int | None:
     around, else the snapshot taken at submission time (covers a type edited
     or - since it's a nullable FK - deleted while this request was pending),
     else the garage's generic default."""
-    if booking_request.appointment_type and booking_request.appointment_type.default_duration_minutes:
+    if (
+        booking_request.appointment_type
+        and booking_request.appointment_type.default_duration_minutes
+    ):
         return booking_request.appointment_type.default_duration_minutes
     if booking_request.requested_duration_minutes is not None:
         return booking_request.requested_duration_minutes
@@ -137,9 +138,7 @@ def _duration_minutes_for(booking_request: BookingRequest) -> int | None:
     return resolve_settings(booking_request.garage).default_appointment_minutes
 
 
-def attach_review_context(
-    requests: list[BookingRequest], now: datetime | None = None
-) -> None:
+def attach_review_context(requests: list[BookingRequest], now: datetime | None = None) -> None:
     """Populate the transient attributes ``BookingRequestSchema`` reads for
     the staff review screen - one place, used by list/detail/approve/reject,
     so the enrichment logic isn't duplicated across routes."""

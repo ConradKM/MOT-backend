@@ -32,16 +32,16 @@ def _make_type(session, garage, name="MOT", minutes=None, status="ACTIVE", base_
 
 
 def _pending_request(session, garage, **overrides):
-    fields = dict(
-        garage_id=garage.id,
-        status="PENDING",
-        customer_first_name="Pat",
-        customer_last_name="Rivera",
-        customer_email="pat.rivera@example.com",
-        vehicle_registration="BR11 REQ",
-        preferred_date=datetime.date.today() + datetime.timedelta(days=5),
-        preferred_time=datetime.time(9, 0),
-    )
+    fields = {
+        "garage_id": garage.id,
+        "status": "PENDING",
+        "customer_first_name": "Pat",
+        "customer_last_name": "Rivera",
+        "customer_email": "pat.rivera@example.com",
+        "vehicle_registration": "BR11 REQ",
+        "preferred_date": datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=5),
+        "preferred_time": datetime.time(9, 0),
+    }
     fields.update(overrides)
     br = BookingRequest(**fields)
     session.add(br)
@@ -62,9 +62,7 @@ def test_list_returns_the_garages_requests(authenticated_user, booking_request):
     assert str(booking_request.id) in ids
 
 
-def test_list_is_garage_scoped(
-    authenticated_user, booking_request, session, second_garage
-):
+def test_list_is_garage_scoped(authenticated_user, booking_request, session, second_garage):
     _pending_request(session, second_garage, customer_email="other@example.com")
 
     body = authenticated_user.client.get("/api/booking-requests/").get_json()
@@ -73,12 +71,8 @@ def test_list_is_garage_scoped(
 
 
 def test_list_filters_by_status(authenticated_user, booking_request):
-    pending = authenticated_user.client.get(
-        "/api/booking-requests/?status=PENDING"
-    ).get_json()
-    approved = authenticated_user.client.get(
-        "/api/booking-requests/?status=APPROVED"
-    ).get_json()
+    pending = authenticated_user.client.get("/api/booking-requests/?status=PENDING").get_json()
+    approved = authenticated_user.client.get("/api/booking-requests/?status=APPROVED").get_json()
 
     assert str(booking_request.id) in {r["id"] for r in pending}
     assert approved == []
@@ -92,9 +86,7 @@ def test_get_one_request(authenticated_user, booking_request):
 
 
 def test_get_cross_garage_request_is_404(second_authenticated_client, booking_request):
-    resp = second_authenticated_client.get(
-        f"/api/booking-requests/{booking_request.id}"
-    )
+    resp = second_authenticated_client.get(f"/api/booking-requests/{booking_request.id}")
     assert resp.status_code == 404
 
 
@@ -180,9 +172,7 @@ def test_approve_creates_the_appointments_checklist_instance(
     )
     appointment_id = resp.get_json()["appointment_id"]
 
-    checklist = authenticated_user.client.get(
-        f"/api/appointments/{appointment_id}/checklist"
-    )
+    checklist = authenticated_user.client.get(f"/api/appointments/{appointment_id}/checklist")
     assert checklist.status_code == 200
     assert len(checklist.get_json()["items"]) == 1
 
@@ -233,9 +223,7 @@ def test_approve_derives_end_time_from_the_type_default_duration(
     assert (appointment.end_time - appointment.start_time).total_seconds() == 3600
 
 
-def test_approve_requires_an_employee_id(
-    authenticated_user, session, garage, booking_request
-):
+def test_approve_requires_an_employee_id(authenticated_user, session, garage, booking_request):
     appt_type = _make_type(session, garage)
 
     resp = authenticated_user.client.post(
@@ -245,9 +233,7 @@ def test_approve_requires_an_employee_id(
     assert resp.status_code == 422
 
 
-def test_approve_requires_a_resolvable_start_time(
-    authenticated_user, session, garage
-):
+def test_approve_requires_a_resolvable_start_time(authenticated_user, session, garage):
     appt_type = _make_type(session, garage)
     request_without_time = _pending_request(session, garage, preferred_time=None)
 
@@ -261,9 +247,7 @@ def test_approve_requires_a_resolvable_start_time(
     assert resp.status_code == 422
 
 
-def test_approve_requires_an_appointment_type(
-    authenticated_user, booking_request
-):
+def test_approve_requires_an_appointment_type(authenticated_user, booking_request):
     resp = authenticated_user.client.post(
         f"/api/booking-requests/{booking_request.id}/approve",
         json={"employee_id": str(authenticated_user.user.id), "start_time": START},
@@ -287,9 +271,7 @@ def test_approve_rejects_an_employee_from_another_garage(
     assert resp.status_code == 422
 
 
-def test_approving_twice_conflicts(
-    authenticated_user, session, garage, booking_request
-):
+def test_approving_twice_conflicts(authenticated_user, session, garage, booking_request):
     appt_type = _make_type(session, garage)
     body = {
         "employee_id": str(authenticated_user.user.id),
@@ -297,18 +279,14 @@ def test_approving_twice_conflicts(
         "start_time": START,
         "end_time": "2026-11-03T09:45:00+00:00",
     }
-    authenticated_user.client.post(
-        f"/api/booking-requests/{booking_request.id}/approve", json=body
-    )
+    authenticated_user.client.post(f"/api/booking-requests/{booking_request.id}/approve", json=body)
     resp = authenticated_user.client.post(
         f"/api/booking-requests/{booking_request.id}/approve", json=body
     )
     assert resp.status_code == 409
 
 
-def test_approve_cross_garage_is_404(
-    second_authenticated_client, booking_request
-):
+def test_approve_cross_garage_is_404(second_authenticated_client, booking_request):
     resp = second_authenticated_client.post(
         f"/api/booking-requests/{booking_request.id}/approve",
         json={"start_time": START},
@@ -321,9 +299,7 @@ def test_approve_cross_garage_is_404(
 # --------------------------------------------------------------------------
 
 
-def test_reject_sets_status_and_records_the_decision(
-    authenticated_user, booking_request
-):
+def test_reject_sets_status_and_records_the_decision(authenticated_user, booking_request):
     resp = authenticated_user.client.post(
         f"/api/booking-requests/{booking_request.id}/reject",
         json={"staff_notes": "No availability that week."},
@@ -337,9 +313,7 @@ def test_reject_sets_status_and_records_the_decision(
     assert body["reviewed_at"] is not None
 
 
-def test_reject_after_approve_conflicts(
-    authenticated_user, session, garage, booking_request
-):
+def test_reject_after_approve_conflicts(authenticated_user, session, garage, booking_request):
     appt_type = _make_type(session, garage)
     authenticated_user.client.post(
         f"/api/booking-requests/{booking_request.id}/approve",
@@ -437,9 +411,7 @@ def test_slot_check_uses_the_requests_own_type_duration_not_the_garage_default(
     assert row["slot_check"]["available"] is False
 
 
-def test_slot_check_is_not_computed_for_a_date_only_request(
-    authenticated_user, session, garage
-):
+def test_slot_check_is_not_computed_for_a_date_only_request(authenticated_user, session, garage):
     request_without_time = _pending_request(session, garage, preferred_time=None)
     (row,) = authenticated_user.client.get("/api/booking-requests/").get_json()
     assert row["id"] == str(request_without_time.id)
@@ -464,9 +436,7 @@ def test_approved_request_reports_the_reviewers_name(
         },
     )
 
-    body = authenticated_user.client.get(
-        f"/api/booking-requests/{booking_request.id}"
-    ).get_json()
+    body = authenticated_user.client.get(f"/api/booking-requests/{booking_request.id}").get_json()
     assert body["reviewed_by_name"] == "Jamie Lee"
 
 
@@ -475,13 +445,11 @@ def test_approved_request_reports_the_reviewers_name(
 # --------------------------------------------------------------------------
 
 
-def test_a_past_pending_request_is_swept_to_expired_on_list(
-    authenticated_user, session, garage
-):
+def test_a_past_pending_request_is_swept_to_expired_on_list(authenticated_user, session, garage):
     stale = _pending_request(
         session,
         garage,
-        preferred_date=datetime.date.today() - datetime.timedelta(days=1),
+        preferred_date=datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=1),
         preferred_time=datetime.time(9, 0),
         customer_email="stale@example.com",
     )
@@ -520,14 +488,12 @@ def test_expired_request_shows_is_expired_and_cannot_be_approved(
     stale = _pending_request(
         session,
         garage,
-        preferred_date=datetime.date.today() - datetime.timedelta(days=1),
+        preferred_date=datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=1),
         preferred_time=datetime.time(9, 0),
     )
     appt_type = _make_type(session, garage)
 
-    detail = authenticated_user.client.get(
-        f"/api/booking-requests/{stale.id}"
-    ).get_json()
+    detail = authenticated_user.client.get(f"/api/booking-requests/{stale.id}").get_json()
     assert detail["status"] == "EXPIRED"
     assert detail["is_expired"] is True
 
@@ -546,13 +512,11 @@ def test_expired_request_cannot_be_rejected_either(authenticated_user, session, 
     stale = _pending_request(
         session,
         garage,
-        preferred_date=datetime.date.today() - datetime.timedelta(days=1),
+        preferred_date=datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=1),
         preferred_time=datetime.time(9, 0),
     )
 
-    resp = authenticated_user.client.post(
-        f"/api/booking-requests/{stale.id}/reject", json={}
-    )
+    resp = authenticated_user.client.post(f"/api/booking-requests/{stale.id}/reject", json={})
     assert resp.status_code == 409
 
     session.refresh(stale)
@@ -562,7 +526,7 @@ def test_expired_request_cannot_be_rejected_either(authenticated_user, session, 
 def test_expiring_a_request_releases_its_reserved_slot(
     authenticated_user, session, garage, garage_schedule
 ):
-    yesterday = datetime.date.today() - datetime.timedelta(days=1)
+    yesterday = datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=1)
     garage_schedule.capacity_per_slot = 1
     session.commit()
     _pending_request(
@@ -588,8 +552,10 @@ def test_approved_and_rejected_history_is_untouched_by_the_sweep(
 ):
     appt_type = _make_type(session, garage)
     approved = _pending_request(
-        session, garage, customer_email="approved@example.com",
-        preferred_date=datetime.date.today() + datetime.timedelta(days=2),
+        session,
+        garage,
+        customer_email="approved@example.com",
+        preferred_date=datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=2),
     )
     authenticated_user.client.post(
         f"/api/booking-requests/{approved.id}/approve",

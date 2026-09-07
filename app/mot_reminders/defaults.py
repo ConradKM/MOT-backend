@@ -43,16 +43,10 @@ def seed_mot_reminder_settings(garage_id, session) -> None:
     """Create the default settings row for ``garage_id`` (no-op if one exists)."""
     from app.models.mot_reminder_settings import MOTReminderSettings
 
-    existing = (
-        session.query(MOTReminderSettings.id)
-        .filter_by(garage_id=garage_id)
-        .first()
-    )
+    existing = session.query(MOTReminderSettings.id).filter_by(garage_id=garage_id).first()
     if existing is not None:
         return
-    session.add(
-        MOTReminderSettings(garage_id=garage_id, **DEFAULT_MOT_REMINDER_SETTINGS)
-    )
+    session.add(MOTReminderSettings(garage_id=garage_id, **DEFAULT_MOT_REMINDER_SETTINGS))
 
 
 def stages_from(settings) -> list[tuple[str, int]]:

@@ -50,9 +50,7 @@ def test_closed_weekend_is_rejected(garage, garage_schedule):
 
 
 def test_closure_override_is_rejected(session, garage, garage_schedule):
-    session.add(
-        GarageScheduleException(garage_id=garage.id, date=NEXT_MONDAY, is_closed=True)
-    )
+    session.add(GarageScheduleException(garage_id=garage.id, date=NEXT_MONDAY, is_closed=True))
     session.commit()
     assert validate_slot(garage, NEXT_MONDAY, _t(10, 0), NOW) == "closed"
 
@@ -70,9 +68,7 @@ def test_beyond_the_booking_window_is_rejected(garage, garage_schedule):
 
 def test_full_slot_is_rejected(garage, garage_schedule, make_appointment):
     # Default capacity with one employee is 1; fill 14:00 next Monday.
-    make_appointment(
-        datetime.datetime.combine(NEXT_MONDAY, _t(14, 0), tzinfo=UTC), minutes=60
-    )
+    make_appointment(datetime.datetime.combine(NEXT_MONDAY, _t(14, 0), tzinfo=UTC), minutes=60)
     assert validate_slot(garage, NEXT_MONDAY, _t(14, 0), NOW) == "full"
 
 
@@ -121,16 +117,12 @@ def test_submit_valid_same_day_booking_succeeds(
     client, session, garage, garage_schedule, monkeypatch
 ):
     _freeze_now(monkeypatch)
-    resp = client.post(
-        f"/api/public/{garage.slug}/booking-requests", json=_payload()
-    )
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_payload())
     assert resp.status_code == 201
     assert BookingRequest.query.count() == 1
 
 
-def test_submit_past_time_today_is_rejected(
-    client, session, garage, garage_schedule, monkeypatch
-):
+def test_submit_past_time_today_is_rejected(client, session, garage, garage_schedule, monkeypatch):
     _freeze_now(monkeypatch)
     resp = client.post(
         f"/api/public/{garage.slug}/booking-requests",
@@ -141,9 +133,7 @@ def test_submit_past_time_today_is_rejected(
     assert BookingRequest.query.count() == 0
 
 
-def test_submit_inside_notice_is_rejected(
-    client, session, garage, garage_schedule, monkeypatch
-):
+def test_submit_inside_notice_is_rejected(client, session, garage, garage_schedule, monkeypatch):
     _freeze_now(monkeypatch)
     resp = client.post(
         f"/api/public/{garage.slug}/booking-requests",
@@ -153,9 +143,7 @@ def test_submit_inside_notice_is_rejected(
     assert BookingRequest.query.count() == 0
 
 
-def test_submit_closed_day_is_rejected(
-    client, session, garage, garage_schedule, monkeypatch
-):
+def test_submit_closed_day_is_rejected(client, session, garage, garage_schedule, monkeypatch):
     _freeze_now(monkeypatch)
     resp = client.post(
         f"/api/public/{garage.slug}/booking-requests",
@@ -165,9 +153,7 @@ def test_submit_closed_day_is_rejected(
     assert BookingRequest.query.count() == 0
 
 
-def test_submit_future_date_still_works(
-    client, session, garage, garage_schedule, monkeypatch
-):
+def test_submit_future_date_still_works(client, session, garage, garage_schedule, monkeypatch):
     _freeze_now(monkeypatch)
     resp = client.post(
         f"/api/public/{garage.slug}/booking-requests",

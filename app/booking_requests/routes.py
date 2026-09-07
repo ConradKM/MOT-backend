@@ -39,9 +39,7 @@ booking_requests_blp = Blueprint(
 
 def _get_owned_request(request_id):
     garage_id = get_current_employee().garage_id
-    booking_request = BookingRequest.query.filter_by(
-        id=request_id, garage_id=garage_id
-    ).first()
+    booking_request = BookingRequest.query.filter_by(id=request_id, garage_id=garage_id).first()
 
     if booking_request is None:
         abort(404, message="Booking request not found")
@@ -78,9 +76,7 @@ def _resolve_appointment_slot(booking_request, data, appointment_type):
                 422,
                 message="end_time is required - this appointment type has no default duration.",
             )
-        end_time = start_time + timedelta(
-            minutes=appointment_type.default_duration_minutes
-        )
+        end_time = start_time + timedelta(minutes=appointment_type.default_duration_minutes)
 
     if start_time >= end_time:
         abort(422, message="start_time must be before end_time.")
@@ -127,7 +123,6 @@ def _assert_capacity_available(garage, booking_request, start_time, end_time):
 
 @booking_requests_blp.route("/")
 class BookingRequestList(MethodView):
-
     @jwt_required()
     @booking_requests_blp.arguments(BookingRequestQueryArgsSchema, location="query")
     @booking_requests_blp.response(200, BookingRequestSchema(many=True))
@@ -150,7 +145,6 @@ class BookingRequestList(MethodView):
 
 @booking_requests_blp.route("/<uuid:request_id>")
 class BookingRequestResource(MethodView):
-
     @jwt_required()
     @booking_requests_blp.response(200, BookingRequestSchema)
     def get(self, request_id):
@@ -162,7 +156,6 @@ class BookingRequestResource(MethodView):
 
 @booking_requests_blp.route("/<uuid:request_id>/approve")
 class BookingRequestApprove(MethodView):
-
     @jwt_required()
     @booking_requests_blp.arguments(BookingRequestApproveSchema)
     @booking_requests_blp.response(200, BookingRequestSchema)
@@ -225,12 +218,10 @@ class BookingRequestApprove(MethodView):
                 id=booking_request.customer_id, garage_id=garage_id
             ).first()
         if customer is None and booking_request.customer_email:
-            customer = (
-                Customer.query.filter(
-                    Customer.garage_id == garage_id,
-                    Customer.email.ilike(booking_request.customer_email),
-                ).first()
-            )
+            customer = Customer.query.filter(
+                Customer.garage_id == garage_id,
+                Customer.email.ilike(booking_request.customer_email),
+            ).first()
         if customer is None:
             customer = Customer(
                 garage_id=garage_id,
@@ -249,9 +240,7 @@ class BookingRequestApprove(MethodView):
 
         # --- reuse-or-create the vehicle ------------------------------
         reg = _normalize_registration(booking_request.vehicle_registration)
-        vehicle = Vehicle.query.filter_by(
-            garage_id=garage_id, registration_number=reg
-        ).first()
+        vehicle = Vehicle.query.filter_by(garage_id=garage_id, registration_number=reg).first()
         if vehicle is None:
             vehicle = Vehicle(
                 garage_id=garage_id,
@@ -315,7 +304,6 @@ class BookingRequestApprove(MethodView):
 
 @booking_requests_blp.route("/<uuid:request_id>/reject")
 class BookingRequestReject(MethodView):
-
     @jwt_required()
     @booking_requests_blp.arguments(BookingRequestRejectSchema)
     @booking_requests_blp.response(200, BookingRequestSchema)

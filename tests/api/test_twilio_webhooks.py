@@ -57,7 +57,9 @@ def test_booking_flow_works_with_communications_disabled(client, garage):
             "customer_email": "alex.turner@example.com",
             "customer_phone": "07123 456789",
             "vehicle_registration": "PB11 REQ",
-            "preferred_date": (datetime.date.today() + datetime.timedelta(days=30)).isoformat(),
+            "preferred_date": (
+                datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=30)
+            ).isoformat(),
         },
     )
     assert resp.status_code == 201
@@ -90,7 +92,9 @@ def test_voice_incoming_resolves_tenant_greets_by_garage_name_and_logs_call(
     app, session, client, garage, monkeypatch
 ):
     _configure_twilio(app, monkeypatch)
-    session.add(GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111"))
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111")
+    )
     session.commit()
 
     form = {"To": "+441111111111", "From": "+447700900000", "CallSid": "CA-known-1"}
@@ -131,7 +135,9 @@ def test_voice_incoming_cross_tenant_isolation(
     app, session, client, garage, second_garage, monkeypatch
 ):
     _configure_twilio(app, monkeypatch)
-    session.add(GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111"))
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111")
+    )
     session.add(
         GarageCommunicationSettings(garage_id=second_garage.id, voice_phone_number="+442222222222")
     )
@@ -163,8 +169,11 @@ def test_voice_status_updates_the_matching_log_idempotently(
     _configure_twilio(app, monkeypatch)
     session.add(
         CommunicationLog(
-            garage_id=garage.id, channel="VOICE", direction="OUTBOUND",
-            status="queued", external_id="CA-status-1",
+            garage_id=garage.id,
+            channel="VOICE",
+            direction="OUTBOUND",
+            status="queued",
+            external_id="CA-status-1",
         )
     )
     session.commit()
@@ -183,20 +192,28 @@ def test_voice_status_updates_the_matching_log_idempotently(
     assert matches[0].call_duration_seconds == 37
 
 
-def test_voice_status_missed_call_emits_missed_call_event(app, session, client, garage, monkeypatch):
+def test_voice_status_missed_call_emits_missed_call_event(
+    app, session, client, garage, monkeypatch
+):
     from app.communications import events as comms_events
 
     _configure_twilio(app, monkeypatch)
     session.add(
         CommunicationLog(
-            garage_id=garage.id, channel="VOICE", direction="INBOUND",
-            status="ringing", external_id="CA-missed-1", from_address="+447700900000",
+            garage_id=garage.id,
+            channel="VOICE",
+            direction="INBOUND",
+            status="ringing",
+            external_id="CA-missed-1",
+            from_address="+447700900000",
         )
     )
     session.commit()
 
     received = []
-    comms_events.register_handler("MISSED_CALL", lambda garage, **ctx: received.append((garage.id, ctx)))
+    comms_events.register_handler(
+        "MISSED_CALL", lambda garage, **ctx: received.append((garage.id, ctx))
+    )
 
     path = "/api/webhooks/twilio/voice/status"
     form = {"CallSid": "CA-missed-1", "CallStatus": "no-answer"}
@@ -216,8 +233,11 @@ def test_voice_status_completed_call_does_not_emit_missed_call_event(
     _configure_twilio(app, monkeypatch)
     session.add(
         CommunicationLog(
-            garage_id=garage.id, channel="VOICE", direction="INBOUND",
-            status="ringing", external_id="CA-answered-1",
+            garage_id=garage.id,
+            channel="VOICE",
+            direction="INBOUND",
+            status="ringing",
+            external_id="CA-answered-1",
         )
     )
     session.commit()
@@ -246,8 +266,11 @@ def test_whatsapp_incoming_resolves_tenant_and_matches_customer(
         GarageCommunicationSettings(garage_id=garage.id, whatsapp_sender="whatsapp:+14155238886")
     )
     known_customer = Customer(
-        garage_id=garage.id, first_name="Sam", last_name="Ridley",
-        email="sam.ridley@example.com", phone="+447123456789",
+        garage_id=garage.id,
+        first_name="Sam",
+        last_name="Ridley",
+        email="sam.ridley@example.com",
+        phone="+447123456789",
     )
     session.add(known_customer)
     session.commit()
@@ -326,8 +349,10 @@ def test_whatsapp_incoming_no_auto_ack_by_default(app, session, client, garage, 
 
     path = "/api/webhooks/twilio/whatsapp/incoming"
     form = {
-        "To": "whatsapp:+14155238886", "From": "whatsapp:+447123456789",
-        "MessageSid": "SM-no-ack", "Body": "hi",
+        "To": "whatsapp:+14155238886",
+        "From": "whatsapp:+447123456789",
+        "MessageSid": "SM-no-ack",
+        "Body": "hi",
     }
     resp = client.post(path, data=form, headers=_signed_headers(path, form))
 
@@ -347,8 +372,10 @@ def test_whatsapp_incoming_auto_ack_when_explicitly_enabled(
 
     path = "/api/webhooks/twilio/whatsapp/incoming"
     form = {
-        "To": "whatsapp:+14155238886", "From": "whatsapp:+447123456789",
-        "MessageSid": "SM-with-ack", "Body": "hi",
+        "To": "whatsapp:+14155238886",
+        "From": "whatsapp:+447123456789",
+        "MessageSid": "SM-with-ack",
+        "Body": "hi",
     }
     resp = client.post(path, data=form, headers=_signed_headers(path, form))
 
@@ -370,14 +397,18 @@ def test_whatsapp_incoming_routes_through_conversation_engine_when_automation_en
         GarageCommunicationSettings(garage_id=garage.id, whatsapp_sender="whatsapp:+14155238886")
     )
     session.add(
-        GarageCommunicationAutomationSettings(garage_id=garage.id, conversation_automation_enabled=True)
+        GarageCommunicationAutomationSettings(
+            garage_id=garage.id, conversation_automation_enabled=True
+        )
     )
     session.commit()
 
     path = "/api/webhooks/twilio/whatsapp/incoming"
     form = {
-        "To": "whatsapp:+14155238886", "From": "whatsapp:+447123456789",
-        "MessageSid": "SM-engine-1", "Body": "what are your opening hours",
+        "To": "whatsapp:+14155238886",
+        "From": "whatsapp:+447123456789",
+        "MessageSid": "SM-engine-1",
+        "Body": "what are your opening hours",
     }
     resp = client.post(path, data=form, headers=_signed_headers(path, form))
 
@@ -387,7 +418,11 @@ def test_whatsapp_incoming_routes_through_conversation_engine_when_automation_en
 
     # The engine owns its own turn logging - record_inbound_communication must
     # never also fire, or every automated turn would be logged twice.
-    logs = CommunicationLog.query.filter_by(garage_id=garage.id).order_by(CommunicationLog.created_at).all()
+    logs = (
+        CommunicationLog.query.filter_by(garage_id=garage.id)
+        .order_by(CommunicationLog.created_at)
+        .all()
+    )
     assert len(logs) == 2
     assert all(log.external_provider == "comaz_conversation_engine" for log in logs)
 
@@ -405,8 +440,10 @@ def test_whatsapp_incoming_does_not_route_through_engine_when_automation_disable
 
     path = "/api/webhooks/twilio/whatsapp/incoming"
     form = {
-        "To": "whatsapp:+14155238886", "From": "whatsapp:+447123456789",
-        "MessageSid": "SM-no-engine-1", "Body": "what are your opening hours",
+        "To": "whatsapp:+14155238886",
+        "From": "whatsapp:+447123456789",
+        "MessageSid": "SM-no-engine-1",
+        "Body": "what are your opening hours",
     }
     resp = client.post(path, data=form, headers=_signed_headers(path, form))
 
@@ -428,8 +465,11 @@ def test_whatsapp_status_updates_the_matching_log_idempotently(
     _configure_twilio(app, monkeypatch)
     session.add(
         CommunicationLog(
-            garage_id=garage.id, channel="WHATSAPP", direction="OUTBOUND",
-            status="queued", external_id="SM-status-1",
+            garage_id=garage.id,
+            channel="WHATSAPP",
+            direction="OUTBOUND",
+            status="queued",
+            external_id="SM-status-1",
         )
     )
     session.commit()

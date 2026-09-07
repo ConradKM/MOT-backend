@@ -8,6 +8,7 @@ app/communications/routes.py for the staff-facing list/complete endpoints.
 """
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -16,13 +17,18 @@ from app.extensions import db
 
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.conversation.conversation_session import ConversationSession
+    from app.models.customer import Customer
+    from app.models.garage import Garage
+
 STATUS_PENDING = "PENDING"
 STATUS_COMPLETED = "COMPLETED"
 STATUS_CANCELLED = "CANCELLED"
 STATUSES = (STATUS_PENDING, STATUS_COMPLETED, STATUS_CANCELLED)
 
 
-class CallbackRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
+class CallbackRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "callback_requests"
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -44,6 +50,6 @@ class CallbackRequest(db.Model, PrimaryKeyMixin, TimestampMixin):
         Uuid, ForeignKey("conversation_sessions.id", ondelete="SET NULL")
     )
 
-    garage = relationship("Garage")
-    customer = relationship("Customer")
-    source_session = relationship("ConversationSession")
+    garage: Mapped["Garage"] = relationship("Garage")
+    customer: Mapped["Customer | None"] = relationship("Customer")
+    source_session: Mapped["ConversationSession | None"] = relationship("ConversationSession")

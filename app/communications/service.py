@@ -11,6 +11,7 @@ Twilio-side failure) so callers never need special-case error handling around
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from twilio.base.exceptions import TwilioRestException
 
@@ -27,6 +28,9 @@ from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
 
 from .client import get_twilio_client_for_garage
 from .config import garage_communications_enabled, is_twilio_configured
+
+if TYPE_CHECKING:
+    from app.models.customer import Customer
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +96,7 @@ def _skip(
     )
 
 
-def find_customer_by_phone(garage, phone: str | None):
+def find_customer_by_phone(garage, phone: str | None) -> Customer | None:
     """Best-effort inbound-message/call -> customer match, by exact phone
     string against this garage's customers.
 
@@ -107,7 +111,8 @@ def find_customer_by_phone(garage, phone: str | None):
 
     from app.models.customer import Customer
 
-    return Customer.query.filter_by(garage_id=garage.id, phone=phone).first()
+    result: Customer | None = Customer.query.filter_by(garage_id=garage.id, phone=phone).first()
+    return result
 
 
 def send_whatsapp_message(
@@ -340,11 +345,9 @@ def update_communication_status(
     if not external_id:
         return None
 
-    log = CommunicationLog.query.filter_by(external_id=external_id).first()
+    log: CommunicationLog | None = CommunicationLog.query.filter_by(external_id=external_id).first()
     if log is None:
-        logger.warning(
-            "[communications] status callback for unknown external_id=%s", external_id
-        )
+        logger.warning("[communications] status callback for unknown external_id=%s", external_id)
         return None
 
     log.status = status

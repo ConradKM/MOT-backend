@@ -42,9 +42,7 @@ _EXT_FOR_CONTENT_TYPE = {
 
 def _owned_item(item_id):
     garage_id = get_current_employee().garage_id
-    item = AppointmentChecklistItem.query.filter_by(
-        id=item_id, garage_id=garage_id
-    ).first()
+    item = AppointmentChecklistItem.query.filter_by(id=item_id, garage_id=garage_id).first()
     if item is None:
         abort(404, message="Checklist item not found")
     return item
@@ -58,11 +56,8 @@ def _owned_media(media_id):
     return media
 
 
-@checklist_item_media_blp.route(
-    "/appointment-checklist-items/<uuid:item_id>/media"
-)
+@checklist_item_media_blp.route("/appointment-checklist-items/<uuid:item_id>/media")
 class ChecklistItemMediaList(MethodView):
-
     @jwt_required()
     @checklist_item_media_blp.response(200, MediaSchema(many=True))
     def get(self, item_id):
@@ -91,9 +86,7 @@ class ChecklistItemMediaList(MethodView):
             abort(422, message=f"File exceeds the {max_bytes}-byte limit.")
 
         ext = _EXT_FOR_CONTENT_TYPE.get(data["content_type"], "")
-        storage_key = (
-            f"garages/{item.garage_id}/checklist-items/{item.id}/{uuid.uuid4()}{ext}"
-        )
+        storage_key = f"garages/{item.garage_id}/checklist-items/{item.id}/{uuid.uuid4()}{ext}"
 
         media = ChecklistItemMedia(
             garage_id=item.garage_id,
@@ -108,9 +101,7 @@ class ChecklistItemMediaList(MethodView):
         db.session.commit()
 
         expires_in = current_app.config["STORAGE_PRESIGN_EXPIRY"]
-        upload_url = get_storage().presigned_put_url(
-            storage_key, data["content_type"], expires_in
-        )
+        upload_url = get_storage().presigned_put_url(storage_key, data["content_type"], expires_in)
 
         return {
             "id": media.id,
@@ -122,7 +113,6 @@ class ChecklistItemMediaList(MethodView):
 
 @checklist_item_media_blp.route("/checklist-item-media/<uuid:media_id>/finalize")
 class ChecklistItemMediaFinalize(MethodView):
-
     @jwt_required()
     @checklist_item_media_blp.arguments(MediaFinalizeSchema)
     @checklist_item_media_blp.response(200, MediaSchema)
@@ -145,7 +135,6 @@ class ChecklistItemMediaFinalize(MethodView):
 
 @checklist_item_media_blp.route("/checklist-item-media/<uuid:media_id>")
 class ChecklistItemMediaResource(MethodView):
-
     @jwt_required()
     @checklist_item_media_blp.response(200, MediaWithDownloadSchema)
     def get(self, media_id):

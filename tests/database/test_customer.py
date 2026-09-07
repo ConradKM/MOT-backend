@@ -68,8 +68,12 @@ def test_customer_garage_relationship_works(session, customer, garage):
 
 
 def test_customer_vehicles_relationship_works(session, customer):
-    v1 = Vehicle(garage_id=customer.garage_id, customer_id=customer.id, registration_number="AA11AAA")
-    v2 = Vehicle(garage_id=customer.garage_id, customer_id=customer.id, registration_number="BB22BBB")
+    v1 = Vehicle(
+        garage_id=customer.garage_id, customer_id=customer.id, registration_number="AA11AAA"
+    )
+    v2 = Vehicle(
+        garage_id=customer.garage_id, customer_id=customer.id, registration_number="BB22BBB"
+    )
     session.add_all([v1, v2])
     session.commit()
 

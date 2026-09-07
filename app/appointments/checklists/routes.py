@@ -36,7 +36,6 @@ def _get_owned_appointment(appointment_id, garage_id):
 
 @appointment_checklists_blp.route("/appointments/<uuid:appointment_id>/checklist")
 class AppointmentChecklistResource(MethodView):
-
     @jwt_required()
     @appointment_checklists_blp.response(200, AppointmentChecklistSchema)
     def get(self, appointment_id):
@@ -70,7 +69,6 @@ class AppointmentChecklistResource(MethodView):
     "/appointment-checklists/<uuid:checklist_id>/items/<uuid:item_id>"
 )
 class AppointmentChecklistItemResource(MethodView):
-
     @jwt_required()
     @appointment_checklists_blp.arguments(AppointmentChecklistItemUpdateSchema)
     @appointment_checklists_blp.response(200, AppointmentChecklistItemSchema)

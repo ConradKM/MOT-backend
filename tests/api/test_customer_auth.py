@@ -82,13 +82,9 @@ def test_login_does_not_reveal_which_field_was_wrong(client, customer, vehicle):
 
 
 def test_login_token_is_accepted_by_the_customer_portal(client, customer, vehicle):
-    token = _login(client, customer.email, vehicle.registration_number).get_json()[
-        "access_token"
-    ]
+    token = _login(client, customer.email, vehicle.registration_number).get_json()["access_token"]
 
-    resp = client.get(
-        "/api/customer/account", headers={"Authorization": f"Bearer {token}"}
-    )
+    resp = client.get("/api/customer/account", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     assert resp.get_json()["customer"]["id"] == str(customer.id)
 
@@ -98,9 +94,7 @@ def test_login_token_is_accepted_by_the_customer_portal(client, customer, vehicl
 # --------------------------------------------------------------------------
 
 
-def test_refresh_with_customer_refresh_token_returns_a_new_access_token(
-    client, customer, vehicle
-):
+def test_refresh_with_customer_refresh_token_returns_a_new_access_token(client, customer, vehicle):
     refresh_token = _login(client, customer.email, vehicle.registration_number).get_json()[
         "refresh_token"
     ]

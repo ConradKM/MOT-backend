@@ -21,8 +21,26 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 _MAX_CANDIDATES = 3
 
 _STOPWORDS = {
-    "a", "an", "the", "my", "for", "please", "want", "need", "book", "booking",
-    "to", "get", "have", "car", "vehicle", "in", "on", "of", "i", "is",
+    "a",
+    "an",
+    "the",
+    "my",
+    "for",
+    "please",
+    "want",
+    "need",
+    "book",
+    "booking",
+    "to",
+    "get",
+    "have",
+    "car",
+    "vehicle",
+    "in",
+    "on",
+    "of",
+    "i",
+    "is",
 }
 
 
@@ -78,10 +96,7 @@ def match_appointment_type(garage, text: str) -> AppointmentTypeMatch:
         if re.search(r"\b" + re.escape(name_lower) + r"\b", customer_text_lower):
             return AppointmentTypeMatch(matched=appointment_type, candidates=[])
 
-    scored = [
-        (t, len(_tokenize(t.name) & customer_tokens))
-        for t in active_types
-    ]
+    scored = [(t, len(_tokenize(t.name) & customer_tokens)) for t in active_types]
     scored = [(t, score) for t, score in scored if score > 0]
     if not scored:
         return AppointmentTypeMatch(matched=None, candidates=[])

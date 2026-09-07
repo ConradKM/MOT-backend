@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Date, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -8,10 +9,14 @@ from app.extensions import db
 
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
+if TYPE_CHECKING:
+    from app.models.garage import Garage
+    from app.models.vehicle import Vehicle
+
 RESULTS = ("PASS", "FAIL")
 
 
-class MOTRecord(db.Model, PrimaryKeyMixin, TimestampMixin):
+class MOTRecord(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "mot_records"
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -31,5 +36,5 @@ class MOTRecord(db.Model, PrimaryKeyMixin, TimestampMixin):
     result: Mapped[str] = mapped_column(String(10), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
-    garage = relationship("Garage", back_populates="mot_records")
-    vehicle = relationship("Vehicle", back_populates="mot_records")
+    garage: Mapped["Garage"] = relationship("Garage", back_populates="mot_records")
+    vehicle: Mapped["Vehicle"] = relationship("Vehicle", back_populates="mot_records")

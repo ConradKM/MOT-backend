@@ -32,7 +32,7 @@ appointments_blp = Blueprint(
     "time, but a single employee cannot be double-booked.",
 )
 
-_AUTH_DOC = {"security": [{"bearerAuth": []}]}
+_AUTH_DOC: dict[str, list[dict[str, list[str]]]] = {"security": [{"bearerAuth": []}]}
 
 
 def _get_owned_employee(employee_id, garage_id):
@@ -131,8 +131,7 @@ def _resolve_end_time(start_time, end_time, appointment_type):
     if appointment_type.default_duration_minutes is None:
         abort(
             422,
-            message="end_time is required - this appointment type has no default "
-            "duration set.",
+            message="end_time is required - this appointment type has no default duration set.",
         )
 
     return start_time + timedelta(minutes=appointment_type.default_duration_minutes)
@@ -165,7 +164,6 @@ def _day_bounds(day):
 
 @appointments_blp.route("/")
 class AppointmentList(MethodView):
-
     @jwt_required()
     @appointments_blp.doc(**_AUTH_DOC)
     @appointments_blp.arguments(AppointmentQueryArgsSchema, location="query")
@@ -194,7 +192,9 @@ class AppointmentList(MethodView):
         # start_time is always stored and compared as an absolute instant.
         if args.get("date") is not None:
             day_start, day_end = _day_bounds(args["date"])
-            query = query.filter(Appointment.start_time >= day_start, Appointment.start_time <= day_end)
+            query = query.filter(
+                Appointment.start_time >= day_start, Appointment.start_time <= day_end
+            )
         else:
             if args.get("start_date") is not None:
                 query = query.filter(Appointment.start_time >= _day_bounds(args["start_date"])[0])
@@ -247,7 +247,6 @@ class AppointmentList(MethodView):
 
 @appointments_blp.route("/<uuid:appointment_id>")
 class AppointmentResource(MethodView):
-
     @jwt_required()
     @appointments_blp.doc(**_AUTH_DOC)
     @appointments_blp.response(200, AppointmentSchema)

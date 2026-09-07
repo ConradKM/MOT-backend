@@ -50,8 +50,12 @@ def _now():
 
 def _send(garage, phone, text, *, channel="WHATSAPP", now=None, external_message_id=None):
     return engine.handle_message(
-        garage, channel=channel, phone_e164=phone, text=text,
-        now=now or _now(), external_message_id=external_message_id,
+        garage,
+        channel=channel,
+        phone_e164=phone,
+        text=text,
+        now=now or _now(),
+        external_message_id=external_message_id,
     )
 
 
@@ -60,7 +64,9 @@ def _send(garage, phone, text, *, channel="WHATSAPP", now=None, external_message
 # --------------------------------------------------------------------------
 
 
-def test_full_booking_flow_creates_pending_request(session, garage, garage_schedule, appointment_type, user):
+def test_full_booking_flow_creates_pending_request(
+    session, garage, garage_schedule, appointment_type, user
+):
     now = _now()
     target_day = _next_open_weekday(now)
     weekday_name = target_day.strftime("%A")
@@ -104,11 +110,17 @@ def test_full_booking_flow_creates_pending_request(session, garage, garage_sched
     assert booking_request.preferred_date == target_day
 
 
-def test_booking_conversation_is_logged_for_staff_visibility(session, garage, garage_schedule, appointment_type, user):
+def test_booking_conversation_is_logged_for_staff_visibility(
+    session, garage, garage_schedule, appointment_type, user
+):
     now = _now()
     _send(garage, PHONE_RAW, "I need an MOT", now=now)
 
-    logs = CommunicationLog.query.filter_by(garage_id=garage.id).order_by(CommunicationLog.created_at).all()
+    logs = (
+        CommunicationLog.query.filter_by(garage_id=garage.id)
+        .order_by(CommunicationLog.created_at)
+        .all()
+    )
     assert len(logs) == 2  # customer turn + bot reply
     assert logs[0].direction == "INBOUND"
     assert logs[0].body == "I need an MOT"
@@ -122,8 +134,12 @@ def test_booking_conversation_is_logged_for_staff_visibility(session, garage, ga
 # --------------------------------------------------------------------------
 
 
-def test_known_customer_is_identified_by_phone(session, garage, garage_schedule, appointment_type, user):
-    known = Customer(garage_id=garage.id, first_name="Oliver", last_name="Bennett", phone="+447123400020")
+def test_known_customer_is_identified_by_phone(
+    session, garage, garage_schedule, appointment_type, user
+):
+    known = Customer(
+        garage_id=garage.id, first_name="Oliver", last_name="Bennett", phone="+447123400020"
+    )
     session.add(known)
     session.commit()
 
@@ -136,11 +152,25 @@ def test_known_customer_is_identified_by_phone(session, garage, garage_schedule,
 
 
 def test_multiple_vehicles_asks_which_one(session, garage, garage_schedule, appointment_type, user):
-    known = Customer(garage_id=garage.id, first_name="Oliver", last_name="Bennett", phone="+447123400021")
+    known = Customer(
+        garage_id=garage.id, first_name="Oliver", last_name="Bennett", phone="+447123400021"
+    )
     session.add(known)
     session.commit()
-    v1 = Vehicle(garage_id=garage.id, customer_id=known.id, registration_number="AB12CDE", make="Audi", model="A4")
-    v2 = Vehicle(garage_id=garage.id, customer_id=known.id, registration_number="XY19ABC", make="BMW", model="320d")
+    v1 = Vehicle(
+        garage_id=garage.id,
+        customer_id=known.id,
+        registration_number="AB12CDE",
+        make="Audi",
+        model="A4",
+    )
+    v2 = Vehicle(
+        garage_id=garage.id,
+        customer_id=known.id,
+        registration_number="XY19ABC",
+        make="BMW",
+        model="320d",
+    )
     session.add_all([v1, v2])
     session.commit()
 
@@ -162,11 +192,21 @@ def test_multiple_vehicles_asks_which_one(session, garage, garage_schedule, appo
     assert "XY19ABC" in r4.response_text
 
 
-def test_single_known_vehicle_is_confirmed_not_silently_assumed(session, garage, garage_schedule, appointment_type, user):
-    known = Customer(garage_id=garage.id, first_name="Oliver", last_name="Bennett", phone="+447123400022")
+def test_single_known_vehicle_is_confirmed_not_silently_assumed(
+    session, garage, garage_schedule, appointment_type, user
+):
+    known = Customer(
+        garage_id=garage.id, first_name="Oliver", last_name="Bennett", phone="+447123400022"
+    )
     session.add(known)
     session.commit()
-    v1 = Vehicle(garage_id=garage.id, customer_id=known.id, registration_number="AB12CDE", make="Audi", model="A4")
+    v1 = Vehicle(
+        garage_id=garage.id,
+        customer_id=known.id,
+        registration_number="AB12CDE",
+        make="Audi",
+        model="A4",
+    )
     session.add(v1)
     session.commit()
 
@@ -211,13 +251,24 @@ def test_offers_alternatives_when_requested_day_is_full(
 
     settings = resolve_settings(garage)
     hours_map = resolve_opening_hours(garage)
-    slots = day_slots(garage, target_day, settings, hours_map, {}, now, duration_min=appointment_type.default_duration_minutes)
+    slots = day_slots(
+        garage,
+        target_day,
+        settings,
+        hours_map,
+        {},
+        now,
+        duration_min=appointment_type.default_duration_minutes,
+    )
     for i, s in enumerate(slots):
         hh, mm = (int(part) for part in s["start"].split(":"))
         start = datetime.combine(target_day, time(hh, mm), tzinfo=UTC)
         appt = Appointment(
-            garage_id=garage.id, employee_id=user.id, customer_id=customer.id,
-            appointment_type_id=appointment_type.id, start_time=start,
+            garage_id=garage.id,
+            employee_id=user.id,
+            customer_id=customer.id,
+            appointment_type_id=appointment_type.id,
+            start_time=start,
             end_time=start + timedelta(minutes=appointment_type.default_duration_minutes),
             status="BOOKED",
         )
@@ -232,7 +283,9 @@ def test_offers_alternatives_when_requested_day_is_full(
     assert "next available" in r.response_text.lower()
 
 
-def test_price_query_reads_real_appointment_type_price(session, garage, garage_schedule, appointment_type, user):
+def test_price_query_reads_real_appointment_type_price(
+    session, garage, garage_schedule, appointment_type, user
+):
     # The shared `appointment_type` fixture leaves base_price unset - give it
     # a real one here, since this test is specifically about echoing back
     # whatever the business actually configured.
@@ -255,7 +308,9 @@ def test_price_query_without_a_configured_price_offers_a_callback_instead_of_inv
     assert appointment_type.name in r.response_text
 
 
-def test_unknown_service_does_not_invent_and_escalates(session, garage, garage_schedule, appointment_type, user):
+def test_unknown_service_does_not_invent_and_escalates(
+    session, garage, garage_schedule, appointment_type, user
+):
     now = _now()
     r1 = _send(garage, PHONE_RAW, "I need the engine making less angry noises", now=now)
     # Nothing this vague should silently become an MOT booking.
@@ -269,14 +324,22 @@ def test_unknown_service_does_not_invent_and_escalates(session, garage, garage_s
 # --------------------------------------------------------------------------
 
 
-def test_cancel_flow_identifies_confirms_and_cancels(session, garage, garage_schedule, appointment_type, user, customer):
+def test_cancel_flow_identifies_confirms_and_cancels(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
     customer.phone = PHONE_RAW
     session.commit()
-    start = datetime.combine(_next_open_weekday(_now()), datetime.min.time(), tzinfo=UTC) + timedelta(hours=10)
+    start = datetime.combine(
+        _next_open_weekday(_now()), datetime.min.time(), tzinfo=UTC
+    ) + timedelta(hours=10)
     appt = Appointment(
-        garage_id=garage.id, employee_id=user.id, customer_id=customer.id,
-        appointment_type_id=appointment_type.id, start_time=start,
-        end_time=start + timedelta(minutes=60), status="BOOKED",
+        garage_id=garage.id,
+        employee_id=user.id,
+        customer_id=customer.id,
+        appointment_type_id=appointment_type.id,
+        start_time=start,
+        end_time=start + timedelta(minutes=60),
+        status="BOOKED",
     )
     session.add(appt)
     session.commit()
@@ -300,9 +363,13 @@ def test_reschedule_flow_moves_appointment_with_real_availability(
     old_day = _next_open_weekday(now)
     start = datetime.combine(old_day, datetime.min.time(), tzinfo=UTC) + timedelta(hours=10)
     appt = Appointment(
-        garage_id=garage.id, employee_id=user.id, customer_id=customer.id,
-        appointment_type_id=appointment_type.id, start_time=start,
-        end_time=start + timedelta(minutes=60), status="BOOKED",
+        garage_id=garage.id,
+        employee_id=user.id,
+        customer_id=customer.id,
+        appointment_type_id=appointment_type.id,
+        start_time=start,
+        end_time=start + timedelta(minutes=60),
+        status="BOOKED",
     )
     session.add(appt)
     session.commit()
@@ -329,7 +396,9 @@ def test_reschedule_flow_moves_appointment_with_real_availability(
 # --------------------------------------------------------------------------
 
 
-def test_speak_to_human_hands_off_immediately(session, garage, garage_schedule, appointment_type, user):
+def test_speak_to_human_hands_off_immediately(
+    session, garage, garage_schedule, appointment_type, user
+):
     r = _send(garage, PHONE_RAW, "can I speak to a person please", now=_now())
     assert r.needs_human is True
     conv_session = ConversationSession.query.filter_by(garage_id=garage.id).one()
@@ -342,7 +411,9 @@ def test_complaint_hands_off(session, garage, garage_schedule, appointment_type,
     assert r.needs_human is True
 
 
-def test_handoff_session_does_not_auto_reply_to_further_messages(session, garage, garage_schedule, appointment_type, user):
+def test_handoff_session_does_not_auto_reply_to_further_messages(
+    session, garage, garage_schedule, appointment_type, user
+):
     now = _now()
     _send(garage, PHONE_RAW, "speak to a human", now=now)
     r2 = _send(garage, PHONE_RAW, "hello?", now=now)
@@ -350,7 +421,9 @@ def test_handoff_session_does_not_auto_reply_to_further_messages(session, garage
     assert r2.response_text is None
 
 
-def test_callback_request_creates_a_record(session, garage, garage_schedule, appointment_type, user):
+def test_callback_request_creates_a_record(
+    session, garage, garage_schedule, appointment_type, user
+):
     now = _now()
     r1 = _send(garage, PHONE_RAW, "can someone call me back", now=now)
     assert r1.workflow_step == "AWAITING_CALLBACK_REASON"
@@ -363,7 +436,9 @@ def test_callback_request_creates_a_record(session, garage, garage_schedule, app
     assert callback.status == "PENDING"
 
 
-def test_repeated_unresolved_messages_escalate_to_human(session, garage, garage_schedule, appointment_type, user):
+def test_repeated_unresolved_messages_escalate_to_human(
+    session, garage, garage_schedule, appointment_type, user
+):
     now = _now()
     r1 = _send(garage, PHONE_RAW, "asdkjhaskjdh", now=now)
     assert r1.needs_human is False
@@ -376,9 +451,13 @@ def test_repeated_unresolved_messages_escalate_to_human(session, garage, garage_
 # --------------------------------------------------------------------------
 
 
-def test_same_phone_number_never_crosses_tenants(session, garage, second_garage, garage_schedule, appointment_type, user):
+def test_same_phone_number_never_crosses_tenants(
+    session, garage, second_garage, garage_schedule, appointment_type, user
+):
     a = Customer(garage_id=garage.id, first_name="Same", last_name="Number", phone=PHONE_RAW)
-    b = Customer(garage_id=second_garage.id, first_name="Different", last_name="Person", phone=PHONE_RAW)
+    b = Customer(
+        garage_id=second_garage.id, first_name="Different", last_name="Person", phone=PHONE_RAW
+    )
     session.add_all([a, b])
     session.commit()
 
@@ -404,16 +483,24 @@ def test_same_phone_number_never_crosses_tenants(session, garage, second_garage,
 # --------------------------------------------------------------------------
 
 
-def test_duplicate_external_message_id_does_not_repeat_the_action(session, garage, garage_schedule, appointment_type, user):
+def test_duplicate_external_message_id_does_not_repeat_the_action(
+    session, garage, garage_schedule, appointment_type, user
+):
     now = _now()
-    r1 = _send(garage, PHONE_RAW, "can someone call me back", now=now, external_message_id="SM-dup-1")
+    r1 = _send(
+        garage, PHONE_RAW, "can someone call me back", now=now, external_message_id="SM-dup-1"
+    )
     assert r1.duplicate is False
 
-    r2 = _send(garage, PHONE_RAW, "can someone call me back", now=now, external_message_id="SM-dup-1")
+    r2 = _send(
+        garage, PHONE_RAW, "can someone call me back", now=now, external_message_id="SM-dup-1"
+    )
     assert r2.duplicate is True
 
     # Only the first delivery's turns were logged, and no second callback.
-    assert CallbackRequest.query.filter_by(garage_id=garage.id).count() == 0  # still awaiting reason
+    assert (
+        CallbackRequest.query.filter_by(garage_id=garage.id).count() == 0
+    )  # still awaiting reason
     logs = CommunicationLog.query.filter_by(garage_id=garage.id, external_id="SM-dup-1").all()
     assert len(logs) == 1
 
@@ -423,7 +510,9 @@ def test_duplicate_external_message_id_does_not_repeat_the_action(session, garag
 # --------------------------------------------------------------------------
 
 
-def test_stale_session_does_not_resume_and_submit_an_old_slot(session, garage, garage_schedule, appointment_type, user):
+def test_stale_session_does_not_resume_and_submit_an_old_slot(
+    session, garage, garage_schedule, appointment_type, user
+):
     now = _now()
     target_day = _next_open_weekday(now)
     weekday_name = target_day.strftime("%A")
