@@ -3,11 +3,24 @@ import os
 from app.branding import PLATFORM_NAME
 
 
+def _normalize_db_url(url: str) -> str:
+    """Force the psycopg3 driver, regardless of the scheme a host's managed
+    Postgres add-on hands back (e.g. Render's plain postgres:// / postgresql://,
+    which SQLAlchemy would otherwise resolve to the uninstalled psycopg2)."""
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
 class Config:
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-        "DATABASE_URL",
-        "postgresql+psycopg://mot:mot@localhost:5432/mot_garage",
+    SQLALCHEMY_DATABASE_URI = _normalize_db_url(
+        os.getenv(
+            "DATABASE_URL",
+            "postgresql+psycopg://mot:mot@localhost:5432/mot_garage",
+        )
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
@@ -109,9 +122,11 @@ class TestConfig(Config):
     database is never touched by a test run."""
 
     TESTING = True
-    SQLALCHEMY_DATABASE_URI = os.getenv(
-        "TEST_DATABASE_URL",
-        "postgresql+psycopg://mot:mot@localhost:5432/mot_garage_test",
+    SQLALCHEMY_DATABASE_URI = _normalize_db_url(
+        os.getenv(
+            "TEST_DATABASE_URL",
+            "postgresql+psycopg://mot:mot@localhost:5432/mot_garage_test",
+        )
     )
     PROPAGATE_EXCEPTIONS = True
 
