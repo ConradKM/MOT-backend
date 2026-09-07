@@ -61,6 +61,52 @@ This runs the full suite (model/relationship tests, API tests, multi-tenant
 isolation tests) and writes a plain-text pass/fail summary to
 `tests/test-results/test.log`. No manual cleanup is required between runs.
 
+## Continuous Integration
+
+Every pull request into `main` (see `.github/workflows/ci.yml`) runs the same
+checks below — run them locally before pushing so nothing surprises you in CI.
+`pip install -r requirements-dev.txt` gets you ruff and mypy on top of the
+runtime dependencies.
+
+```bash
+# Lint, format, types, sanity
+python -c "from app import create_app; create_app()"  # app boots cleanly
+ruff check .
+ruff format --check .          # `ruff format .` to fix
+mypy app tests scripts migrations
+
+# Tests (needs the same local Postgres as `pytest` above)
+pytest
+
+# Migrations - run against a scratch database, never your dev one
+createdb mot_garage_ci_check
+DATABASE_URL=postgresql+psycopg://mot:mot@localhost:5432/mot_garage_ci_check \
+  flask --app app:create_app db upgrade      # clean apply from empty
+flask --app app:create_app db heads          # must print exactly one head
+DATABASE_URL=postgresql+psycopg://mot:mot@localhost:5432/mot_garage_ci_check \
+  flask --app app:create_app db migrate -m check   # must say "No changes in
+                                                    # schema detected" - if it
+                                                    # generates a file instead,
+                                                    # your models and migration
+                                                    # history have drifted;
+                                                    # commit that file
+dropdb mot_garage_ci_check
+
+# OpenAPI spec generates and is valid JSON
+python -c "
+from app import create_app
+with create_app().test_client() as c:
+    assert c.get('/api/openapi.json').status_code == 200
+"
+
+# Docker image still builds
+docker build -t mot-garage-backend:ci .
+```
+
+CI also runs a secret scan ([gitleaks](https://github.com/gitleaks/gitleaks))
+over the full commit history and checks that the PR title references an issue
+(e.g. contains `#38`) — nothing to run locally for either of those.
+
 ## Public booking
 
 Logged-out customers book through `POST /api/public/<slug>/booking-requests`,
