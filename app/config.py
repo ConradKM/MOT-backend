@@ -15,6 +15,14 @@ def _normalize_db_url(url: str) -> str:
 
 
 class Config:
+    # Deployment environment marker. "development" (the default) unlocks the
+    # local-only helpers - `flask seed-dev`, `flask dev-info` - which print
+    # seeded logins and internal ids. Any other value (notably "production")
+    # makes them refuse to run. Deliberately separate from Flask's own
+    # debug flag: those helpers must be off in production even if someone
+    # left debug on.
+    APP_ENV = os.getenv("APP_ENV", os.getenv("FLASK_ENV", "development")).lower()
+
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
     SQLALCHEMY_DATABASE_URI = _normalize_db_url(
         os.getenv(
@@ -154,6 +162,10 @@ class TestConfig(Config):
         "https://app.comaz.co.uk",
         "https://comaz.co.uk",
     )
+
+    # Deterministic regardless of the developer's shell - the dev-only helper
+    # tests flip this to "production" per-test to prove the refusal path.
+    APP_ENV = "development"
 
     # Never call out to a real CAPTCHA provider, a shared rate-limit store, or
     # object storage from the test suite, regardless of the developer's shell.
