@@ -113,6 +113,13 @@ class Config:
     # Never hard-code these; never commit real values.
     TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
     TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+    # Optional: a Twilio Standard API Key (SID starts "SK") and its secret.
+    # When BOTH are set, the outbound REST client (app/communications/client.py)
+    # authenticates with the API key + Account SID instead of the Auth Token -
+    # Twilio's recommendation for production. The Auth Token is still required:
+    # webhook signature validation (security.py) has no API-key equivalent.
+    TWILIO_API_KEY_SID = os.getenv("TWILIO_API_KEY_SID", "")
+    TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "")
     # Twilio signs every webhook request; the app recomputes and compares that
     # signature before trusting the payload (app/communications/security.py).
     # Only ever set to "false" for local/manual testing with a client that

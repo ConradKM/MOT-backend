@@ -4,6 +4,15 @@ Nothing here runs at import or app-startup time - the client is only built
 the first time something actually tries to talk to Twilio, and only if it's
 configured. Tests patch ``get_twilio_client`` directly (wherever it's
 imported into a caller) rather than touching the real SDK.
+
+**Outbound REST authentication.** When ``TWILIO_API_KEY_SID`` /
+``TWILIO_API_KEY_SECRET`` are both set the client authenticates with the API
+key + Account SID (Twilio's recommendation for production - a key can be
+rotated or revoked without touching the account). Otherwise it falls back to
+Account SID + Auth Token, which is what dev/test and any deployment without a
+key configured continue to use. Either way the webhook signature check
+(``security.py``) still uses the Auth Token - that's the one place it is
+genuinely required.
 """
 
 from flask import current_app
@@ -25,10 +34,19 @@ def get_twilio_client() -> Client | None:
     if client is not None:
         return client
 
-    client = Client(
-        current_app.config["TWILIO_ACCOUNT_SID"],
-        current_app.config["TWILIO_AUTH_TOKEN"],
-    )
+    cfg = current_app.config
+    account_sid = cfg["TWILIO_ACCOUNT_SID"]
+    api_key_sid = cfg.get("TWILIO_API_KEY_SID")
+    api_key_secret = cfg.get("TWILIO_API_KEY_SECRET")
+
+    if api_key_sid and api_key_secret:
+        # API key auth: the SDK signature is Client(username, password,
+        # account_sid); pass the key SID/secret as the credentials and the
+        # Account SID explicitly so requests are still scoped to the account.
+        client = Client(api_key_sid, api_key_secret, account_sid)
+    else:
+        client = Client(account_sid, cfg["TWILIO_AUTH_TOKEN"])
+
     current_app.extensions[_EXT_KEY] = client
     return client
 
