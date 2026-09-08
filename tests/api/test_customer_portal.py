@@ -4,8 +4,30 @@ GET /api/customer/account and GET /api/customer/appointments/<id> return only
 the signed-in customer's own records, and reject staff / anonymous callers.
 """
 
+import datetime
+
+from app.models.booking_request import BookingRequest
+
 _START = "2026-10-01T{hour:02d}:00:00+00:00"
 _END = "2026-10-01T{hour:02d}:30:00+00:00"
+
+
+def _make_pending_request(session, garage, customer, *, reference="BK1234567", days_ahead=3):
+    br = BookingRequest(
+        garage_id=garage.id,
+        status="PENDING",
+        booking_reference=reference,
+        customer_id=customer.id,
+        customer_first_name=customer.first_name,
+        customer_last_name=customer.last_name,
+        customer_email=customer.email,
+        vehicle_registration="AB12CDE",
+        preferred_date=datetime.datetime.now(datetime.UTC).date()
+        + datetime.timedelta(days=days_ahead),
+    )
+    session.add(br)
+    session.commit()
+    return br
 
 
 def _create_appointment(staff, *, customer_id, vehicle_id=None, hour=9, name="MOT"):
@@ -78,6 +100,38 @@ def test_account_lists_the_customers_appointments(
     mine = next(a for a in body["appointments"] if a["id"] == appt["id"])
     assert mine["appointment_type_name"] == "MOT"
     assert mine["vehicle_registration"] == vehicle.registration_number
+
+
+def test_account_lists_a_pending_booking_request(customer_client, session, garage, customer):
+    # No Appointment exists for a PENDING request - see
+    # app/booking_requests/routes.py::BookingRequestApprove - so this is what
+    # the account page shows in its place until one does.
+    pending = _make_pending_request(session, garage, customer)
+
+    body = customer_client.get("/api/customer/account").get_json()
+
+    ids = [r["id"] for r in body["pending_requests"]]
+    assert str(pending.id) in ids
+    mine = next(r for r in body["pending_requests"] if r["id"] == str(pending.id))
+    assert mine["booking_reference"] == "BK1234567"
+    assert mine["vehicle_registration"] == "AB12CDE"
+    # Not yet an appointment, so it must not also show up as one.
+    assert all(a["id"] != str(pending.id) for a in body["appointments"])
+
+
+def test_account_excludes_an_approved_requests_pending_entry(
+    customer_client, authenticated_user, session, garage, customer, vehicle
+):
+    # Once approved it has become an appointment (covered by
+    # test_account_lists_the_customers_appointments) - it must not also
+    # linger in pending_requests.
+    pending = _make_pending_request(session, garage, customer)
+    pending.status = "APPROVED"
+    session.commit()
+
+    body = customer_client.get("/api/customer/account").get_json()
+
+    assert all(r["id"] != str(pending.id) for r in body["pending_requests"])
 
 
 def test_account_excludes_other_customers_data(customer_client, authenticated_user, customer):

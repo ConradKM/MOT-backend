@@ -51,10 +51,25 @@ class CustomerAppointmentSummarySchema(Schema):
     vehicle_registration = fields.Str(dump_only=True, allow_none=True)
 
 
+class CustomerPendingRequestSchema(Schema):
+    """A booking request still awaiting staff review - no Appointment exists
+    yet (see app/booking_requests/routes.py::BookingRequestApprove), so this
+    is what the account page shows in its place until one does."""
+
+    id = fields.UUID(dump_only=True)
+    booking_reference = fields.Str(dump_only=True, allow_none=True)
+    preferred_date = fields.Date(dump_only=True)
+    preferred_time = fields.Time(dump_only=True, allow_none=True)
+    vehicle_registration = fields.Str(dump_only=True)
+    notes = fields.Str(dump_only=True, allow_none=True)
+    appointment_type_name = fields.Str(dump_only=True, allow_none=True)
+
+
 class CustomerAccountSchema(Schema):
     customer = fields.Nested(CustomerProfileSchema, dump_only=True)
     vehicles = fields.List(fields.Nested(CustomerVehicleSchema), dump_only=True)
     appointments = fields.List(fields.Nested(CustomerAppointmentSummarySchema), dump_only=True)
+    pending_requests = fields.List(fields.Nested(CustomerPendingRequestSchema), dump_only=True)
 
 
 class CustomerAppointmentVehicleSchema(Schema):
