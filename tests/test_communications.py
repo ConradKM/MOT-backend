@@ -115,6 +115,83 @@ def test_garage_communications_enabled_true_once_opted_in(comms_settings, garage
 
 
 # --------------------------------------------------------------------------
+# get_twilio_client - outbound REST authentication
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def _clear_twilio_client(app):
+    """The client is cached on app.extensions; the app object is shared across
+    tests, so drop any cached client before and after so each test builds its
+    own."""
+    app.extensions.pop("_twilio_client", None)
+    yield
+    app.extensions.pop("_twilio_client", None)
+
+
+def test_get_twilio_client_is_none_when_not_configured(app, _clear_twilio_client):
+    from app.communications.client import get_twilio_client
+
+    assert get_twilio_client() is None
+
+
+def test_get_twilio_client_uses_account_sid_and_auth_token_by_default(
+    app, monkeypatch, _clear_twilio_client
+):
+    from app.communications.client import get_twilio_client
+
+    _configure_twilio(app, monkeypatch)  # SID + AUTH_TOKEN only, no API key
+    client = get_twilio_client()
+
+    assert client is not None
+    assert client.username == "AC" + "0" * 32
+    assert client.password == "test-auth-token"
+    assert client.account_sid == "AC" + "0" * 32
+
+
+def test_get_twilio_client_uses_api_key_when_both_key_vars_are_set(
+    app, monkeypatch, _clear_twilio_client
+):
+    from app.communications.client import get_twilio_client
+
+    _configure_twilio(app, monkeypatch)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SID", "SK" + "1" * 32)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SECRET", "key-secret")
+
+    client = get_twilio_client()
+
+    assert client is not None
+    # API key + secret authenticate the request...
+    assert client.username == "SK" + "1" * 32
+    assert client.password == "key-secret"
+    # ...scoped to the account, and the Auth Token is NOT used for REST auth.
+    assert client.account_sid == "AC" + "0" * 32
+    assert client.password != "test-auth-token"
+
+
+def test_get_twilio_client_falls_back_to_auth_token_if_only_key_sid_is_set(
+    app, monkeypatch, _clear_twilio_client
+):
+    from app.communications.client import get_twilio_client
+
+    _configure_twilio(app, monkeypatch)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SID", "SK" + "1" * 32)
+    # no TWILIO_API_KEY_SECRET
+
+    client = get_twilio_client()
+
+    assert client.username == "AC" + "0" * 32
+    assert client.password == "test-auth-token"
+
+
+def test_get_twilio_client_is_cached(app, monkeypatch, _clear_twilio_client):
+    from app.communications.client import get_twilio_client
+
+    _configure_twilio(app, monkeypatch)
+    assert get_twilio_client() is get_twilio_client()
+
+
+# --------------------------------------------------------------------------
 # send_whatsapp_message
 # --------------------------------------------------------------------------
 

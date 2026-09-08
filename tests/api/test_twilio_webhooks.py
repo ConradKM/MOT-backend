@@ -114,6 +114,28 @@ def test_voice_incoming_resolves_tenant_greets_by_garage_name_and_logs_call(
     assert log.from_address == "+447700900000"
 
 
+def test_webhook_signature_still_validates_with_the_auth_token_when_an_api_key_is_set(
+    app, session, client, garage, monkeypatch
+):
+    """An API key is only for outbound REST auth; the webhook signature check
+    must keep using the Auth Token regardless."""
+    _configure_twilio(app, monkeypatch)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SID", "SK" + "1" * 32)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SECRET", "key-secret")
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111")
+    )
+    session.commit()
+
+    form = {"To": "+441111111111", "From": "+447700900000", "CallSid": "CA-apikey-1"}
+    path = "/api/webhooks/twilio/voice/incoming"
+    # _signed_headers signs with AUTH_TOKEN - the request must still be accepted.
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+    assert CommunicationLog.query.filter_by(external_id="CA-apikey-1").count() == 1
+
+
 def test_voice_incoming_unknown_number_answers_safely_without_logging(
     app, client, garage, monkeypatch
 ):

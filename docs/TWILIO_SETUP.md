@@ -55,7 +55,9 @@ Set these in the deployment's environment (never commit real values -
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `TWILIO_ACCOUNT_SID` | to enable communications | Platform master account SID |
-| `TWILIO_AUTH_TOKEN` | to enable communications | Platform master account Auth Token |
+| `TWILIO_AUTH_TOKEN` | to enable communications | Platform master account Auth Token. Verifies inbound webhook signatures (no API-key equivalent); also authenticates the REST client when no API key is set. |
+| `TWILIO_API_KEY_SID` | no (recommended for production) | Standard API Key SID (`SK…`). When set with its secret, the **outbound REST client** authenticates with the key + Account SID instead of the Auth Token. |
+| `TWILIO_API_KEY_SECRET` | no (with `TWILIO_API_KEY_SID`) | The API Key's secret. Both must be set for key auth to take effect; otherwise the client falls back to Account SID + Auth Token. |
 | `TWILIO_WEBHOOK_VALIDATE` | no (default `true`) | Set `false` only for local/manual testing with a client that can't sign requests |
 | `TWILIO_WHATSAPP_AUTO_ACK` | no (default `false`) | Send a generic acknowledgement reply to inbound WhatsApp messages |
 | `PUBLIC_API_BASE_URL` | to receive webhooks | This deployment's public HTTPS origin, e.g. `https://api.comaz.example` |
