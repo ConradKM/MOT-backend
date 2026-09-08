@@ -10,4 +10,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["flask", "--app", "app:create_app", "run", "--host=0.0.0.0", "--port=5000"]
+# Production: gunicorn with a gevent worker (serves the REST API and the
+# app/ws/* WebSocket routes). Config in gunicorn.conf.py; binds to $PORT.
+CMD ["gunicorn", "--config", "gunicorn.conf.py", "wsgi:app"]
