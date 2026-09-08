@@ -1,0 +1,40 @@
+{
+  "business": {
+    "name": "M.O.T Doctors",
+    "phone": "+44 7590 689653",
+    "address": "1 Blackhorse Rd, London SE8 5HZ",
+    "email": null,
+    "postcode": "SE8 5HZ",
+    "website": null
+  },
+  "owner": {
+    "email": "tony@admin.com",
+    "first_name": "Tony",
+    "last_name": null
+  },
+  "services": [
+    { "name": "MOT Test", "description": "Class 4 MOT test to current DVSA standards.", "base_price": "54.85", "default_duration_minutes": 45 },
+    { "name": "Full Service", "description": "Comprehensive 60-point service including oil and filter change.", "base_price": "189.00", "default_duration_minutes": 90 },
+    { "name": "MOT + Full Service", "description": "Full service carried out alongside the MOT test, same visit.", "base_price": "235.00", "default_duration_minutes": 120 },
+    { "name": "Brake Repair", "description": "Diagnosis and replacement of brake components.", "base_price": "120.00", "default_duration_minutes": 60 },
+    { "name": "Diagnostic Check", "description": "Engine management / fault-code diagnostic investigation.", "base_price": "60.00", "default_duration_minutes": 30 },
+    { "name": "Courtesy Check", "description": "Free visual safety check while you wait.", "base_price": null, "default_duration_minutes": 30 }
+  ],
+  "opening_hours": {
+    "mon": ["08:00", "17:00"],
+    "tue": ["08:00", "17:00"],
+    "wed": ["08:00", "17:00"],
+    "thu": ["08:00", "17:00"],
+    "fri": ["08:00", "17:00"],
+    "sat": ["08:00", "13:00"],
+    "sun": null
+  },
+  "notes": "DEMO. TEMPORARY owner email tony@admin.com - not a deliverable inbox; replace with Tony's real email before go-live and before relying on password recovery. Services use the standard MOT/test-business set (the ACTIVE subset of the seed template).",
+  "_meta": {
+    "status": "real-demo",
+    "tbc": ["demo_notes"],
+    "owner_email_is_real": false,
+    "owner_email_replace_before_go_live": true,
+    "services_source": "seed MOT template (ACTIVE subset)"
+  }
+}
