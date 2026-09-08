@@ -418,12 +418,18 @@ def test_get_garage_exposes_layout_variant(authenticated_user):
     assert "layout_variant" in body
 
 
-def test_patch_garage_is_forbidden_for_garage_users(authenticated_user):
-    # Business details (and certainly slug / layout_variant) are platform-
-    # managed - no garage user, owner included, can edit them over the API.
-    for body in ({"layout_variant": "bespoke"}, {"slug": "new-slug"}, {"name": "x"}):
+def test_patch_garage_rejects_platform_controlled_fields(authenticated_user, session):
+    # The OWNER may edit the contact subset (see test_garage.py), but slug and
+    # layout_variant stay platform-managed - they're not in the schema, so a
+    # request that names one is rejected outright and nothing is written.
+    original_slug = authenticated_user.garage.slug
+    for body in ({"layout_variant": "bespoke"}, {"slug": "new-slug"}):
         resp = authenticated_user.client.patch("/api/garage", json=body)
-        assert resp.status_code == 403
+        assert resp.status_code == 422
+
+    session.refresh(authenticated_user.garage)
+    assert authenticated_user.garage.slug == original_slug
+    assert authenticated_user.garage.layout_variant is None
 
 
 def test_platform_rename_does_not_change_the_slug(garage, session):

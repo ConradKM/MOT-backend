@@ -25,32 +25,59 @@ def test_unauthenticated_user_receives_auth_error(client):
 
 
 # --------------------------------------------------------------------------
-# Garage details are read-only for garage users
+# Owner self-service editing of the contact-detail subset
 # --------------------------------------------------------------------------
 
 
-def test_owner_cannot_patch_garage_details(authenticated_user):
+def test_owner_can_patch_the_allowlisted_business_details(authenticated_user, session):
     resp = authenticated_user.client.patch(
-        "/api/garage", json={"name": "Renamed Garage", "phone": "+44 20 0000 0000"}
+        "/api/garage",
+        json={"name": "Renamed Business", "phone": "+44 20 0000 0000"},
     )
 
-    assert resp.status_code == 403
-
-
-def test_patch_garage_does_not_persist_anything(authenticated_user, session):
-    authenticated_user.client.patch("/api/garage", json={"name": "Should Not Stick"})
-
+    assert resp.status_code == 200
+    assert resp.get_json()["name"] == "Renamed Business"
     session.refresh(authenticated_user.garage)
-    assert authenticated_user.garage.name != "Should Not Stick"
+    assert authenticated_user.garage.name == "Renamed Business"
+    assert authenticated_user.garage.phone == "+44 20 0000 0000"
 
 
-def test_staff_role_also_gets_403_on_patch(authenticated_user, session):
+def test_staff_without_owner_role_still_gets_403_on_patch(authenticated_user, session):
     authenticated_user.user.roles = []
     session.commit()
 
     resp = authenticated_user.client.patch("/api/garage", json={"name": "Staff Update"})
 
     assert resp.status_code == 403
+    session.refresh(authenticated_user.garage)
+    assert authenticated_user.garage.name != "Staff Update"
+
+
+def test_patch_rejects_the_slug_and_other_non_allowlisted_fields(authenticated_user, session):
+    original_slug = authenticated_user.garage.slug
+
+    resp = authenticated_user.client.patch(
+        "/api/garage", json={"slug": "hand-picked", "layout_variant": "fancy"}
+    )
+
+    assert resp.status_code == 422
+    session.refresh(authenticated_user.garage)
+    assert authenticated_user.garage.slug == original_slug
+
+
+def test_patch_with_an_empty_body_is_a_422(authenticated_user):
+    resp = authenticated_user.client.patch("/api/garage", json={})
+
+    assert resp.status_code == 422
+
+
+def test_owner_can_only_patch_their_own_business(
+    authenticated_user, second_authenticated_client, second_garage, session
+):
+    second_authenticated_client.patch("/api/garage", json={"name": "Hijacked"})
+
+    session.refresh(authenticated_user.garage)
+    assert authenticated_user.garage.name != "Hijacked"
 
 
 # --------------------------------------------------------------------------
