@@ -56,6 +56,12 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
         index=True,
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
+    # A short customer-facing code (see app/booking_requests/reference.py),
+    # e.g. "BK7F3K9Q2" - shown on the confirmation screen and usable to log
+    # in (see app/customer_auth/routes.py::CustomerReferenceLogin) without a
+    # password. Always set by application code at creation; nullable at the
+    # DB level only for rows that predate this column.
+    booking_reference: Mapped[str | None] = mapped_column(String(16), unique=True, index=True)
 
     # --- what the public form submitted -------------------------------------
     customer_first_name: Mapped[str] = mapped_column(String(100), nullable=False)

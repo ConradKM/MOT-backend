@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
 
+from app.booking_requests.reference import unique_booking_reference
 from app.communications.events import (
     APPOINTMENT_CANCELLED,
     APPOINTMENT_RESCHEDULED,
@@ -182,11 +183,14 @@ def create_booking_request(
     booking_request = BookingRequest(
         garage_id=garage.id,
         status="PENDING",
-        # Pre-linked when the customer is already known (see
-        # app/booking_requests/routes.py's approve() flow, which prefers
-        # this over re-deriving identity from email) - never required, a
-        # brand new customer leaves this null exactly like the public web
-        # form's requests always have.
+        booking_reference=unique_booking_reference(db.session),
+        # Pre-linked when the customer is already known (e.g. identified by
+        # phone - see app/communications/service.py::find_customer_by_phone).
+        # Unlike the public web form (app/public_booking/routes.py), this
+        # channel doesn't eagerly resolve-or-create a Customer/Vehicle for a
+        # new caller - it never asks for an email, so there's nothing
+        # reliable to match on later; that resolution still happens at
+        # approval time (app/booking_requests/routes.py).
         customer_id=customer.id if customer else None,
         customer_first_name=first_name,
         customer_last_name=last_name,

@@ -354,6 +354,7 @@ def booking_request(session, garage):
     br = BookingRequest(
         garage_id=garage.id,
         status="PENDING",
+        booking_reference="BK1234567",
         customer_first_name="Pat",
         customer_last_name="Rivera",
         customer_email="pat.rivera@example.com",
