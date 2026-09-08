@@ -1,0 +1,30 @@
+{
+  "business": {
+    "name": "Revive N Drive",
+    "phone": "+44 7918 352984",
+    "address": "Unit 51, CM16 6LJ",
+    "email": null,
+    "postcode": "CM16 6LJ",
+    "website": null
+  },
+  "owner": {
+    "email": "hussain.salam1999@gmail.com",
+    "first_name": "Hussain",
+    "last_name": "Salam"
+  },
+  "services": [
+    {
+      "name": "Bodykit fittings",
+      "description": null,
+      "base_price": null,
+      "default_duration_minutes": 60
+    }
+  ],
+  "opening_hours": null,
+  "notes": "DEMO. Opening hours TBC - using the default Mon-Fri 09:00-17:00 so the booking calendar works; owner to set real hours in Settings > Availability. Bodykit fittings duration set to 60 min as a placeholder - owner can adjust in Settings > Appointment Types.",
+  "_meta": {
+    "status": "real-demo",
+    "tbc": ["opening_hours", "demo_notes", "service pricing/duration"],
+    "owner_email_is_real": true
+  }
+}

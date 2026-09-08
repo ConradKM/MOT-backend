@@ -1,0 +1,39 @@
+{
+  "business": {
+    "name": "Tints on Demand",
+    "phone": "+44 20 3971 1619",
+    "address": "London, E16 2ES",
+    "email": null,
+    "postcode": "E16 2ES",
+    "website": null
+  },
+  "owner": {
+    "email": "tintsondemand@admin.com",
+    "first_name": "Mubz",
+    "last_name": null
+  },
+  "services": [
+    {
+      "name": "Window tints",
+      "description": null,
+      "base_price": null,
+      "default_duration_minutes": 60
+    }
+  ],
+  "opening_hours": {
+    "mon": ["08:00", "17:00"],
+    "tue": ["08:00", "17:00"],
+    "wed": ["08:00", "17:00"],
+    "thu": ["08:00", "17:00"],
+    "fri": ["08:00", "17:00"],
+    "sat": null,
+    "sun": null
+  },
+  "notes": "DEMO. TEMPORARY owner email tintsondemand@admin.com - not a deliverable inbox; replace with Mubz's real email before go-live and before relying on password recovery. Owner name 'Mubz' is TBC. Window tints duration set to 60 min as a placeholder.",
+  "_meta": {
+    "status": "real-demo",
+    "tbc": ["owner_name", "demo_notes", "service pricing/duration"],
+    "owner_email_is_real": false,
+    "owner_email_replace_before_go_live": true
+  }
+}

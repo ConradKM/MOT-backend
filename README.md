@@ -34,18 +34,28 @@ The API will be available at `http://localhost:5000`.
 docker compose up --build
 ```
 
-## Onboarding a garage
+## Onboarding a business
 
-Tenants are created by a developer, not by public signup. Run:
+Tenants are created by an operator, not by public signup.
 
 ```bash
+# From a JSON spec (onboarding/<name>.json) - idempotent, seeds services +
+# opening hours, prints a one-time temp password. Safe to run in Render Shell.
+python scripts/onboard_business.py onboarding/their-name.json --validate   # offline check
+python scripts/onboard_business.py onboarding/their-name.json --dry-run    # online, writes nothing
+python scripts/onboard_business.py onboarding/their-name.json              # create
+
+# Lower-level, business row + first owner only:
 flask --app app:create_app onboard-garage --file new_garage.json          # or --dry-run
 ```
 
-This creates the garage (with a generated, immutable public slug), its default
-statuses/schedule/roles and the first OWNER login, in one transaction. The full
-runbook, spec format, the randomised-slug rationale and a copy-paste Claude
-prompt template are in [`docs/GARAGE_ONBOARDING.md`](docs/GARAGE_ONBOARDING.md).
+Both create the business (generated, immutable public slug), its default
+statuses/schedule/roles and the first OWNER login in one transaction.
+Full runbook — offline→online, Render Shell commands, verification checklist,
+editing and deactivation — in
+[`docs/BUSINESS_ONBOARDING.md`](docs/BUSINESS_ONBOARDING.md); the identifier
+model and slug rationale in
+[`docs/GARAGE_ONBOARDING.md`](docs/GARAGE_ONBOARDING.md).
 
 ## Testing
 
