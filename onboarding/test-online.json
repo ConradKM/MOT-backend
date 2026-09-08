@@ -1,0 +1,34 @@
+{
+  "business": {
+    "name": "CoMaz Online Test",
+    "phone": "+44 20 0000 0000",
+    "address": "1 Test Street, London",
+    "postcode": "E1 6AN",
+    "email": null,
+    "website": null
+  },
+  "owner": {
+    "email": "test-online@comaz.co.uk",
+    "first_name": "Test",
+    "last_name": "Owner"
+  },
+  "services": [
+    { "name": "MOT Test", "description": "Standard MOT test.", "base_price": "54.85", "default_duration_minutes": 45 },
+    { "name": "Full Service", "description": "Full vehicle service.", "base_price": "189.00", "default_duration_minutes": 90 }
+  ],
+  "opening_hours": {
+    "mon": ["09:00", "17:00"],
+    "tue": ["09:00", "17:00"],
+    "wed": ["09:00", "17:00"],
+    "thu": ["09:00", "17:00"],
+    "fri": ["09:00", "17:00"],
+    "sat": null,
+    "sun": null
+  },
+  "notes": "THROWAWAY test business for online smoke-testing app.comaz.co.uk. Safe to hard-delete once real demos are set up (see docs/BUSINESS_ONBOARDING.md - 'Deactivating / removing').",
+  "_meta": {
+    "status": "test-only",
+    "owner_email_is_real": false,
+    "disposable": true
+  }
+}

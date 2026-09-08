@@ -10,6 +10,7 @@ spec format and the full offline → online (Render Shell) runbook.
 
 | File | Business | Notes |
 | --- | --- | --- |
+| `test-online.json` | CoMaz Online Test | **throwaway** — for smoke-testing `app.comaz.co.uk`; hard-delete when done |
 | `revive-n-drive.json` | Revive N Drive | real owner email; opening hours TBC (default kept) |
 | `tints-on-demand.json` | Tints on Demand | **temporary** owner email `@admin.com` — replace before go-live; owner name TBC |
 | `mot-doctors.json` | M.O.T Doctors | **temporary** owner email `@admin.com` — replace before go-live; standard MOT service set |
