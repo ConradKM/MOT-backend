@@ -5,6 +5,7 @@ from flask_smorest import Blueprint, abort
 from app.customer_auth.decorators import customer_required
 from app.customer_auth.utils import get_current_customer
 from app.models.appointments.appointment import Appointment
+from app.models.booking_request import BookingRequest
 
 from .schemas import CustomerAccountSchema, CustomerAppointmentDetailSchema
 
@@ -30,6 +31,20 @@ def _appointment_summary(appointment):
     }
 
 
+def _pending_request_summary(request):
+    return {
+        "id": request.id,
+        "booking_reference": request.booking_reference,
+        "preferred_date": request.preferred_date,
+        "preferred_time": request.preferred_time,
+        "vehicle_registration": request.vehicle_registration,
+        "notes": request.notes,
+        "appointment_type_name": (
+            request.appointment_type.name if request.appointment_type else None
+        ),
+    }
+
+
 @customer_portal_blp.route("/account")
 class CustomerAccountResource(MethodView):
     @jwt_required()
@@ -37,6 +52,15 @@ class CustomerAccountResource(MethodView):
     @customer_portal_blp.response(200, CustomerAccountSchema)
     def get(self):
         customer = get_current_customer()
+
+        # PENDING only: a REJECTED/EXPIRED request never becomes an
+        # appointment and has nothing "upcoming" left to show; APPROVED ones
+        # are already covered by `appointments` below.
+        pending_requests = (
+            BookingRequest.query.filter_by(customer_id=customer.id, status="PENDING")
+            .order_by(BookingRequest.preferred_date)
+            .all()
+        )
 
         return {
             "customer": {
@@ -65,6 +89,7 @@ class CustomerAccountResource(MethodView):
                 _appointment_summary(a)
                 for a in sorted(customer.appointments, key=lambda a: a.start_time)
             ],
+            "pending_requests": [_pending_request_summary(r) for r in pending_requests],
         }
 
 
