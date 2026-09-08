@@ -11,11 +11,17 @@ from app.models.garage_schedule import GarageScheduleException
 from app.public_booking.availability import single_day, validate_slot
 
 UTC = datetime.UTC
-# 2026-09-07 is a Monday; the garage's default hours are Mon-Fri 09:00-17:00.
-NOW = datetime.datetime(2026, 9, 7, 10, 15, tzinfo=UTC)
+# Anchor every date to the Monday of next week, computed from the real date, so
+# the suite is date-independent: TODAY is always a weekday and always in the
+# future, so the submit endpoint's "not in the past" schema check (which runs
+# against the real system date, not the frozen `now`) is never tripped. The
+# garage's default hours are Mon-Fri 09:00-17:00.
+_real_today = datetime.datetime.now(UTC).date()
+_ANCHOR_MONDAY = _real_today + datetime.timedelta(days=7 - _real_today.weekday())
+NOW = datetime.datetime.combine(_ANCHOR_MONDAY, datetime.time(10, 15), tzinfo=UTC)
 TODAY = NOW.date()
-SATURDAY = datetime.date(2026, 9, 12)
-NEXT_MONDAY = datetime.date(2026, 9, 14)
+SATURDAY = TODAY + datetime.timedelta(days=5)
+NEXT_MONDAY = TODAY + datetime.timedelta(days=7)
 
 
 def _t(hour, minute=0):
