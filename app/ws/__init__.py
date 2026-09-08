@@ -10,4 +10,4 @@ Importing this package registers every ``@sock.route`` handler on the ``sock``
 instance from ``app.extensions`` (done in ``app/__init__.py::create_app``).
 """
 
-from . import health  # noqa: F401
+from . import health, twilio_voice  # noqa: F401

@@ -137,6 +137,24 @@ class Config:
     # whichever number or WhatsApp sender you provision.
     PUBLIC_API_BASE_URL = os.getenv("PUBLIC_API_BASE_URL", "http://localhost:5001")
 
+    # --- ConversationRelay voice assistant (app/communications/voice_relay.py,
+    #     app/ws/twilio_voice.py) ---------------------------------------------
+    # Off by default: an inbound call gets the existing static <Say> greeting
+    # until this is switched on for the deployment. On => a resolved inbound
+    # call returns <Connect><ConversationRelay> pointing at the WebSocket
+    # bridge, which needs Twilio configured AND a WebSocket-capable server
+    # (gunicorn's gevent worker - gunicorn.conf.py). If the TwiML build fails
+    # for any reason the call still falls back to the static greeting.
+    TWILIO_CONVERSATIONRELAY_ENABLED = (
+        os.getenv("TWILIO_CONVERSATIONRELAY_ENABLED", "false").lower() == "true"
+    )
+    # STT + TTS language for the assistant - en-GB, never US English for a UK
+    # business. Optional explicit provider/voice; unset => the provider's
+    # default voice for the language.
+    CONVERSATIONRELAY_LANGUAGE = os.getenv("CONVERSATIONRELAY_LANGUAGE", "en-GB")
+    CONVERSATIONRELAY_TTS_PROVIDER = os.getenv("CONVERSATIONRELAY_TTS_PROVIDER", "")
+    CONVERSATIONRELAY_VOICE = os.getenv("CONVERSATIONRELAY_VOICE", "")
+
     # --- Conversation engine (see app/conversation) -----------------------
     # The development conversation simulator (POST /api/conversation/simulate)
     # runs real customer messages through the real booking engine without
