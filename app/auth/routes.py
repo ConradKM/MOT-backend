@@ -71,7 +71,7 @@ class Register(MethodView):
         if not current_app.config.get("ONBOARDING_HTTP_ENABLED", True):
             abort(
                 404,
-                message="Garage onboarding is handled by the platform team.",
+                message="Business onboarding is handled by the platform team.",
             )
 
         try:

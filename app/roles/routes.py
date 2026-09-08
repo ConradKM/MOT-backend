@@ -14,7 +14,7 @@ roles_blp = Blueprint(
     "roles",
     "roles",
     url_prefix="/api/roles",
-    description="Per-garage employee roles",
+    description="Per-business employee roles",
 )
 
 

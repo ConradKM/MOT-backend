@@ -15,9 +15,9 @@ appointment_statuses_blp = Blueprint(
     "appointment-statuses",
     "appointment-statuses",
     url_prefix="/api/appointment-statuses",
-    description="Per-garage labels / colours for appointment statuses. "
+    description="Per-business labels / colours for appointment statuses. "
     "Appointment.status stays a string; these just customise its display and "
-    "let a garage add its own.",
+    "let a business add its own.",
 )
 
 
@@ -61,7 +61,7 @@ class AppointmentStatusList(MethodView):
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            abort(409, message="A status with this key already exists for your garage.")
+            abort(409, message="A status with this key already exists for your business.")
 
         return status
 

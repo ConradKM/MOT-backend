@@ -17,14 +17,14 @@ garages_blp = Blueprint(
     "garage",
     "garage",
     url_prefix="/api/garage",
-    description="Garage (tenant) management",
+    description="Business (tenant) management",
 )
 
 public_garages_blp = Blueprint(
     "public_garages",
     "public_garages",
     url_prefix="/api/public/garages",
-    description="Unauthenticated garage lookup for the public customer booking flow",
+    description="Unauthenticated business lookup for the public customer booking flow",
 )
 
 

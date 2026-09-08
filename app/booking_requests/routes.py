@@ -188,7 +188,7 @@ class BookingRequestApprove(MethodView):
             id=appointment_type_id, garage_id=garage_id
         ).first()
         if appointment_type is None or appointment_type.status != "ACTIVE":
-            abort(422, message="appointment_type_id is not an active type for this garage.")
+            abort(422, message="appointment_type_id is not an active type for this business.")
 
         # --- resolve the assigned employee ----------------------------
         assigned_employee_id = data.get("employee_id")
@@ -198,7 +198,7 @@ class BookingRequestApprove(MethodView):
             id=assigned_employee_id, garage_id=garage_id
         ).first()
         if assigned_employee is None:
-            abort(422, message="employee_id does not belong to your garage.")
+            abort(422, message="employee_id does not belong to your business.")
         if not assigned_employee.is_active:
             abort(422, message="This employee's account is deactivated.")
 

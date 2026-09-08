@@ -171,7 +171,7 @@ class MOTReminderManualSend(MethodView):
 
         customer = db.session.get(Customer, vehicle.customer_id)
         if customer is None or customer.garage_id != garage_id:
-            abort(404, message="Vehicle has no customer on this garage.")
+            abort(404, message="Vehicle has no customer on this business.")
 
         if not data["acknowledge_booking"] and mot_booking_active_for(
             vehicle.id, garage_id, vehicle.mot_expiry_date, db.session
