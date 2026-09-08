@@ -13,5 +13,5 @@ warn_return_any = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["flask_smorest.*", "flask_migrate.*", "flask_cors.*", "boto3.*", "botocore.*", "celery.*", "twilio.*", "yaml.*"]
+module = ["flask_smorest.*", "flask_migrate.*", "flask_cors.*", "flask_sock.*", "simple_websocket.*", "boto3.*", "botocore.*", "celery.*", "twilio.*", "yaml.*"]
 ignore_missing_imports = true

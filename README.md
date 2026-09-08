@@ -34,6 +34,15 @@ The API will be available at `http://localhost:5000`.
 docker compose up --build
 ```
 
+The image's `CMD` runs **gunicorn with a `gevent` worker** (`wsgi:app`,
+`gunicorn.conf.py`) - the same command production uses. That worker is what
+serves both the REST API and the WebSocket routes under `app/ws/`
+(`flask-sock`); a plain sync WSGI server would serve REST fine but could not
+upgrade a WebSocket. `flask --app app:create_app run` (above) is dev-only.
+
+`GUNICORN_*` / `WEB_CONCURRENCY` env vars tune it; `PORT` is honoured (Render
+injects it).
+
 ## Local seed data
 
 `flask seed-dev` builds one fully-populated example test business

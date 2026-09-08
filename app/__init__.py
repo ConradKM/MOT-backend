@@ -4,7 +4,7 @@ from flask import Flask
 from flask_cors import CORS
 
 from .config import Config
-from .extensions import api, db, jwt, limiter, migrate
+from .extensions import api, db, jwt, limiter, migrate, sock
 
 
 @jwt.token_in_blocklist_loader
@@ -39,6 +39,7 @@ def create_app(config_class=Config):
     jwt.init_app(app)
     limiter.init_app(app)
     api.init_app(app)
+    sock.init_app(app)
 
     # Cross-origin access to the API for deployed static frontends (the local
     # dev frontend proxies same-origin and needs none). Explicit allowlist from
@@ -121,6 +122,10 @@ def create_app(config_class=Config):
     api.register_blueprint(appointment_checklists_blp)
     api.register_blueprint(checklist_item_media_blp)
 
+    # Importing app.ws registers its @sock.route handlers on the sock instance
+    # init'd above (served only under a WebSocket-capable server - gunicorn's
+    # gevent worker in production).
+    from . import ws  # noqa: F401
     from .conversation.automation import register_default_handlers
     from .models import (  # noqa: F401
         booking_request,

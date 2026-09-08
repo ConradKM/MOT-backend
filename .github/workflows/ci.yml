@@ -72,6 +72,9 @@ jobs:
       - name: App boots (create_app doesn't raise)
         run: python -c "from app import create_app; create_app()"
 
+      - name: WSGI entrypoint imports (wsgi:app, the gunicorn target)
+        run: python -c "import wsgi; assert wsgi.app is not None"
+
       - name: ruff check
         run: ruff check .
 
