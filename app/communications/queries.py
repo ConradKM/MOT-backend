@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
 from app.extensions import db
 from app.models.communications.communication_log import (
@@ -34,6 +34,17 @@ from .config import garage_communications_enabled, is_twilio_configured
 # inbound call that never connected. Not exhaustive of every Twilio value,
 # just the ones that mean "nobody answered this".
 MISSED_CALL_STATUSES = ("no-answer", "busy", "failed", "canceled")
+
+# The external_provider on a conversation-engine transcript-turn row - a
+# message *inside* a call, not a call. Every physical call has exactly one
+# call-level VOICE row (from app/communications/service.py, provider
+# "twilio"); the ConversationRelay turns for it carry this provider instead
+# and must never be counted or listed as calls of their own.
+ENGINE_PROVIDER = "comaz_conversation_engine"
+
+# A VOICE row that represents a physical call rather than one of its
+# transcript turns.
+_CALL_LEVEL_ROW = CommunicationLog.external_provider != ENGINE_PROVIDER
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
@@ -79,11 +90,13 @@ def overview_summary(garage) -> dict:
 
     calls_today = base.filter(
         CommunicationLog.channel == CHANNEL_VOICE,
+        _CALL_LEVEL_ROW,
         CommunicationLog.created_at >= today_start,
     ).count()
 
     missed_calls_today = base.filter(
         CommunicationLog.channel == CHANNEL_VOICE,
+        _CALL_LEVEL_ROW,
         CommunicationLog.direction == DIRECTION_INBOUND,
         CommunicationLog.status.in_(MISSED_CALL_STATUSES),
         CommunicationLog.created_at >= today_start,
@@ -107,8 +120,15 @@ def overview_summary(garage) -> dict:
         or 0
     )
 
+    # One entry per voice call (its call-level row), not per transcript turn;
+    # WhatsApp stays message-oriented.
     recent = (
-        base.filter(CommunicationLog.channel.in_((CHANNEL_VOICE, CHANNEL_WHATSAPP)))
+        base.filter(
+            or_(
+                CommunicationLog.channel == CHANNEL_WHATSAPP,
+                and_(CommunicationLog.channel == CHANNEL_VOICE, _CALL_LEVEL_ROW),
+            )
+        )
         .order_by(CommunicationLog.created_at.desc())
         .limit(10)
         .all()
@@ -145,7 +165,9 @@ def list_calls(
     limit: int | None = None,
     offset: int = 0,
 ) -> tuple[list[CommunicationLog], int]:
-    query = CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_VOICE)
+    query = CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_VOICE).filter(
+        _CALL_LEVEL_ROW
+    )
 
     if search:
         query = query.outerjoin(Customer, CommunicationLog.customer_id == Customer.id)
@@ -179,10 +201,39 @@ def list_calls(
 
 
 def get_call_detail(garage, call_id) -> CommunicationLog | None:
-    result: CommunicationLog | None = CommunicationLog.query.filter_by(
-        garage_id=garage.id, channel=CHANNEL_VOICE, id=call_id
-    ).first()
+    result: CommunicationLog | None = (
+        CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_VOICE, id=call_id)
+        .filter(_CALL_LEVEL_ROW)
+        .first()
+    )
     return result
+
+
+def get_call_transcript(garage, call: CommunicationLog) -> list[CommunicationLog]:
+    """The conversation-engine transcript turns that belong to ``call``,
+    oldest first. Grouped by the call's Twilio CallSid *within this garage*
+    only - a CallSid is unique per Twilio account, but the query is tenant
+    scoped regardless so grouping can never cross businesses.
+
+    ``external_id LIKE '<sid>:%'`` is a fallback for turn rows written before
+    the ``call_sid`` column existed (only the inbound side carried the SID,
+    embedded in external_id)."""
+    call_sid = call.call_sid or call.external_id
+    if not call_sid:
+        return []
+    rows: list[CommunicationLog] = (
+        CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_VOICE)
+        .filter(
+            CommunicationLog.external_provider == ENGINE_PROVIDER,
+            or_(
+                CommunicationLog.call_sid == call_sid,
+                CommunicationLog.external_id.like(f"{call_sid}:%"),
+            ),
+        )
+        .order_by(CommunicationLog.created_at.asc())
+        .all()
+    )
+    return rows
 
 
 def list_conversations(

@@ -88,6 +88,7 @@ def handle_message(
     phone_e164: str,
     text: str,
     external_message_id: str | None = None,
+    call_sid: str | None = None,
     now: datetime | None = None,
 ) -> ConversationResult:
     """Process one inbound customer message end to end. Never raises for an
@@ -120,6 +121,7 @@ def handle_message(
         customer=customer,
         intent=intent_guess,
         external_id=external_message_id,
+        call_sid=call_sid,
     )
 
     if session.status == STATUS_HUMAN_HANDOFF:
@@ -147,10 +149,24 @@ def handle_message(
 
     if result.response_text:
         _log_turn(
-            garage, channel, phone_e164, DIRECTION_OUTBOUND, result.response_text, customer=customer
+            garage,
+            channel,
+            phone_e164,
+            DIRECTION_OUTBOUND,
+            result.response_text,
+            customer=customer,
+            call_sid=call_sid,
         )
     for description in result.actions_performed:
-        _log_turn(garage, channel, phone_e164, DIRECTION_SYSTEM, description, customer=customer)
+        _log_turn(
+            garage,
+            channel,
+            phone_e164,
+            DIRECTION_SYSTEM,
+            description,
+            customer=customer,
+            call_sid=call_sid,
+        )
 
     session_service.mark_processed(session, external_message_id)
 
@@ -261,6 +277,7 @@ def _log_turn(
     customer=None,
     intent=None,
     external_id=None,
+    call_sid=None,
 ) -> None:
     model_channel = _CHANNEL_MODEL_VALUES.get(channel, CHANNEL_WHATSAPP)
     address = f"whatsapp:{phone_e164}" if model_channel == CHANNEL_WHATSAPP else phone_e164
@@ -274,6 +291,7 @@ def _log_turn(
         direction=direction,
         external_provider="comaz_conversation_engine",
         external_id=external_id,
+        call_sid=call_sid,
         status="received" if direction == DIRECTION_INBOUND else "sent",
         from_address=from_address,
         to_address=to_address,

@@ -293,6 +293,7 @@ def initiate_voice_call(
         direction=DIRECTION_OUTBOUND,
         external_provider="twilio",
         external_id=call.sid,
+        call_sid=call.sid,
         from_address=settings.voice_phone_number,
         to_address=to_e164,
         status=call.status,
@@ -320,6 +321,10 @@ def record_inbound_communication(
         direction=DIRECTION_INBOUND,
         external_provider="twilio",
         external_id=external_id,
+        # For a voice call this row is the call itself; carrying the CallSid
+        # in call_sid too lets the engine's transcript-turn rows group under
+        # it (see app/communications/queries.py).
+        call_sid=external_id if channel == CHANNEL_VOICE else None,
         from_address=from_address,
         to_address=to_address,
         status=status,

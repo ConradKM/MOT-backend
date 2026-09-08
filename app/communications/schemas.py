@@ -52,6 +52,14 @@ class CommunicationLogSchema(Schema):
     )
 
 
+class CallDetailSchema(CommunicationLogSchema):
+    """A single call plus its conversation transcript - the turns exchanged
+    during the call, oldest first. Empty for a non-automated call or one
+    with no ConversationRelay session."""
+
+    transcript = fields.List(fields.Nested(CommunicationLogSchema), dump_only=True)
+
+
 class CallListQueryArgsSchema(Schema):
     direction = fields.Str(load_default=None, validate=validate.OneOf(["INBOUND", "OUTBOUND"]))
     missed_only = fields.Bool(load_default=False)
