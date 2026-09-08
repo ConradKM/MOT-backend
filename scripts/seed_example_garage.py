@@ -1,6 +1,6 @@
 """Seed a fully-populated example garage for manual/exploratory testing.
 
-Creates one garage - "Kingsway MOT & Service Centre" - wired up to exercise
+Creates one clearly-marked test business - "TEST GARAGE 101" - wired up to exercise
 every feature the API and the staff frontend expose:
 
   * roles (the protected OWNER + seeded STAFF, plus custom ones) and
@@ -78,7 +78,10 @@ from app.models.role import Role
 from app.models.vehicle import Vehicle
 from app.mot_records.routes import _sync_vehicle_mot_expiry
 
-GARAGE_NAME = "Kingsway MOT & Service Centre"
+GARAGE_NAME = "TEST GARAGE 101"
+# Names this test business was seeded under before - cleaned up on the next
+# run so a rename doesn't leave the old copy (and its employee emails) behind.
+LEGACY_GARAGE_NAMES = ("Kingsway MOT & Service Centre",)
 PASSWORD = "Password123!"  # every seeded employee shares this
 
 NOW = datetime.now(UTC)
@@ -119,16 +122,18 @@ def wipe_everything() -> None:
 
 
 def delete_existing_example_garage() -> None:
-    garage = Garage.query.filter_by(name=GARAGE_NAME).one_or_none()
-    if garage is None:
+    names = (GARAGE_NAME, *LEGACY_GARAGE_NAMES)
+    garages = Garage.query.filter(Garage.name.in_(names)).all()
+    if not garages:
         return
 
-    gid = garage.id
-    for table in _DELETE_ORDER:
-        column = "id" if table == "garages" else "garage_id"
-        db.session.execute(db.text(f"DELETE FROM {table} WHERE {column} = :gid"), {"gid": gid})
+    for garage in garages:
+        gid = garage.id
+        for table in _DELETE_ORDER:
+            column = "id" if table == "garages" else "garage_id"
+            db.session.execute(db.text(f"DELETE FROM {table} WHERE {column} = :gid"), {"gid": gid})
+        print(f"Removed the previous '{garage.name}' and everything under it.")
     db.session.commit()
-    print(f"Removed the previous '{GARAGE_NAME}' and everything under it.")
 
 
 # --------------------------------------------------------------------------
