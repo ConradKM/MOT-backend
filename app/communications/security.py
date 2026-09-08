@@ -56,3 +56,32 @@ def validate_twilio_request(request: Request) -> bool:
 
     validator = RequestValidator(current_app.config["TWILIO_AUTH_TOKEN"])
     return bool(validator.validate(_external_url(request), request.form.to_dict(), signature))
+
+
+def validate_twilio_websocket(request: Request, ws_url: str) -> bool:
+    """Whether a ConversationRelay WebSocket handshake carries a valid Twilio
+    signature.
+
+    Twilio sends ``X-Twilio-Signature`` on the upgrade request, computed the
+    same way as an HTTP webhook but over the ``wss://`` URL it was told to
+    connect to (from the ``<ConversationRelay url="...">`` attribute) with no
+    parameters. Same on/off rules as :func:`validate_twilio_request`:
+    ``TWILIO_WEBHOOK_VALIDATE=false`` skips it (local/manual only); an
+    unconfigured Twilio account rejects outright.
+    """
+    if not current_app.config.get("TWILIO_WEBHOOK_VALIDATE", True):
+        current_app.logger.warning(
+            "[twilio] WebSocket signature validation is DISABLED "
+            "(TWILIO_WEBHOOK_VALIDATE=false) - never run production traffic like this."
+        )
+        return True
+
+    if not is_twilio_configured():
+        return False
+
+    signature = request.headers.get("X-Twilio-Signature", "")
+    if not signature:
+        return False
+
+    validator = RequestValidator(current_app.config["TWILIO_AUTH_TOKEN"])
+    return bool(validator.validate(ws_url, {}, signature))

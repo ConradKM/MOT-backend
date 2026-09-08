@@ -24,6 +24,7 @@ from .queries import MISSED_CALL_STATUSES
 from .security import validate_twilio_request
 from .service import record_inbound_communication, update_communication_status
 from .tenant_resolution import resolve_garage_by_voice_number
+from .voice_relay import build_incoming_call_twiml, conversationrelay_enabled
 
 twilio_voice_blp = Blueprint(
     "twilio_voice",
@@ -69,6 +70,20 @@ def incoming_call():
         external_id=call_sid,
         status=request.form.get("CallStatus") or "received",
     )
+
+    # The automated assistant, when it's switched on for this deployment. Any
+    # failure building the TwiML falls through to the static greeting below -
+    # a broken ConversationRelay config must never drop the call.
+    if conversationrelay_enabled():
+        try:
+            return Response(build_incoming_call_twiml(garage), mimetype="text/xml")
+        except Exception:
+            current_app.logger.exception(
+                "[twilio:voice] ConversationRelay TwiML build failed for garage %s "
+                "(CallSid=%s) - falling back to the static greeting",
+                garage.id,
+                call_sid,
+            )
 
     reply.say(
         f"Thank you for calling {garage.name}. "

@@ -60,7 +60,10 @@ Set these in the deployment's environment (never commit real values -
 | `TWILIO_API_KEY_SECRET` | no (with `TWILIO_API_KEY_SID`) | The API Key's secret. Both must be set for key auth to take effect; otherwise the client falls back to Account SID + Auth Token. |
 | `TWILIO_WEBHOOK_VALIDATE` | no (default `true`) | Set `false` only for local/manual testing with a client that can't sign requests |
 | `TWILIO_WHATSAPP_AUTO_ACK` | no (default `false`) | Send a generic acknowledgement reply to inbound WhatsApp messages |
-| `PUBLIC_API_BASE_URL` | to receive webhooks | This deployment's public HTTPS origin, e.g. `https://api.comaz.example` |
+| `PUBLIC_API_BASE_URL` | to receive webhooks | This deployment's public HTTPS origin, e.g. `https://api.comaz.example`. Also the origin of the ConversationRelay `wss://…/api/ws/twilio/voice` URL and the URL its handshake signature is checked against. |
+| `TWILIO_CONVERSATIONRELAY_ENABLED` | no (default `false`) | `true` => a resolved inbound call returns `<Connect><ConversationRelay>` (the voice assistant) instead of the static `<Say>` |
+| `CONVERSATIONRELAY_LANGUAGE` | no (default `en-GB`) | STT + TTS language for the assistant |
+| `CONVERSATIONRELAY_TTS_PROVIDER` / `CONVERSATIONRELAY_VOICE` | no | Optional explicit TTS provider (`Google`/`Amazon`/`ElevenLabs`) + voice id; unset => the provider default for the language |
 
 ### Why there's no `TWILIO_AUTH_TOKEN` column in the database
 
@@ -129,6 +132,32 @@ Every one of these:
 4. Answers an *unrecognised* number/sender safely (valid empty TwiML, `200`)
    rather than erroring - Twilio always gets a clean response even for a
    stale or mistyped number.
+
+### ConversationRelay voice assistant
+
+When `TWILIO_CONVERSATIONRELAY_ENABLED=true`, a **resolved** inbound call to
+`/api/webhooks/twilio/voice/incoming` returns
+`<Connect><ConversationRelay url="wss://{PUBLIC_API_BASE_URL}/api/ws/twilio/voice" …/>`
+instead of the static `<Say>`. **The number's webhook URL does not change** -
+the change is purely in the TwiML that URL returns.
+
+- **`GET /api/ws/twilio/voice`** (`app/ws/twilio_voice.py`) - the WebSocket
+  ConversationRelay connects for the life of the call. It validates the
+  `X-Twilio-Signature` on the handshake (over the `wss://` URL, no params -
+  `TWILIO_WEBHOOK_VALIDATE=false` skips it), re-resolves the tenant from the
+  dialled number in the `setup` message and cross-checks it against the
+  `garage_id` `<Parameter>` baked into the TwiML, then feeds each completed
+  `prompt` transcript into the **existing** `engine.handle_message(…, channel="VOICE", …)` -
+  the same engine WhatsApp uses. Its `response_text` is sent back as a
+  `{"type":"text","token":…}` frame for TTS. Requires the gunicorn **gevent**
+  worker (the production Docker CMD); a plain sync WSGI server can't hold the
+  connection.
+- **Fallback is preserved:** if `TWILIO_CONVERSATIONRELAY_ENABLED` is off, or
+  the TwiML build raises, the call gets the original static greeting. If the
+  engine raises mid-call the caller hears an apology and a `CallbackRequest`
+  is created.
+- `CONVERSATIONRELAY_LANGUAGE` (default `en-GB`), optional
+  `CONVERSATIONRELAY_TTS_PROVIDER` / `CONVERSATIONRELAY_VOICE`.
 
 ### Webhook signature verification
 
