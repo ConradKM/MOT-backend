@@ -25,6 +25,23 @@ class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
 
+    # --- CORS (see app/__init__.py) -------------------------------------
+    # Browser origins allowed to call /api/* cross-origin. The dev frontend
+    # uses Vite's same-origin proxy so needs no entry here; these cover
+    # deployed static builds that call the API directly (app.comaz.co.uk) and
+    # the local Vite dev/preview servers. Comma-separated; override with the
+    # CORS_ORIGINS env var. Never "*" - the API is authenticated with an
+    # Authorization bearer header.
+    CORS_ORIGINS: tuple[str, ...] = tuple(
+        origin.strip()
+        for origin in os.getenv(
+            "CORS_ORIGINS",
+            "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,"
+            "https://app.comaz.co.uk,https://comaz.co.uk",
+        ).split(",")
+        if origin.strip()
+    )
+
     API_TITLE = f"{PLATFORM_NAME} API"
     API_VERSION = "v1"
     OPENAPI_VERSION = "3.0.3"
@@ -129,6 +146,14 @@ class TestConfig(Config):
         )
     )
     PROPAGATE_EXCEPTIONS = True
+
+    # Deterministic CORS allowlist for the test suite, independent of any
+    # CORS_ORIGINS env var the developer's shell might carry.
+    CORS_ORIGINS: tuple[str, ...] = (
+        "http://localhost:5173",
+        "https://app.comaz.co.uk",
+        "https://comaz.co.uk",
+    )
 
     # Never call out to a real CAPTCHA provider, a shared rate-limit store, or
     # object storage from the test suite, regardless of the developer's shell.

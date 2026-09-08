@@ -1,6 +1,7 @@
 import uuid
 
 from flask import Flask
+from flask_cors import CORS
 
 from .config import Config
 from .extensions import api, db, jwt, limiter, migrate
@@ -38,6 +39,18 @@ def create_app(config_class=Config):
     jwt.init_app(app)
     limiter.init_app(app)
     api.init_app(app)
+
+    # Cross-origin access to the API for deployed static frontends (the local
+    # dev frontend proxies same-origin and needs none). Explicit allowlist from
+    # config - never "*", since every request carries an Authorization bearer.
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": list(app.config["CORS_ORIGINS"])}},
+        allow_headers=["Authorization", "Content-Type"],
+        methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+        supports_credentials=False,
+        max_age=3600,
+    )
 
     api.spec.components.security_scheme(
         "bearerAuth", {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
