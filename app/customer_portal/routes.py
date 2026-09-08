@@ -46,6 +46,7 @@ class CustomerAccountResource(MethodView):
                 "email": customer.email,
                 "phone": customer.phone,
                 "garage_name": customer.garage.name,
+                "has_password": customer.password_hash is not None,
             },
             "vehicles": [
                 {

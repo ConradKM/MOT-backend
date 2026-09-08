@@ -1,24 +1,58 @@
-"""API tests for POST /api/customer/auth/login and /api/customer/auth/refresh.
-
-Customer login is knowledge-factor only: an email plus a registration number of
-a vehicle on that customer's account. No customer password exists.
+"""API tests for customer sign-in: a booking reference + email, or email +
+password once one has been set - plus /refresh and /set-password.
 """
 
+import datetime
 
-def _login(client, email, registration_number):
+import pytest
+from werkzeug.security import generate_password_hash
+
+from app.extensions import db
+from app.models.booking_request import BookingRequest
+
+
+@pytest.fixture()
+def linked_booking_request(session, garage, customer):
+    """A PENDING request already resolved to `customer` - what the public
+    web form leaves behind at submission (app/public_booking/routes.py)."""
+    br = BookingRequest(
+        garage_id=garage.id,
+        status="PENDING",
+        booking_reference="BK7F3K9Q2",
+        customer_id=customer.id,
+        customer_first_name=customer.first_name,
+        customer_last_name=customer.last_name,
+        customer_email=customer.email,
+        customer_phone=customer.phone,
+        vehicle_registration="AB12CDE",
+        preferred_date=datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=2),
+    )
+    session.add(br)
+    session.commit()
+    return br
+
+
+def _reference_login(client, email, booking_reference):
     return client.post(
-        "/api/customer/auth/login",
-        json={"email": email, "registration_number": registration_number},
+        "/api/customer/auth/login/reference",
+        json={"email": email, "booking_reference": booking_reference},
+    )
+
+
+def _password_login(client, email, password):
+    return client.post(
+        "/api/customer/auth/login/password",
+        json={"email": email, "password": password},
     )
 
 
 # --------------------------------------------------------------------------
-# Login
+# Reference login
 # --------------------------------------------------------------------------
 
 
-def test_login_with_email_and_registration_succeeds(client, customer, vehicle):
-    resp = _login(client, customer.email, vehicle.registration_number)
+def test_reference_login_succeeds(client, customer, linked_booking_request):
+    resp = _reference_login(client, customer.email, linked_booking_request.booking_reference)
 
     assert resp.status_code == 200
     body = resp.get_json()
@@ -26,63 +60,88 @@ def test_login_with_email_and_registration_succeeds(client, customer, vehicle):
     assert body.get("refresh_token")
 
 
-def test_login_normalises_registration_input(client, customer, vehicle):
-    # vehicle.registration_number is stored normalised as "AB12CDE"
-    resp = _login(client, customer.email, "  ab 12 cde ")
+def test_reference_login_normalises_case_and_whitespace(client, customer, linked_booking_request):
+    resp = _reference_login(client, customer.email, "  bk7f3k9q2  ")
 
     assert resp.status_code == 200
 
 
-def test_login_email_is_case_insensitive(client, customer, vehicle):
-    resp = _login(client, customer.email.upper(), vehicle.registration_number)
+def test_reference_login_email_is_case_insensitive(client, customer, linked_booking_request):
+    resp = _reference_login(
+        client, customer.email.upper(), linked_booking_request.booking_reference
+    )
 
     assert resp.status_code == 200
 
 
-def test_login_wrong_email_fails(client, customer, vehicle):
-    resp = _login(client, "someone-else@example.com", vehicle.registration_number)
+def test_reference_login_wrong_email_fails(client, linked_booking_request):
+    resp = _reference_login(
+        client, "someone-else@example.com", linked_booking_request.booking_reference
+    )
 
     assert resp.status_code == 401
 
 
-def test_login_wrong_registration_fails(client, customer, vehicle):
-    resp = _login(client, customer.email, "ZZ99ZZZ")
+def test_reference_login_wrong_reference_fails(client, customer, linked_booking_request):
+    resp = _reference_login(client, customer.email, "BK0000000")
 
     assert resp.status_code == 401
 
 
-def test_login_registration_from_another_customer_fails(
-    client, customer, second_customer, second_vehicle
+def test_reference_login_from_another_customer_fails(
+    client, customer, second_customer, session, garage
 ):
-    # second_vehicle belongs to second_customer (a different garage); pairing it
-    # with the first customer's email must not authenticate anyone.
-    resp = _login(client, customer.email, second_vehicle.registration_number)
+    # A reference issued for a different customer's booking must not
+    # authenticate someone who merely knows customer's email.
+    other = BookingRequest(
+        garage_id=garage.id,
+        status="PENDING",
+        booking_reference="BK9999999",
+        customer_id=second_customer.id,
+        customer_first_name=second_customer.first_name,
+        customer_last_name=second_customer.last_name,
+        customer_email=second_customer.email,
+        vehicle_registration="XY99ZZZ",
+        preferred_date=datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=2),
+    )
+    session.add(other)
+    session.commit()
+
+    resp = _reference_login(client, customer.email, other.booking_reference)
 
     assert resp.status_code == 401
 
 
-def test_login_missing_email_fails(client, vehicle):
+def test_reference_login_missing_email_fails(client, linked_booking_request):
     resp = client.post(
-        "/api/customer/auth/login",
-        json={"registration_number": vehicle.registration_number},
+        "/api/customer/auth/login/reference",
+        json={"booking_reference": linked_booking_request.booking_reference},
     )
     assert resp.status_code == 422
 
 
-def test_login_missing_registration_fails(client, customer):
-    resp = client.post("/api/customer/auth/login", json={"email": customer.email})
+def test_reference_login_missing_reference_fails(client, customer):
+    resp = client.post("/api/customer/auth/login/reference", json={"email": customer.email})
     assert resp.status_code == 422
 
 
-def test_login_does_not_reveal_which_field_was_wrong(client, customer, vehicle):
-    wrong_email = _login(client, "nobody@example.com", vehicle.registration_number)
-    wrong_reg = _login(client, customer.email, "ZZ99ZZZ")
+def test_reference_login_does_not_reveal_which_field_was_wrong(
+    client, customer, linked_booking_request
+):
+    wrong_email = _reference_login(
+        client, "nobody@example.com", linked_booking_request.booking_reference
+    )
+    wrong_ref = _reference_login(client, customer.email, "BK0000000")
 
-    assert wrong_email.get_json()["message"] == wrong_reg.get_json()["message"]
+    assert wrong_email.get_json()["message"] == wrong_ref.get_json()["message"]
 
 
-def test_login_token_is_accepted_by_the_customer_portal(client, customer, vehicle):
-    token = _login(client, customer.email, vehicle.registration_number).get_json()["access_token"]
+def test_reference_login_token_is_accepted_by_the_customer_portal(
+    client, customer, linked_booking_request
+):
+    token = _reference_login(
+        client, customer.email, linked_booking_request.booking_reference
+    ).get_json()["access_token"]
 
     resp = client.get("/api/customer/account", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
@@ -90,14 +149,102 @@ def test_login_token_is_accepted_by_the_customer_portal(client, customer, vehicl
 
 
 # --------------------------------------------------------------------------
+# Password login
+# --------------------------------------------------------------------------
+
+
+def test_password_login_succeeds(client, session, customer):
+    customer.password_hash = generate_password_hash("correct-horse-battery-staple")
+    session.commit()
+
+    resp = _password_login(client, customer.email, "correct-horse-battery-staple")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body.get("access_token")
+    assert body.get("refresh_token")
+
+
+def test_password_login_email_is_case_insensitive(client, session, customer):
+    customer.password_hash = generate_password_hash("correct-horse-battery-staple")
+    session.commit()
+
+    resp = _password_login(client, customer.email.upper(), "correct-horse-battery-staple")
+
+    assert resp.status_code == 200
+
+
+def test_password_login_wrong_password_fails(client, session, customer):
+    customer.password_hash = generate_password_hash("correct-horse-battery-staple")
+    session.commit()
+
+    resp = _password_login(client, customer.email, "wrong-password")
+
+    assert resp.status_code == 401
+
+
+def test_password_login_with_no_password_set_fails(client, customer):
+    resp = _password_login(client, customer.email, "anything-at-all")
+
+    assert resp.status_code == 401
+
+
+def test_password_login_missing_fields_returns_422(client, customer):
+    resp = client.post("/api/customer/auth/login/password", json={"email": customer.email})
+    assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------------
+# Set password
+# --------------------------------------------------------------------------
+
+
+def test_set_password_requires_customer_authentication(client):
+    resp = client.post("/api/customer/auth/set-password", json={"password": "a-long-password"})
+    assert resp.status_code == 401
+
+
+def test_set_password_rejects_an_employee_token(client, access_token):
+    resp = client.post(
+        "/api/customer/auth/set-password",
+        json={"password": "a-long-password"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resp.status_code == 401
+
+
+def test_set_password_enables_password_login(customer_client, customer, session):
+    resp = customer_client.post(
+        "/api/customer/auth/set-password", json={"password": "a-brand-new-password"}
+    )
+    assert resp.status_code == 204
+
+    db.session.refresh(customer)
+    assert customer.password_hash is not None
+
+    login = customer_client.post(
+        "/api/customer/auth/login/password",
+        json={"email": customer.email, "password": "a-brand-new-password"},
+    )
+    assert login.status_code == 200
+
+
+def test_set_password_too_short_is_rejected(customer_client):
+    resp = customer_client.post("/api/customer/auth/set-password", json={"password": "short"})
+    assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------------
 # Refresh
 # --------------------------------------------------------------------------
 
 
-def test_refresh_with_customer_refresh_token_returns_a_new_access_token(client, customer, vehicle):
-    refresh_token = _login(client, customer.email, vehicle.registration_number).get_json()[
-        "refresh_token"
-    ]
+def test_refresh_with_customer_refresh_token_returns_a_new_access_token(
+    client, customer, linked_booking_request
+):
+    refresh_token = _reference_login(
+        client, customer.email, linked_booking_request.booking_reference
+    ).get_json()["refresh_token"]
 
     resp = client.post(
         "/api/customer/auth/refresh",
@@ -108,10 +255,10 @@ def test_refresh_with_customer_refresh_token_returns_a_new_access_token(client, 
     assert resp.get_json().get("access_token")
 
 
-def test_refresh_rejects_a_customer_access_token(client, customer, vehicle):
-    access_token = _login(client, customer.email, vehicle.registration_number).get_json()[
-        "access_token"
-    ]
+def test_refresh_rejects_a_customer_access_token(client, customer, linked_booking_request):
+    access_token = _reference_login(
+        client, customer.email, linked_booking_request.booking_reference
+    ).get_json()["access_token"]
 
     resp = client.post(
         "/api/customer/auth/refresh",

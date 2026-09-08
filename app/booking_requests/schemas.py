@@ -30,6 +30,10 @@ class BookingRequestSchema(Schema):
     id = fields.UUID(dump_only=True)
     garage_id = fields.UUID(dump_only=True)
     status = fields.Str(dump_only=True)
+    # Short customer-facing code (app/booking_requests/reference.py) - null
+    # on requests that predate this column (e.g. some conversation-engine
+    # requests from before it was backfilled here too).
+    booking_reference = fields.Str(dump_only=True, allow_none=True)
 
     customer_first_name = fields.Str(dump_only=True)
     customer_last_name = fields.Str(dump_only=True)

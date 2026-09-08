@@ -27,6 +27,11 @@ class Customer(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-
     last_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     email: Mapped[str | None] = mapped_column(String(320))
     phone: Mapped[str | None] = mapped_column(String(40))
+    # Set once a customer opts into email + password sign-in (see
+    # app/customer_auth/routes.py::CustomerSetPassword) - null until then.
+    # Every customer can still always sign in with a booking reference + this
+    # email instead (see CustomerReferenceLogin), password or not.
+    password_hash: Mapped[str | None] = mapped_column(String(255))
 
     # Soft-delete: a customer with vehicles/appointments is archived rather
     # than hard-deleted (see app/customers/routes.py) so historical records

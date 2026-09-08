@@ -4,6 +4,8 @@ from flask import current_app
 from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
+from app.booking_requests.reference import unique_booking_reference
+from app.booking_requests.service import resolve_customer_and_vehicle
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -143,9 +145,32 @@ class BookingRequestSubmit(MethodView):
                     ),
                 )
 
+        # Create (or match, by email) the customer's account + vehicle right
+        # away, rather than waiting for staff to approve the request - see
+        # app/booking_requests/service.py::resolve_customer_and_vehicle. The
+        # appointment itself still isn't created until a staff member
+        # approves and assigns it a slot/employee (see
+        # app/booking_requests/routes.py::BookingRequestApprove).
+        customer, vehicle = resolve_customer_and_vehicle(
+            garage.id,
+            customer_id=None,
+            customer_email=data["customer_email"],
+            first_name=data["customer_first_name"],
+            last_name=data["customer_last_name"],
+            phone=data.get("customer_phone"),
+            vehicle_registration=data["vehicle_registration"],
+            vehicle_make=data.get("vehicle_make"),
+            vehicle_model=data.get("vehicle_model"),
+            vehicle_year=data.get("vehicle_year"),
+            vehicle_mileage=data.get("vehicle_mileage"),
+        )
+
         booking_request = BookingRequest(
             garage_id=garage.id,
             status="PENDING",
+            booking_reference=unique_booking_reference(db.session),
+            customer_id=customer.id,
+            vehicle_id=vehicle.id,
             customer_first_name=data["customer_first_name"],
             customer_last_name=data["customer_last_name"],
             customer_email=data["customer_email"],

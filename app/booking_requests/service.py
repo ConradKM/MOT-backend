@@ -13,13 +13,94 @@ preferred time has passed doesn't stay PENDING (and therefore reserved and
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 
+from flask_smorest import abort
 from sqlalchemy import and_, or_
 
 from app.extensions import db
 from app.models.booking_request import BookingRequest
+from app.models.customer import Customer
+from app.models.vehicle import Vehicle
 from app.public_booking.availability import resolve_settings, slot_capacity_usage
+
+
+def _normalize_registration(value: str) -> str:
+    # Mirrors app/models/vehicle.py::Vehicle.normalize_registration_number so
+    # a lookup matches however the reg was originally stored.
+    return value.strip().upper().replace(" ", "")
+
+
+def resolve_customer_and_vehicle(
+    garage_id: uuid.UUID,
+    *,
+    customer_id: uuid.UUID | None,
+    customer_email: str | None,
+    first_name: str,
+    last_name: str,
+    phone: str | None,
+    vehicle_registration: str,
+    vehicle_make: str | None,
+    vehicle_model: str | None,
+    vehicle_year: int | None,
+    vehicle_mileage: int | None,
+) -> tuple[Customer, Vehicle]:
+    """Reuse-or-create the ``Customer`` + ``Vehicle`` a booking (request)
+    refers to. Shared by the public web form - which resolves this eagerly,
+    at submission time (see app/public_booking/routes.py) - and staff
+    approval (app/booking_requests/routes.py), which mostly just re-finds
+    what the public form already created; it's still needed as-is for
+    conversation-engine requests, which don't resolve eagerly.
+    """
+    customer = None
+    if customer_id is not None:
+        customer = Customer.query.filter_by(id=customer_id, garage_id=garage_id).first()
+    if customer is None and customer_email:
+        customer = Customer.query.filter(
+            Customer.garage_id == garage_id,
+            Customer.email.ilike(customer_email),
+        ).first()
+    if customer is None:
+        customer = Customer(
+            garage_id=garage_id,
+            first_name=first_name,
+            last_name=last_name,
+            email=customer_email,
+            phone=phone,
+        )
+        db.session.add(customer)
+        db.session.flush()
+    elif not customer.is_active:
+        # An archived customer matched by email - bring them back rather than
+        # silently creating a duplicate or letting the booking attach to a
+        # customer nobody can see in the normal list.
+        customer.is_active = True
+
+    reg = _normalize_registration(vehicle_registration)
+    vehicle = Vehicle.query.filter_by(garage_id=garage_id, registration_number=reg).first()
+    if vehicle is None:
+        vehicle = Vehicle(
+            garage_id=garage_id,
+            customer_id=customer.id,
+            registration_number=vehicle_registration,
+            make=vehicle_make,
+            model=vehicle_model,
+            year=vehicle_year,
+            current_mileage=vehicle_mileage,
+        )
+        db.session.add(vehicle)
+        db.session.flush()
+    elif vehicle.customer_id != customer.id:
+        abort(
+            409,
+            message="A vehicle with this registration already exists for a different "
+            "customer - resolve it manually before approving.",
+        )
+    elif not vehicle.is_active:
+        vehicle.is_active = True
+
+    return customer, vehicle
 
 
 def is_request_stale(booking_request: BookingRequest, now: datetime | None = None) -> bool:

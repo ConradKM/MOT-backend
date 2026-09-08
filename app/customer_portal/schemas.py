@@ -15,6 +15,10 @@ class CustomerProfileSchema(Schema):
     email = fields.Email(dump_only=True, allow_none=True)
     phone = fields.Str(dump_only=True, allow_none=True)
     garage_name = fields.Str(dump_only=True)
+    # Whether email + password sign-in is set up yet (see
+    # app/customer_auth/routes.py::CustomerSetPassword) - the account page
+    # uses this to offer "Create an account" only when it's still false.
+    has_password = fields.Bool(dump_only=True)
 
 
 class CustomerMOTRecordSchema(Schema):

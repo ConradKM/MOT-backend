@@ -15,9 +15,7 @@ from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
-from app.models.customer import Customer
 from app.models.employee import Employee
-from app.models.vehicle import Vehicle
 from app.public_booking.availability import slot_capacity_usage
 
 from .schemas import (
@@ -26,7 +24,12 @@ from .schemas import (
     BookingRequestRejectSchema,
     BookingRequestSchema,
 )
-from .service import attach_review_context, expire_stale_booking_requests, is_request_stale
+from .service import (
+    attach_review_context,
+    expire_stale_booking_requests,
+    is_request_stale,
+    resolve_customer_and_vehicle,
+)
 
 booking_requests_blp = Blueprint(
     "booking_requests",
@@ -45,12 +48,6 @@ def _get_owned_request(request_id):
         abort(404, message="Booking request not found")
 
     return booking_request
-
-
-def _normalize_registration(value: str) -> str:
-    # Mirrors app/models/vehicle.py::Vehicle.normalize_registration_number so a
-    # lookup matches however the reg was originally stored.
-    return value.strip().upper().replace(" ", "")
 
 
 # Minimal re-implementation of the scheduling checks in
@@ -206,61 +203,27 @@ class BookingRequestApprove(MethodView):
         _assert_no_conflict(assigned_employee_id, start_time, end_time)
         _assert_capacity_available(booking_request.garage, booking_request, start_time, end_time)
 
-        # --- reuse-or-create the customer ------------------------------
-        # A request already linked to a known customer (e.g. the
-        # conversation engine identified them by phone - see
-        # app/conversation/actions.py::create_booking_request) uses that
+        # --- reuse-or-create the customer + vehicle --------------------
+        # A request already linked to a known customer (e.g. the public web
+        # form now resolves this eagerly at submission - see
+        # app/public_booking/routes.py - or the conversation engine
+        # identified them by phone, see
+        # app/conversation/actions.py::create_booking_request) reuses that
         # link directly, rather than re-deriving identity from email - which
         # a WhatsApp/voice-originated request may not even have.
-        customer = None
-        if booking_request.customer_id is not None:
-            customer = Customer.query.filter_by(
-                id=booking_request.customer_id, garage_id=garage_id
-            ).first()
-        if customer is None and booking_request.customer_email:
-            customer = Customer.query.filter(
-                Customer.garage_id == garage_id,
-                Customer.email.ilike(booking_request.customer_email),
-            ).first()
-        if customer is None:
-            customer = Customer(
-                garage_id=garage_id,
-                first_name=booking_request.customer_first_name,
-                last_name=booking_request.customer_last_name,
-                email=booking_request.customer_email,
-                phone=booking_request.customer_phone,
-            )
-            db.session.add(customer)
-            db.session.flush()
-        elif not customer.is_active:
-            # An archived customer matched by email - bring them back rather
-            # than silently creating a duplicate or letting the appointment
-            # attach to a customer nobody can see in the normal list.
-            customer.is_active = True
-
-        # --- reuse-or-create the vehicle ------------------------------
-        reg = _normalize_registration(booking_request.vehicle_registration)
-        vehicle = Vehicle.query.filter_by(garage_id=garage_id, registration_number=reg).first()
-        if vehicle is None:
-            vehicle = Vehicle(
-                garage_id=garage_id,
-                customer_id=customer.id,
-                registration_number=booking_request.vehicle_registration,
-                make=booking_request.vehicle_make,
-                model=booking_request.vehicle_model,
-                year=booking_request.vehicle_year,
-                current_mileage=booking_request.vehicle_mileage,
-            )
-            db.session.add(vehicle)
-            db.session.flush()
-        elif vehicle.customer_id != customer.id:
-            abort(
-                409,
-                message="A vehicle with this registration already exists for a different "
-                "customer - resolve it manually before approving.",
-            )
-        elif not vehicle.is_active:
-            vehicle.is_active = True
+        customer, vehicle = resolve_customer_and_vehicle(
+            garage_id,
+            customer_id=booking_request.customer_id,
+            customer_email=booking_request.customer_email,
+            first_name=booking_request.customer_first_name,
+            last_name=booking_request.customer_last_name,
+            phone=booking_request.customer_phone,
+            vehicle_registration=booking_request.vehicle_registration,
+            vehicle_make=booking_request.vehicle_make,
+            vehicle_model=booking_request.vehicle_model,
+            vehicle_year=booking_request.vehicle_year,
+            vehicle_mileage=booking_request.vehicle_mileage,
+        )
 
         # --- create the appointment ---------------------------------
         appointment = Appointment(

@@ -120,6 +120,9 @@ class BookingRequestCreateSchema(Schema):
 class BookingRequestCreatedSchema(Schema):
     id = fields.UUID(dump_only=True)
     status = fields.Str(dump_only=True)
+    # Short customer-facing code (app/booking_requests/reference.py) - shown
+    # on the confirmation screen and usable to log in without a password.
+    booking_reference = fields.Str(dump_only=True, allow_none=True)
 
 
 # --- Availability calendar -------------------------------------------------

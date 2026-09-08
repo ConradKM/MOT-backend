@@ -137,12 +137,53 @@ def test_submit_gibberish_phone_number_is_rejected(client, garage):
     assert "customer_phone" in resp.get_json()["errors"]["json"]
 
 
-def test_submit_does_not_create_live_records(client, session, garage):
+def test_submit_creates_the_account_but_not_the_appointment(client, session, garage):
+    # The customer's account (Customer + Vehicle) exists right away, so a
+    # booking reference + email can log in immediately - but the Appointment
+    # itself still waits for staff to approve and assign it a slot/employee.
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_valid_payload())
+
+    assert Customer.query.filter_by(garage_id=garage.id).count() == 1
+    assert Vehicle.query.filter_by(garage_id=garage.id).count() == 1
+    assert Appointment.query.filter_by(garage_id=garage.id).count() == 0
+
+    row = db.session.get(BookingRequest, resp.get_json()["id"])
+    assert row.customer_id is not None
+    assert row.vehicle_id is not None
+
+
+def test_submit_reuses_an_existing_customer_by_email(client, session, garage):
+    existing = Customer(
+        garage_id=garage.id, first_name="Old", last_name="Name", email="alex.turner@example.com"
+    )
+    session.add(existing)
+    session.commit()
+
     client.post(f"/api/public/{garage.slug}/booking-requests", json=_valid_payload())
 
-    assert Customer.query.filter_by(garage_id=garage.id).count() == 0
-    assert Vehicle.query.filter_by(garage_id=garage.id).count() == 0
-    assert Appointment.query.filter_by(garage_id=garage.id).count() == 0
+    assert Customer.query.filter_by(garage_id=garage.id).count() == 1
+
+
+def test_submit_returns_a_booking_reference(client, session, garage):
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_valid_payload())
+
+    assert resp.status_code == 201
+    reference = resp.get_json()["booking_reference"]
+    assert reference
+    row = db.session.get(BookingRequest, resp.get_json()["id"])
+    assert row.booking_reference == reference
+
+
+def test_submit_reference_logs_the_customer_in(client, session, garage):
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_valid_payload())
+    body = resp.get_json()
+
+    login = client.post(
+        "/api/customer/auth/login/reference",
+        json={"email": "alex.turner@example.com", "booking_reference": body["booking_reference"]},
+    )
+    assert login.status_code == 200
+    assert login.get_json().get("access_token")
 
 
 def test_submit_accepts_an_active_appointment_type(client, session, garage):
