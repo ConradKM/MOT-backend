@@ -26,7 +26,7 @@ public_booking_blp = Blueprint(
     "public_booking",
     "public_booking",
     url_prefix="/api/public",
-    description="Unauthenticated customer booking - garage lookup by slug, "
+    description="Unauthenticated customer booking - business lookup by slug, "
     "server-computed availability, and booking-request submission",
 )
 
@@ -48,7 +48,7 @@ def _get_active_appointment_type(garage, appointment_type_id):
         id=appointment_type_id, garage_id=garage.id
     ).first()
     if appt_type is None or appt_type.status != "ACTIVE":
-        abort(422, message="appointment_type_id is not an active type for this garage.")
+        abort(422, message="appointment_type_id is not an active type for this business.")
     return appt_type
 
 

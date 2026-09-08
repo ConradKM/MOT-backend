@@ -29,7 +29,7 @@ def _get_owned_customer(customer_id, garage_id):
     customer = Customer.query.filter_by(id=customer_id, garage_id=garage_id).first()
 
     if not customer:
-        abort(422, message="customer_id does not belong to your garage.")
+        abort(422, message="customer_id does not belong to your business.")
 
     return customer
 

@@ -31,7 +31,7 @@ garage_schedule_blp = Blueprint(
     "garage-schedule",
     "garage-schedule",
     url_prefix="/api/garage/schedule",
-    description="Per-garage opening hours, slot rules and one-off date "
+    description="Per-business opening hours, slot rules and one-off date "
     "exceptions that drive the public availability calendar.",
 )
 

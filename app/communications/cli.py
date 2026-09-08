@@ -35,7 +35,7 @@ def _get_or_create_settings(garage: Garage) -> GarageCommunicationSettings:
     "--enable/--disable",
     "enabled",
     default=None,
-    help="Turn communications on/off for this garage.",
+    help="Turn communications on/off for this business.",
 )
 @click.option("--twilio-subaccount-sid", default=None)
 @click.option(

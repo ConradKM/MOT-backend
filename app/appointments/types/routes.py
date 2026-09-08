@@ -18,7 +18,7 @@ appointment_types_blp = Blueprint(
     "appointment-types",
     "appointment-types",
     url_prefix="/api/appointment-types",
-    description="Garage-defined appointment types (replaces the old fixed enum)",
+    description="Business-defined appointment types (replaces the old fixed enum)",
 )
 
 

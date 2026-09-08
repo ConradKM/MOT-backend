@@ -56,7 +56,7 @@ communications_blp = Blueprint(
     "communications",
     "communications",
     url_prefix="/api/communications",
-    description="Garage-facing calls/WhatsApp - overview, call log, WhatsApp inbox and "
+    description="Business-facing calls/WhatsApp - overview, call log, WhatsApp inbox and "
     "staff-initiated contact.",
 )
 

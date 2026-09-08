@@ -26,9 +26,9 @@ appointments_blp = Blueprint(
     "appointments",
     "appointments",
     url_prefix="/api/appointments",
-    description="Garage appointment calendar. Appointments are scoped to the "
-    "authenticated employee's garage and assigned to an individual employee - "
-    "multiple employees in the same garage may have appointments at the same "
+    description="Business appointment calendar. Appointments are scoped to the "
+    "authenticated employee's business and assigned to an individual employee - "
+    "multiple employees in the same business may have appointments at the same "
     "time, but a single employee cannot be double-booked.",
 )
 
@@ -44,7 +44,7 @@ def _get_owned_employee(employee_id, garage_id):
     employee = Employee.query.filter_by(id=employee_id, garage_id=garage_id).first()
 
     if not employee:
-        abort(422, message="employee_id does not belong to your garage.")
+        abort(422, message="employee_id does not belong to your business.")
 
     if not employee.is_active:
         abort(422, message="This employee's account is deactivated.")
@@ -56,7 +56,7 @@ def _get_owned_customer(customer_id, garage_id):
     customer = Customer.query.filter_by(id=customer_id, garage_id=garage_id).first()
 
     if not customer:
-        abort(422, message="customer_id does not belong to your garage.")
+        abort(422, message="customer_id does not belong to your business.")
 
     # An archived customer (see app/customers/routes.py) is still a real,
     # reachable record - booking them again just means they're active again.
@@ -72,7 +72,7 @@ def _get_owned_appointment_type(appointment_type_id, garage_id):
     ).first()
 
     if not appointment_type:
-        abort(422, message="appointment_type_id does not belong to your garage.")
+        abort(422, message="appointment_type_id does not belong to your business.")
 
     # Only blocks *assigning* a hidden/deprecated type to an appointment
     # (here, on create or on an explicit type change) - an appointment that
@@ -91,7 +91,7 @@ def _get_owned_vehicle(vehicle_id, garage_id, customer_id):
     vehicle = Vehicle.query.filter_by(id=vehicle_id, garage_id=garage_id).first()
 
     if not vehicle:
-        abort(422, message="vehicle_id does not belong to your garage.")
+        abort(422, message="vehicle_id does not belong to your business.")
 
     if vehicle.customer_id != customer_id:
         abort(422, message="vehicle_id does not belong to the specified customer.")
@@ -116,7 +116,7 @@ def _allowed_statuses(garage_id):
 
 def _validate_status(status, garage_id):
     if status is not None and status not in _allowed_statuses(garage_id):
-        abort(422, message="Not a valid appointment status for this garage.")
+        abort(422, message="Not a valid appointment status for this business.")
 
 
 def _validate_time_range(start_time, end_time):

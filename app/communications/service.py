@@ -168,9 +168,9 @@ def send_whatsapp_message(
     if not is_twilio_configured():
         return _skip(**skip_kwargs, reason="Twilio is not configured for this deployment.")
     if not garage_communications_enabled(garage):
-        return _skip(**skip_kwargs, reason="Communications are not enabled for this garage.")
+        return _skip(**skip_kwargs, reason="Communications are not enabled for this business.")
     if not (settings.whatsapp_sender or settings.messaging_service_sid):
-        return _skip(**skip_kwargs, reason="No WhatsApp sender configured for this garage.")
+        return _skip(**skip_kwargs, reason="No WhatsApp sender configured for this business.")
 
     client = get_twilio_client_for_garage(garage)
     assert client is not None  # guaranteed by the is_twilio_configured() check above
@@ -261,9 +261,9 @@ def initiate_voice_call(
     if not is_twilio_configured():
         return _skip(**skip_kwargs, reason="Twilio is not configured for this deployment.")
     if not garage_communications_enabled(garage):
-        return _skip(**skip_kwargs, reason="Communications are not enabled for this garage.")
+        return _skip(**skip_kwargs, reason="Communications are not enabled for this business.")
     if not settings.voice_phone_number:
-        return _skip(**skip_kwargs, reason="No voice number configured for this garage.")
+        return _skip(**skip_kwargs, reason="No voice number configured for this business.")
 
     client = get_twilio_client_for_garage(garage)
     assert client is not None  # guaranteed by the is_twilio_configured() check above
