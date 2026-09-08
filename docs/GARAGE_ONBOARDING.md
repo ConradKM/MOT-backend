@@ -250,10 +250,17 @@ Identical behaviour without the `flask` entrypoint (loads `.env` itself):
 
 ### Updating a tenant's business details later
 
-Business details (name, email, phone, address, postcode, website) are
-**read-only** to garage users — `Settings → Garage Details` just displays them,
-and `PATCH /api/garage` is `403` for everyone. A developer changes one tenant's
-details with:
+The **OWNER** can now edit the contact / profile subset themselves:
+`PATCH /api/garage` (OWNER only, `app/garages/routes.py::GarageResource.patch`)
+accepts the strict allowlist `name`, `email`, `phone`, `address`, `postcode`,
+`website` (`GarageDetailsUpdateSchema`), scoped to the caller's own business
+from the JWT. Any other key — `slug`, `layout_variant`, `id`, timestamps — is
+rejected (`422`); an empty body is `422`. STAFF without the OWNER role still
+get `403`.
+
+A developer can still change any tenant's details out-of-band (e.g. before the
+owner has logged in), and this is the only way to touch a business that isn't
+your own:
 
 ```bash
 flask --app app:create_app update-garage-details \
@@ -261,7 +268,8 @@ flask --app app:create_app update-garage-details \
 ```
 
 It edits **only** the named garage (resolved to its immutable id) and never
-touches the slug or `layout_variant`. Backed by `app/garages/details.py`.
+touches the slug or `layout_variant`. Backed by `app/garages/details.py`
+(`EDITABLE_FIELDS`), the same allowlist the OWNER endpoint uses.
 
 ### The HTTP endpoint
 
@@ -319,12 +327,13 @@ Treat these as invariants. Changing them breaks tenants already in production.
 - **The public-registration boundary.** No anonymous/public route may create a
   `Garage`. Tenant creation goes through `onboard_garage()` only (CLI, or the
   `ONBOARDING_HTTP_ENABLED` HTTP wrapper).
-- **Garage business details are read-only to garage users.** `GET /api/garage`
-  displays `name` / `email` / `phone` / `address` / `postcode` / `website`;
-  `PATCH /api/garage` is `403` for everyone. Editing goes through
-  `app/garages/details.py` (the `update-garage-details` CLI) only. Do not add a
-  garage-user write path, and do not make the columns immutable — the platform
-  still edits them.
+- **The contact-detail allowlist is fixed.** `PATCH /api/garage` is OWNER-only
+  and accepts exactly `name` / `email` / `phone` / `address` / `postcode` /
+  `website` (`GarageDetailsUpdateSchema` == `app/garages/details.py`'s
+  `EDITABLE_FIELDS`). STAFF get `403`. Never widen this allowlist to `slug`,
+  `layout_variant`, `id`, timestamps or any system/subscription field, and keep
+  the developer CLI (`update-garage-details`) as the only way to edit a
+  business that isn't the caller's own.
 - **Onboarding atomicity.** `onboard_garage()` must remain all-or-nothing —
   garage, statuses, schedule, roles, the default MOT reminder schedule and the
   first owner in one transaction, full rollback on any failure.
