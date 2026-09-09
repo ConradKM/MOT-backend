@@ -16,6 +16,7 @@ from app.conversation import automation, engine
 from app.models.communications.communication_log import CHANNEL_WHATSAPP
 
 from .config import is_twilio_configured
+from .delivery_status import describe_delivery_failure
 from .security import validate_twilio_request
 from .service import (
     find_customer_by_phone,
@@ -108,9 +109,19 @@ def whatsapp_status():
     if not validate_twilio_request(request):
         abort(403, message="Invalid Twilio signature.")
 
+    message_status = request.form.get("MessageStatus") or "unknown"
+    error_code = request.form.get("ErrorCode") or None
+    # Prefer our business-facing explanation for a known code; otherwise keep
+    # Twilio's own ErrorMessage if it sent one, so the row never ends up with
+    # a code and no readable reason.
+    error_message = describe_delivery_failure(error_code, message_status) or (
+        request.form.get("ErrorMessage") or None
+    )
+
     update_communication_status(
         external_id=request.form.get("MessageSid"),
-        status=request.form.get("MessageStatus") or "unknown",
-        error_code=request.form.get("ErrorCode") or None,
+        status=message_status,
+        error_code=error_code,
+        error_message=error_message,
     )
     return ("", 204)

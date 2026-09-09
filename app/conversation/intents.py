@@ -79,10 +79,20 @@ FAQ_INTENTS = (
     APPOINTMENT_TYPE_QUERY,
 )
 
-# Intents that should always win, even mid-workflow - a customer can always
-# ask for a human or a callback instead of answering the current question.
+# Intents that should always win, even mid-workflow - a customer part-way
+# through booking can still say "actually I need to cancel/move my existing
+# appointment", ask for a human, or ask for a callback, and be taken there
+# instead of having the message parsed as an answer to the current question.
 # Checked by engine.py before it tries to interpret a reply as a slot fill.
-INTERRUPT_INTENTS = (SPEAK_TO_HUMAN, CALLBACK_REQUEST, CANCEL_APPOINTMENT)
+# The phrases for these intents are specific enough ("cancel my", "reschedule",
+# "move my appointment", "can't make it") that an ordinary slot answer - a
+# day, a time, a service name, "yes" - never trips them.
+INTERRUPT_INTENTS = (
+    SPEAK_TO_HUMAN,
+    CALLBACK_REQUEST,
+    CANCEL_APPOINTMENT,
+    RESCHEDULE_APPOINTMENT,
+)
 
 
 class IntentResolver(Protocol):
@@ -253,10 +263,23 @@ _RULES: tuple[tuple[str, re.Pattern], ...] = (
             (
                 "cancel my",
                 "cancel the",
+                "cancel that appointment",
+                "cancel that booking",
                 "cancel appointment",
                 "cancel booking",
+                "cancel it please",
+                "need to cancel",
+                "want to cancel",
+                "have to cancel",
+                "got to cancel",
+                "like to cancel",
+                "wish to cancel",
+                "please cancel",
                 "no longer need",
                 "don't need the appointment",
+                "don't need my appointment",
+                "don't want the appointment",
+                "call off my appointment",
             )
         ),
     ),
@@ -265,14 +288,36 @@ _RULES: tuple[tuple[str, re.Pattern], ...] = (
         _phrase_pattern(
             (
                 "reschedule",
+                "re-schedule",
+                "rearrange",
                 "move my appointment",
                 "move my booking",
+                "move the appointment",
+                "move it to",
                 "change my appointment",
                 "change my booking",
-                "different day",
-                "different time",
+                "change the appointment",
+                "change the time of my",
+                "change the day of my",
                 "push back my",
                 "bring forward my",
+                "need to move",
+                "want to move",
+                "need to change my appointment",
+                "need to change my booking",
+                "can't make it",
+                "cant make it",
+                "can't make my appointment",
+                "can't make tomorrow",
+                "can't make the appointment",
+                "cannot make it",
+                "cannot make my appointment",
+                "can't come in",
+                "cannot come in",
+                "won't be able to make",
+                "not able to make",
+                "unable to make",
+                "won't make my appointment",
             )
         ),
     ),

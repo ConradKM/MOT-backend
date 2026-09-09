@@ -533,3 +533,38 @@ def test_whatsapp_status_updates_the_matching_log_idempotently(
     matches = CommunicationLog.query.filter_by(external_id="SM-status-1").all()
     assert len(matches) == 1
     assert matches[0].status == "delivered"
+
+
+def test_whatsapp_status_undelivered_persists_twilio_error_code_and_a_readable_reason(
+    app, session, client, garage, monkeypatch
+):
+    """An async 'undelivered' callback carrying a Twilio ErrorCode must land
+    on the row as a code *and* a business-facing explanation - never just
+    'undelivered' with nothing to act on."""
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        CommunicationLog(
+            garage_id=garage.id,
+            channel="WHATSAPP",
+            direction="OUTBOUND",
+            status="queued",
+            external_id="SM-fail-1",
+        )
+    )
+    session.commit()
+
+    path = "/api/webhooks/twilio/whatsapp/status"
+    # 63016 = freeform message sent outside the 24-hour customer-service window.
+    form = {
+        "MessageSid": "SM-fail-1",
+        "MessageStatus": "undelivered",
+        "ErrorCode": "63016",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+    assert resp.status_code == 204
+
+    log = CommunicationLog.query.filter_by(external_id="SM-fail-1").one()
+    assert log.status == "undelivered"
+    assert log.error_code == "63016"
+    assert "24 hours" in log.error_message
+    assert "template" in log.error_message.lower()
