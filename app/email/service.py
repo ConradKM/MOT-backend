@@ -40,6 +40,7 @@ from app.communications.events import (
     APPOINTMENT_CREATED,
     APPOINTMENT_RESCHEDULED,
     BOOKING_REQUEST_CREATED,
+    BOOKING_REQUEST_REJECTED,
 )
 from app.email import send_email
 from app.extensions import db
@@ -273,6 +274,43 @@ def send_booking_request_received_email(booking_request) -> CommunicationLog | N
             "login_url": _login_url(),
         },
         trigger_event=BOOKING_REQUEST_CREATED,
+        customer=booking_request.customer,
+        booking_request=booking_request,
+    )
+
+
+def send_booking_request_rejected_email(booking_request) -> CommunicationLog | None:
+    """Tell the customer their booking request couldn't be taken, and to get
+    in touch for another time - the email counterpart to the WhatsApp
+    rejection in app/conversation/automation.py, and the only bad-news email
+    here, so it leads with the business's contact details rather than a
+    portal link (there's nothing left to view).
+
+    Deliberately excludes ``booking_request.staff_notes``: that field is
+    staff-internal (it appears only in app/booking_requests/schemas.py, never
+    in app/customer_portal/schemas.py) and may say anything at all, so it must
+    never reach the customer.
+    """
+    garage = booking_request.garage
+    appointment_type = booking_request.appointment_type
+    return _send(
+        garage=garage,
+        to=booking_request.customer_email,
+        subject="About your booking request",
+        template="booking_request_rejected",
+        context={
+            "business_name": garage.name,
+            "business_phone": garage.phone,
+            "business_email": garage.email,
+            "business_address": garage.address,
+            "first_name": booking_request.customer_first_name,
+            "booking_reference": booking_request.booking_reference,
+            "service_name": appointment_type.name if appointment_type else None,
+            "preferred_date": booking_request.preferred_date,
+            "preferred_time": booking_request.preferred_time,
+            "vehicle_label": _booking_request_vehicle_label(booking_request),
+        },
+        trigger_event=BOOKING_REQUEST_REJECTED,
         customer=booking_request.customer,
         booking_request=booking_request,
     )

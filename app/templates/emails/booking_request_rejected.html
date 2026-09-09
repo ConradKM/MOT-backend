@@ -1,0 +1,30 @@
+{% extends "emails/_base.html" %}
+{% block content %}
+<p style="margin:0 0 16px; font-size:16px; color:#111827;">Hi {{ first_name or "there" }},</p>
+<p style="margin:0 0 20px; font-size:15px; color:#374151; line-height:1.5;">
+  We're sorry - <strong>{{ business_name }}</strong> isn't able to take your booking request
+  {% if service_name %}for {{ service_name }} {% endif %}on
+  {{ preferred_date.strftime("%d %B %Y") }}{% if preferred_time %} at {{ preferred_time.strftime("%H:%M") }}{% endif %}.
+  Nothing has been booked.
+</p>
+<p style="margin:0 0 20px; font-size:15px; color:#374151; line-height:1.5;">
+  Please get in touch and we'll find you another time.
+</p>
+{% if business_phone or business_email %}
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%; margin-bottom:20px; background-color:#f9fafb; border:1px solid #e5e7eb; border-radius:6px;">
+  <tr>
+    <td style="padding:12px 16px; font-size:14px; color:#111827;">
+      {% if business_phone %}<div style="padding:2px 0;">Call us on <strong>{{ business_phone }}</strong></div>{% endif %}
+      {% if business_email %}<div style="padding:2px 0;">Email us at <a href="mailto:{{ business_email }}" style="color:#1f2937;">{{ business_email }}</a></div>{% endif %}
+    </td>
+  </tr>
+</table>
+{% endif %}
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%; font-size:14px; color:#111827; margin-bottom:20px;">
+  {% if booking_reference %}<tr><td style="padding:4px 0; color:#6b7280;">Reference</td><td style="padding:4px 0; text-align:right;">{{ booking_reference }}</td></tr>{% endif %}
+  {% if vehicle_label %}<tr><td style="padding:4px 0; color:#6b7280;">Vehicle</td><td style="padding:4px 0; text-align:right;">{{ vehicle_label }}</td></tr>{% endif %}
+</table>
+<p style="margin:0; font-size:13px; color:#9ca3af;">
+  Sorry for the inconvenience - we hope to see you soon.
+</p>
+{% endblock %}

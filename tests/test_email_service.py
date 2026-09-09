@@ -193,6 +193,61 @@ def test_a_second_booking_request_still_gets_its_own_email(
     assert len(fake_send.calls) == 2
 
 
+# --------------------------------------------------------------------------
+# Booking request rejected
+# --------------------------------------------------------------------------
+
+
+def test_booking_request_rejected_email_explains_and_gives_contact_details(
+    app, fake_send, garage, booking_request
+):
+    log = email_service.send_booking_request_rejected_email(booking_request)
+
+    assert log is not None
+    assert log.status == email_service.STATUS_SENT
+    assert log.booking_request_id == booking_request.id
+    body = fake_send.calls[0]["body"]
+    assert fake_send.calls[0]["subject"] == "About your booking request"
+    assert "isn't able to take your booking request" in body
+    assert "Nothing has been booked" in body
+    # Leads with how to reach the business for another time.
+    assert garage.phone in body
+    assert garage.email in body
+
+
+def test_booking_request_rejected_email_never_leaks_staff_notes(
+    app, session, fake_send, booking_request
+):
+    """staff_notes is a staff-internal field (app/booking_requests/schemas.py
+    only, never app/customer_portal/schemas.py) and can say anything."""
+    booking_request.staff_notes = "Customer was abusive on the phone - do not rebook"
+    session.commit()
+
+    email_service.send_booking_request_rejected_email(booking_request)
+
+    assert "abusive" not in fake_send.calls[0]["body"]
+    assert "abusive" not in fake_send.calls[0]["html_body"]
+
+
+def test_booking_request_rejected_email_skipped_with_no_email(
+    app, session, fake_send, booking_request
+):
+    booking_request.customer_email = None
+    session.commit()
+
+    assert email_service.send_booking_request_rejected_email(booking_request) is None
+    assert fake_send.calls == []
+
+
+def test_rejected_and_received_emails_dedupe_independently(app, fake_send, booking_request):
+    """Both key off the same booking_request_id but different trigger_events -
+    an acknowledged request must still be able to send a rejection."""
+    email_service.send_booking_request_received_email(booking_request)
+
+    assert email_service.send_booking_request_rejected_email(booking_request) is not None
+    assert len(fake_send.calls) == 2
+
+
 def test_appointment_confirmation_includes_appointment_details(
     app, fake_send, make_appointment, vehicle
 ):

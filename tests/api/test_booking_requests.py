@@ -342,6 +342,42 @@ def test_reject_sets_status_and_records_the_decision(authenticated_user, booking
     assert body["reviewed_at"] is not None
 
 
+def test_reject_emails_the_customer_without_leaking_staff_notes(
+    authenticated_user, booking_request, monkeypatch
+):
+    """Through the real event bus; only the send itself is stubbed. staff_notes
+    is staff-internal and must never reach the customer."""
+    sent = []
+    monkeypatch.setattr("app.email.service.send_email", lambda **kwargs: sent.append(kwargs))
+
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/reject",
+        json={"staff_notes": "Blacklisted - never rebook this one."},
+    )
+
+    assert resp.status_code == 200
+    assert len(sent) == 1
+    assert sent[0]["to"] == booking_request.customer_email
+    assert sent[0]["subject"] == "About your booking request"
+    assert "Blacklisted" not in sent[0]["body"]
+    assert "Blacklisted" not in sent[0]["html_body"]
+
+
+def test_failed_reject_sends_no_email(authenticated_user, session, booking_request, monkeypatch):
+    booking_request.status = "REJECTED"
+    session.commit()
+    sent = []
+    monkeypatch.setattr("app.email.service.send_email", lambda **kwargs: sent.append(kwargs))
+
+    # Already rejected -> 409, so no second email.
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/reject", json={}
+    )
+
+    assert resp.status_code == 409
+    assert sent == []
+
+
 def test_reject_after_approve_conflicts(authenticated_user, session, garage, booking_request):
     appt_type = _make_type(session, garage)
     authenticated_user.client.post(
