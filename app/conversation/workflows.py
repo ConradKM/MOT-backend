@@ -54,6 +54,8 @@ _YES_WORDS = {
     "yep",
     "yeah",
     "yup",
+    "ya",
+    "y",
     "correct",
     "confirm",
     "confirmed",
@@ -61,18 +63,61 @@ _YES_WORDS = {
     "sure",
     "ok",
     "okay",
+    "perfect",
+    "great",
+    "brilliant",
+    "lovely",
+    "definitely",
+    "absolutely",
 }
-_NO_WORDS = {"no", "nope", "not", "cancel", "nah"}
+_YES_PHRASES = (
+    "go ahead",
+    "go for it",
+    "please do",
+    "yes please",
+    "sounds good",
+    "sounds great",
+    "that works",
+    "that's fine",
+    "thats fine",
+    "that's great",
+    "book it",
+    "book me in",
+    "lets do it",
+    "let's do it",
+    "do it",
+)
+_NO_WORDS = {"no", "nope", "not", "cancel", "nah", "n", "dont", "stop"}
+_NO_PHRASES = (
+    "don't",
+    "do not",
+    "never mind",
+    "nevermind",
+    "leave it",
+    "not now",
+    "not yet",
+    "forget it",
+    "changed my mind",
+    "no thanks",
+    "no thank you",
+    "cancel that",
+)
 
 
 def _is_yes(text: str) -> bool:
     lowered = text.strip().lower().rstrip(".!")
-    return lowered in _YES_WORDS or lowered.startswith("yes")
+    return (
+        lowered in _YES_WORDS
+        or lowered.startswith("yes")
+        or any(p in lowered for p in _YES_PHRASES)
+    )
 
 
 def _is_no(text: str) -> bool:
     lowered = text.strip().lower().rstrip(".!")
-    return lowered in _NO_WORDS or lowered.startswith("no")
+    return (
+        lowered in _NO_WORDS or lowered.startswith("no") or any(p in lowered for p in _NO_PHRASES)
+    )
 
 
 @dataclass
@@ -763,12 +808,22 @@ def handle_awaiting_booking_confirmation(ctx: ConversationContext, text: str) ->
             )
         )
 
+    type_label = appointment_type.name if appointment_type else "appointment"
+    message = (
+        f"You're all set - I've sent your {type_label} request for {_format_date(day)} "
+        f"at {slot_time.strftime('%H:%M')} to the team, who'll confirm shortly."
+    )
+    # On WhatsApp, give the customer their reference so they can check or
+    # manage the booking in the portal (see app/customer_auth). Voice keeps
+    # the plain wording - a reference code read aloud isn't useful.
+    if ctx.channel == "WHATSAPP" and getattr(booking_request, "booking_reference", None):
+        message += (
+            f"\n\nYour reference is *{booking_request.booking_reference}* - "
+            "keep it to check or change this booking."
+        )
+
     return StepResult(
-        response_text=(
-            f"You're all set - I've sent your {appointment_type.name if appointment_type else 'appointment'} "
-            f"request for {_format_date(day)} at {slot_time.strftime('%H:%M')} to the team, who'll confirm "
-            "shortly."
-        ),
+        response_text=message,
         workflow_step=None,
         actions_performed=[f"Booking request #{str(booking_request.id)[:8]} created"],
         complete=True,
@@ -1327,6 +1382,48 @@ def handle_customer_details_query(ctx: ConversationContext, text: str) -> StepRe
         )
     return StepResult(
         response_text=f"Hi {ctx.customer.first_name}, I don't have any vehicles on file for you yet.",
+        workflow_step=None,
+        complete=True,
+    )
+
+
+# --------------------------------------------------------------------------
+# GREETING / SMALL_TALK - a message that's only a hello or a thanks
+# --------------------------------------------------------------------------
+
+
+def handle_greeting(ctx: ConversationContext, text: str) -> StepResult:
+    """A bare "hi" / "help" / "what can you do" - a warm capability intro
+    rather than "sorry, didn't follow that". WhatsApp gets a short bulleted
+    menu; Voice gets the same in one spoken sentence."""
+    name = f"{ctx.customer.first_name}, " if ctx.customer else ""
+    types = actions.get_appointment_types(ctx.garage)
+    services = ", ".join(t.name for t in types[:4]) if types else ""
+
+    if ctx.channel == "WHATSAPP":
+        lines = [
+            f"Hi {name}you've reached {ctx.garage.name}. I can help you:",
+            f"- book an appointment{f' ({services})' if services else ''}",
+            "- check, change or cancel an existing booking",
+            "- answer questions about prices, opening hours or where we are",
+            "",
+            "What would you like to do?",
+        ]
+        response = "\n".join(lines)
+    else:
+        response = (
+            f"Hi {name}you've reached {ctx.garage.name}. I can help you book, check, change "
+            "or cancel an appointment, or answer questions about prices and opening hours. "
+            "What would you like to do?"
+        )
+    return StepResult(response_text=response, workflow_step=None, complete=True)
+
+
+def handle_small_talk(ctx: ConversationContext, text: str) -> StepResult:
+    return StepResult(
+        response_text=(
+            "You're welcome! Message here any time you need to book or change an appointment."
+        ),
         workflow_step=None,
         complete=True,
     )

@@ -538,7 +538,7 @@ def test_stale_session_does_not_resume_and_submit_an_old_slot(
     r3 = _send(garage, PHONE_RAW, weekday_name, now=now)
     assert r3.workflow_step == "AWAITING_TIME"
 
-    much_later = now + timedelta(hours=2)  # past SESSION_TIMEOUT_MINUTES (30)
+    much_later = now + timedelta(hours=13)  # past the 12h WhatsApp idle window
     first_slot = r3.response_text.split("have ")[1].split(",")[0].split(" ")[0]
     r4 = _send(garage, PHONE_RAW, first_slot, now=much_later)
 
@@ -549,10 +549,27 @@ def test_stale_session_does_not_resume_and_submit_an_old_slot(
     assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
 
 
+def test_whatsapp_session_resumes_within_the_idle_window(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    _send(garage, PHONE_RAW, "Jane Doe", now=now)
+    r3 = _send(garage, PHONE_RAW, _next_open_weekday(now).strftime("%A"), now=now)
+    assert r3.workflow_step == "AWAITING_TIME"
+
+    # Six hours later (well inside the 12h WhatsApp window) the same thread
+    # picks up where it left off.
+    later = now + timedelta(hours=6)
+    first_slot = r3.response_text.split("have ")[1].split(",")[0].split(" ")[0]
+    r4 = _send(garage, PHONE_RAW, first_slot, now=later)
+    assert r4.workflow_step == "AWAITING_VEHICLE_REG"
+
+
 def test_expire_stale_sessions_sweep(session, garage, garage_schedule, appointment_type, user):
     now = _now()
-    _send(garage, PHONE_RAW, "hello", now=now)
-    much_later = now + timedelta(hours=2)
+    _send(garage, PHONE_RAW, "I want to book an appointment", now=now)
+    much_later = now + timedelta(hours=13)
 
     changed = session_service.expire_stale_sessions(now=much_later)
     assert changed == 1
@@ -815,3 +832,98 @@ def test_expire_stale_sessions_sweeps_a_stale_voice_handoff(
     assert changed == 1
     sess = ConversationSession.query.filter_by(garage_id=garage.id, channel="VOICE").one()
     assert sess.status == "EXPIRED"
+
+
+# --------------------------------------------------------------------------
+# WhatsApp automation quality (issue #73)
+# --------------------------------------------------------------------------
+
+
+def test_bare_greeting_gets_a_capability_intro(
+    session, garage, garage_schedule, appointment_type, user
+):
+    r = _send(garage, PHONE_RAW, "hi there", now=_now())
+    assert r.intent == "GREETING"
+    assert r.needs_human is False
+    body = r.response_text.lower()
+    assert garage.name.lower() in body
+    assert "book" in body and "cancel" in body
+
+
+def test_greeting_with_a_request_routes_to_the_request(
+    session, garage, garage_schedule, appointment_type, user
+):
+    r = _send(garage, PHONE_RAW, "hi, can I book an MOT please", now=_now())
+    assert r.intent == "CREATE_BOOKING"
+    assert r.workflow_step in ("AWAITING_NAME", "AWAITING_DATE")
+
+
+def test_thanks_gets_a_polite_close(session, garage, garage_schedule, appointment_type, user):
+    r = _send(garage, PHONE_RAW, "thanks very much!", now=_now())
+    assert r.intent == "SMALL_TALK"
+    assert r.needs_human is False
+    assert r.workflow_step is None
+
+
+def test_whatsapp_shorthand_is_understood(session, garage, garage_schedule, appointment_type, user):
+    r = _send(garage, PHONE_RAW, "can u book me an appt for tmrw pls", now=_now())
+    assert r.intent == "CREATE_BOOKING"
+
+
+def test_natural_yes_confirms_a_booking(session, garage, garage_schedule, appointment_type, user):
+    now = _now()
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    _send(garage, PHONE_RAW, "Jane Doe", now=now)
+    r3 = _send(garage, PHONE_RAW, _next_open_weekday(now).strftime("%A"), now=now)
+    first_slot = r3.response_text.split("have ")[1].split(",")[0].split(" ")[0]
+    _send(garage, PHONE_RAW, first_slot, now=now)
+    _send(garage, PHONE_RAW, "AB12 CDE", now=now)
+
+    r = _send(garage, PHONE_RAW, "yeah go ahead", now=now)
+    assert r.workflow_step is None
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+
+
+def test_whatsapp_booking_confirmation_includes_the_reference(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    _send(garage, PHONE_RAW, "Jane Doe", now=now)
+    r3 = _send(garage, PHONE_RAW, _next_open_weekday(now).strftime("%A"), now=now)
+    first_slot = r3.response_text.split("have ")[1].split(",")[0].split(" ")[0]
+    _send(garage, PHONE_RAW, first_slot, now=now)
+    _send(garage, PHONE_RAW, "AB12 CDE", now=now)
+    r = _send(garage, PHONE_RAW, "yes", now=now)
+
+    booking_request = BookingRequest.query.filter_by(garage_id=garage.id).one()
+    assert booking_request.booking_reference
+    assert booking_request.booking_reference in r.response_text
+
+
+def test_voice_booking_confirmation_omits_the_reference(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _send(garage, PHONE_RAW, "I need an MOT", channel="VOICE", now=now)
+    _send(garage, PHONE_RAW, "Jane Doe", channel="VOICE", now=now)
+    r3 = _send(garage, PHONE_RAW, _next_open_weekday(now).strftime("%A"), channel="VOICE", now=now)
+    first_slot = r3.response_text.split("have ")[1].split(",")[0].split(" ")[0]
+    _send(garage, PHONE_RAW, first_slot, channel="VOICE", now=now)
+    _send(garage, PHONE_RAW, "AB12 CDE", channel="VOICE", now=now)
+    r = _send(garage, PHONE_RAW, "yes", channel="VOICE", now=now)
+
+    booking_request = BookingRequest.query.filter_by(garage_id=garage.id).one()
+    assert booking_request.booking_reference  # still created
+    assert booking_request.booking_reference not in r.response_text  # just not read out
+
+
+def test_voice_session_still_expires_at_thirty_minutes(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _send(garage, PHONE_RAW, "I need an MOT", channel="VOICE", now=now)
+    r = _send(garage, PHONE_RAW, "Jane Doe", channel="VOICE", now=now + timedelta(minutes=45))
+    # 45 min > the 30-min voice window: the follow-up starts a fresh session,
+    # so "Jane Doe" is not read as the name step of the old booking flow.
+    assert r.workflow_step != "AWAITING_DATE"

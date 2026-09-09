@@ -26,6 +26,12 @@ MOT_EXPIRY_QUERY = "MOT_EXPIRY_QUERY"
 CUSTOMER_DETAILS_QUERY = "CUSTOMER_DETAILS_QUERY"
 CALLBACK_REQUEST = "CALLBACK_REQUEST"
 SPEAK_TO_HUMAN = "SPEAK_TO_HUMAN"
+# A message that's only a hello / "what can you do" / "help" - answered with a
+# short capability intro rather than "sorry, didn't follow that".
+GREETING = "GREETING"
+# "thanks" / "cheers" / "that's all" on their own - a polite acknowledgement
+# and close.
+SMALL_TALK = "SMALL_TALK"
 GENERAL_QUERY = "GENERAL_QUERY"
 UNKNOWN = "UNKNOWN"
 
@@ -43,6 +49,8 @@ INTENTS = (
     CUSTOMER_DETAILS_QUERY,
     CALLBACK_REQUEST,
     SPEAK_TO_HUMAN,
+    GREETING,
+    SMALL_TALK,
     GENERAL_QUERY,
     UNKNOWN,
 )
@@ -59,6 +67,81 @@ class IntentResolver(Protocol):
 
 def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern:
     return re.compile("|".join(re.escape(p) for p in phrases), re.IGNORECASE)
+
+
+# Common WhatsApp shorthand -> the word the rules below already match on.
+# Deliberately small and booking-vocabulary-focused: whole-word only, so it
+# never mangles a name, a registration, or ordinary prose.
+_SHORTHAND = {
+    "u": "you",
+    "ur": "your",
+    "pls": "please",
+    "plz": "please",
+    "thx": "thanks",
+    "thnx": "thanks",
+    "ty": "thanks",
+    "appt": "appointment",
+    "appts": "appointments",
+    "apt": "appointment",
+    "resched": "reschedule",
+    "wanna": "want to",
+    "gonna": "going to",
+    "gotta": "got to",
+    "tmrw": "tomorrow",
+    "tmr": "tomorrow",
+    "tomo": "tomorrow",
+    "asap": "as soon as possible",
+    "avail": "availability",
+    "info": "information",
+}
+_SHORTHAND_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in _SHORTHAND) + r")\b", re.IGNORECASE
+)
+
+
+def _normalise(text: str) -> str:
+    """Lower-case, collapse whitespace, drop surrounding quotes/trailing
+    punctuation, and expand the shorthand map - so "Can u book me an appt
+    for tmrw??" matches the same rules as "can you book me an appointment
+    for tomorrow". Intent detection only; workflows still see the raw text
+    for names / registrations / free text."""
+    lowered = " ".join(text.lower().split())
+    lowered = lowered.strip("\"'“”‘’ ").rstrip("!.?, ")
+    return _SHORTHAND_RE.sub(lambda m: _SHORTHAND[m.group(1).lower()], lowered)
+
+
+# A message that is *only* a greeting (optionally with "there"/name) - or a
+# bare help/menu ask.
+_GREETING_RE = re.compile(
+    r"^(hi|hello|hey|heya|hiya|yo|hallo|howdy|"
+    r"good\s+(morning|afternoon|evening)|morning|afternoon|evening)"
+    r"([\s,]+(there|team|guys|folks))?$",
+    re.IGNORECASE,
+)
+_HELP_RE = _phrase_pattern(
+    (
+        "what can you do",
+        "what can you help",
+        "how does this work",
+        "how do i use this",
+        "what do you do",
+        "help me",
+        "need help",
+        "show me options",
+        "what are my options",
+    )
+)
+_HELP_WORDS = {"help", "menu", "options", "start"}
+_SMALL_TALK_RE = re.compile(
+    r"^(thanks|thank you|thankyou|thanks a lot|thanks very much|thank you very much|"
+    r"many thanks|cheers|ta|nice one|great thanks|ok thanks|okay thanks|perfect thanks|"
+    r"brilliant|lovely|great stuff|"
+    r"bye|goodbye|see you|see ya|good day|"
+    r"that'?s (all|it|everything)|that is all|nothing else|"
+    r"no (that'?s|thats) (all|it|everything)|all good|we'?re good|i'?m good|no thanks)"
+    r"[\s,]*(thanks|thank you|cheers|bye)?$",
+    re.IGNORECASE,
+)
 
 
 # Ordered most-specific-first: the first matching rule wins, so (e.g.)
@@ -260,6 +343,13 @@ _RULES: tuple[tuple[str, re.Pattern], ...] = (
                 "get my car in",
                 "bring my car in",
                 "bring the car in",
+                "get booked in",
+                "get it booked",
+                "come in for",
+                "sort out my",
+                "look at my car",
+                "get my car looked at",
+                "need my car seen",
             )
         ),
     ),
@@ -276,8 +366,27 @@ class RuleBasedIntentResolver:
         if not text or not text.strip():
             return UNKNOWN
 
+        normalised = _normalise(text)
+        if not normalised:
+            return UNKNOWN
+
         for intent, pattern in _RULES:
-            if pattern.search(text):
+            if pattern.search(normalised):
                 return intent
 
-        return GENERAL_QUERY if _QUESTION_HINT.search(text) else UNKNOWN
+        # Only reached when nothing actionable matched: a bare hello, a
+        # "help"/"menu", or a thanks/goodbye gets a friendly answer instead
+        # of the generic "didn't follow that". A greeting *with* a request
+        # ("hi, can I book an MOT") never lands here - the rules above catch
+        # the request first.
+        if (
+            _GREETING_RE.match(normalised)
+            or _HELP_RE.search(normalised)
+            or normalised in _HELP_WORDS
+        ):
+            return GREETING
+        if _SMALL_TALK_RE.match(normalised):
+            return SMALL_TALK
+
+        looks_like_question = "?" in text or bool(_QUESTION_HINT.search(normalised))
+        return GENERAL_QUERY if looks_like_question else UNKNOWN

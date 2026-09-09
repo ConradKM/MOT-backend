@@ -69,15 +69,21 @@ One row per (garage, channel, phone number) *episode* -
 | `context` | Explicit JSON slot-filling state (appointment type id, chosen date, vehicle id, offered slots, ...) - plain inspectable values only, **never hidden AI reasoning** |
 | `handoff_reason` | Set together with `HUMAN_HANDOFF`; cleared on resume |
 | `last_external_message_id` | The provider message id already processed - the idempotency key |
-| `last_activity_at` | Drives the 30-minute staleness timeout |
+| `last_activity_at` | Drives the per-channel staleness timeout (Voice 30 min, WhatsApp 12 h) |
 
-**Session continuity rule:** `HUMAN_HANDOFF` never expires by timeout - only
-a human resuming automation (staff "Resume automation", or the dev
-simulator/API doing the same) ends one. This is what stops the bot from
-starting a second, contradictory reply while a human already owns the
-conversation. Every other status is swept to `EXPIRED` after 30 minutes of
-inactivity (`session_service.expire_stale_sessions`) so a customer returning
-after a long gap starts a clean flow rather than resuming stale availability.
+**Session continuity rule:** a **WhatsApp** `HUMAN_HANDOFF` never expires by
+timeout - only a human resuming automation (staff "Resume automation", or
+the dev simulator/API doing the same) ends one, so the bot never starts a
+second, contradictory reply while a human owns the async thread. A **Voice**
+`HUMAN_HANDOFF` has no persistent human channel (it only ever meant "we'll
+arrange a callback"), so it *does* idle out on the normal timeout - otherwise
+one handoff would hang up every future call from that number. Every other
+status is swept to `EXPIRED` after the idle timeout
+(`session_service.expire_stale_sessions`) so a customer returning after a
+long gap starts a clean flow. The timeout is per-channel: **30 minutes** for
+a live phone call, **12 hours** for an asynchronous WhatsApp thread (safe
+because every offered slot is re-validated against real availability at
+confirmation).
 
 ---
 
@@ -91,7 +97,14 @@ before the generic "mot" keyword in `CREATE_BOOKING` ever gets a chance:
 `RESCHEDULE_APPOINTMENT`, `CANCEL_APPOINTMENT`, `APPOINTMENT_PRICE_QUERY`,
 `APPOINTMENT_TYPE_QUERY`, `BUSINESS_HOURS_QUERY`, `BUSINESS_LOCATION_QUERY`,
 `MOT_EXPIRY_QUERY`, `CUSTOMER_DETAILS_QUERY`, `CALLBACK_REQUEST`,
-`SPEAK_TO_HUMAN`, `GENERAL_QUERY`, `UNKNOWN`.
+`SPEAK_TO_HUMAN`, `GREETING`, `SMALL_TALK`, `GENERAL_QUERY`, `UNKNOWN`.
+
+`resolve()` first normalises the message (lower-case, trim punctuation,
+expand common WhatsApp shorthand - `u`/`ur`/`pls`/`appt`/`tmrw`/`resched`),
+then runs the ordered rules. Only if nothing actionable matches does a bare
+"hi" / "help" / "menu" become `GREETING` (a short capability intro) or a
+"thanks" / "that's all" become `SMALL_TALK` - a greeting *with* a request
+("hi, can I book an MOT") still routes to the request.
 
 `INTERRUPT_INTENTS = (SPEAK_TO_HUMAN, CALLBACK_REQUEST, CANCEL_APPOINTMENT)` -
 a customer can always ask for a human, a callback, or to cancel outright,
