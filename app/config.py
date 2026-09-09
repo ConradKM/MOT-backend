@@ -164,6 +164,12 @@ class Config:
     CONVERSATION_SIMULATOR_ENABLED = (
         os.getenv("CONVERSATION_SIMULATOR_ENABLED", "true").lower() != "false"
     )
+    # How many consecutive turns the engine can fail to understand at all
+    # (UNKNOWN / GENERAL_QUERY, nothing actionable) before handing to a
+    # human. Also the cap on "which service?" clarification rounds inside a
+    # booking before the same handoff. Kept deliberately forgiving so an odd
+    # transcription or an unknown acronym doesn't end the conversation.
+    CONVERSATION_MAX_UNRESOLVED_TURNS = int(os.getenv("CONVERSATION_MAX_UNRESOLVED_TURNS", "3"))
 
 
 class TestConfig(Config):

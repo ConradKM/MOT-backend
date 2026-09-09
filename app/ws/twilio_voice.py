@@ -33,6 +33,7 @@ from app.communications.voice_relay import bridge_ws_url
 from app.conversation import actions, engine
 from app.extensions import db, sock
 from app.models.communications.communication_log import CommunicationLog
+from app.models.conversation.callback_request import CallbackRequest
 
 _HANDSHAKE_TIMEOUT_S = 10
 _APOLOGY = (
@@ -88,13 +89,22 @@ def _run_engine(garage, phone_e164: str, text: str, external_id: str, call_sid: 
 
 def _safe_callback(garage, phone_e164: str) -> None:
     try:
+        existing = CallbackRequest.query.filter_by(
+            garage_id=garage.id, phone_number=phone_e164, status="PENDING"
+        ).first()
+        if existing is not None:
+            # Already handed off - a repeat call to a number still in
+            # HUMAN_HANDOFF must not pile up duplicate callbacks.
+            _log("VOICE_CALLBACK_SKIPPED", callSid=None, reason="pending-callback-exists")
+            return
         customer = actions.find_customer(garage, phone_e164)
-        actions.create_callback_request(
+        callback = actions.create_callback_request(
             garage,
             customer=customer,
             phone_e164=phone_e164,
             reason="Automated phone booking could not be completed.",
         )
+        _log("VOICE_CALLBACK_CREATED", callSid=None, callback=str(callback.id)[:8])
     except Exception:
         current_app.logger.exception(
             "[twilio:voice:ws] could not create fallback callback for garage %s",
@@ -253,6 +263,31 @@ def twilio_voice_bridge(ws) -> None:
                     disconnect_reason = "ended-by-us:automation-error"
                     break
                 last_intent = result.intent
+                if result.needs_human:
+                    # Speak the engine's own handoff line if it gave one
+                    # ("I'll get a member of the team to help you book"),
+                    # otherwise a generic close, then end gracefully and
+                    # raise a callback. Checked before response_text so a
+                    # genuine handoff always terminates the call cleanly -
+                    # a normal clarification (needs_human=False, has text)
+                    # falls through and keeps the socket open.
+                    _speak(ws, result.response_text or _HANDOFF_CLOSE)
+                    _safe_callback(garage, phone_e164)
+                    _send(
+                        ws,
+                        {
+                            "type": "end",
+                            "handoffData": json.dumps({"reasonCode": "human-attention-required"}),
+                        },
+                    )
+                    _log(
+                        "VOICE_END_SENT",
+                        callSid=call_sid,
+                        reason="human-attention-required",
+                        spoke_engine_line=bool(result.response_text),
+                    )
+                    disconnect_reason = "ended-by-us:human-handoff"
+                    break
                 if result.response_text:
                     _speak(ws, result.response_text)
                     _log(
@@ -262,19 +297,6 @@ def twilio_voice_bridge(ws) -> None:
                         intent=result.intent,
                         length=len(result.response_text),
                     )
-                elif result.needs_human:
-                    _speak(ws, _HANDOFF_CLOSE)
-                    _safe_callback(garage, phone_e164)
-                    _send(
-                        ws,
-                        {
-                            "type": "end",
-                            "handoffData": json.dumps({"reasonCode": "human-attention-required"}),
-                        },
-                    )
-                    _log("VOICE_END_SENT", callSid=call_sid, reason="human-attention-required")
-                    disconnect_reason = "ended-by-us:human-handoff"
-                    break
 
             elif mtype == "dtmf":
                 digit = (msg.get("dtmf") or "").strip()
@@ -289,6 +311,19 @@ def twilio_voice_bridge(ws) -> None:
                     disconnect_reason = "ended-by-us:automation-error"
                     break
                 last_intent = result.intent
+                if result.needs_human:
+                    _speak(ws, result.response_text or _HANDOFF_CLOSE)
+                    _safe_callback(garage, phone_e164)
+                    _send(
+                        ws,
+                        {
+                            "type": "end",
+                            "handoffData": json.dumps({"reasonCode": "human-attention-required"}),
+                        },
+                    )
+                    _log("VOICE_END_SENT", callSid=call_sid, reason="human-attention-required")
+                    disconnect_reason = "ended-by-us:human-handoff"
+                    break
                 if result.response_text:
                     _speak(ws, result.response_text)
 

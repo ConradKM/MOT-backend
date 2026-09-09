@@ -83,6 +83,7 @@ def create_app(config_class=Config):
 
     from .communications.cli import (
         configure_garage_communications_command,
+        set_conversation_automation_command,
         twilio_webhook_urls_command,
     )
     from .dev.cli import dev_info_command, seed_dev_command
@@ -91,6 +92,7 @@ def create_app(config_class=Config):
     app.cli.add_command(onboard_garage_command)
     app.cli.add_command(update_garage_details_command)
     app.cli.add_command(configure_garage_communications_command)
+    app.cli.add_command(set_conversation_automation_command)
     app.cli.add_command(twilio_webhook_urls_command)
     app.cli.add_command(seed_dev_command)
     app.cli.add_command(dev_info_command)

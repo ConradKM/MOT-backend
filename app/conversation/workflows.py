@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
+from flask import current_app
+
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.conversation.conversation_session import ConversationSession
 from app.models.customer import Customer
@@ -108,6 +110,14 @@ def _format_slots(slots: list[dict], limit: int = 4) -> str:
     return ", ".join(times)
 
 
+def _max_clarify_rounds() -> int:
+    """How many times the booking flow will re-ask "which service?" without a
+    confident match before handing to a human - shares the deployment's
+    CONVERSATION_MAX_UNRESOLVED_TURNS knob (default 3). An unknown service
+    name or acronym gets clarified, never an instant handoff."""
+    return int(current_app.config.get("CONVERSATION_MAX_UNRESOLVED_TURNS", 3))
+
+
 def _get_appointment_type(garage: Garage, type_id: str | None) -> GarageAppointmentType | None:
     if not type_id:
         return None
@@ -147,10 +157,30 @@ def start_booking(ctx: ConversationContext, text: str) -> StepResult:
             context_updates={"candidate_type_ids": [str(t.id) for t in match.candidates]},
         )
 
+    # No confident match. Re-ask which service (an unknown name/acronym is a
+    # clarification, not a reason to end the call) - but only up to a
+    # configured number of rounds, then hand off *with* a spoken message.
+    rounds = int(ctx.slots.get("clarify_rounds", 0))
+    if rounds >= _max_clarify_rounds():
+        return StepResult(
+            response_text=(
+                "I'm having trouble matching that to one of our services - "
+                "I'll get a member of the team to help you book."
+            ),
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="Could not match a bookable service after repeated clarification.",
+        )
     names = ", ".join(t.name for t in types)
+    prompt = (
+        f"Sure - which of these would you like? {names}"
+        if rounds == 0
+        else f"Sorry, I didn't catch which service you need. We offer: {names}. Which would you like?"
+    )
     return StepResult(
-        response_text=f"Sure - which of these would you like? {names}",
+        response_text=prompt,
         workflow_step=AWAITING_TYPE,
+        context_updates={"clarify_rounds": rounds + 1},
     )
 
 
@@ -160,6 +190,7 @@ def _after_type_resolved(
     updates = {
         "appointment_type_id": str(appointment_type.id),
         "appointment_type_name": appointment_type.name,
+        "clarify_rounds": 0,
     }
 
     if ctx.customer is None:
@@ -198,10 +229,22 @@ def handle_awaiting_type_choice(ctx: ConversationContext, text: str) -> StepResu
         if t.name.lower() in lowered:
             return _after_type_resolved(ctx, t)
 
+    rounds = int(ctx.slots.get("clarify_rounds", 0))
+    if rounds >= _max_clarify_rounds():
+        return StepResult(
+            response_text=(
+                "I'm having trouble matching that to one of our services - "
+                "I'll get a member of the team to help you book."
+            ),
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason="Could not match a bookable service after repeated clarification.",
+        )
     names = " or ".join(t.name for t in candidates)
     return StepResult(
         response_text=f"Sorry, just to confirm - {names}?",
         workflow_step=AWAITING_TYPE_CHOICE,
+        context_updates={"clarify_rounds": rounds + 1},
     )
 
 

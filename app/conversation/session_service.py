@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import and_, or_
+
 from app.extensions import db
 from app.models.conversation.conversation_session import (
     STATUS_ACTIVE,
@@ -22,6 +24,11 @@ from app.models.conversation.conversation_session import (
 # booking conversation that goes quiet for half an hour should start fresh
 # rather than resume against availability that's no longer current.
 SESSION_TIMEOUT_MINUTES = 30
+
+# ConversationSession.channel value for phone calls (kept as a plain literal
+# here rather than importing the communications model - this module only
+# needs the string).
+CHANNEL_VOICE = "VOICE"
 
 
 def get_active_session(garage, channel: str, phone_e164: str) -> ConversationSession | None:
@@ -42,14 +49,20 @@ def get_active_session(garage, channel: str, phone_e164: str) -> ConversationSes
 
 
 def is_stale(session: ConversationSession, *, now: datetime | None = None) -> bool:
-    """A HUMAN_HANDOFF session never goes stale by timeout - same rule as
-    expire_stale_sessions below: only a human resuming automation ends one,
-    never a clock. Otherwise the bot could silently start replying again
-    while staff still believe they own the conversation."""
-    if session.status == STATUS_HUMAN_HANDOFF:
-        return False
+    """Whether a fresh inbound message should start a new session instead of
+    resuming this one.
+
+    A WhatsApp HUMAN_HANDOFF session never goes stale by timeout - a human
+    owns that async thread until staff resume automation, and the bot must
+    not silently start replying alongside them. A VOICE HUMAN_HANDOFF has no
+    such persistent channel: it only ever meant "we'll arrange a callback"
+    on a past call, so a later call - past the normal idle timeout - starts
+    clean rather than being hung up on turn 1 forever (issue #71)."""
     now = now or datetime.now(UTC)
-    return now - session.last_activity_at > timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+    idle_too_long = now - session.last_activity_at > timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+    if session.status == STATUS_HUMAN_HANDOFF:
+        return session.channel == CHANNEL_VOICE and idle_too_long
+    return idle_too_long
 
 
 def get_or_create_session(
@@ -159,16 +172,23 @@ def resume_automation(session: ConversationSession) -> None:
 
 
 def expire_stale_sessions(*, now: datetime | None = None) -> int:
-    """Sweeps every ACTIVE session past the inactivity timeout to EXPIRED.
-    Safe to call often (e.g. from a scheduled task) - a no-op when nothing
-    is stale. Human handoff sessions are untouched - a human, not a timer,
-    ends those."""
+    """Sweeps timed-out sessions to EXPIRED. Safe to call often (e.g. from a
+    scheduled task) - a no-op when nothing is stale. WhatsApp HUMAN_HANDOFF
+    sessions are untouched (a human, not a timer, ends those); a VOICE
+    HUMAN_HANDOFF past the timeout is swept too, matching ``is_stale`` - a
+    phone line has no persistent human channel to protect (issue #71)."""
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(minutes=SESSION_TIMEOUT_MINUTES)
     stale_ids = [
         row.id
         for row in ConversationSession.query.filter(
-            ConversationSession.status == STATUS_ACTIVE,
+            or_(
+                ConversationSession.status == STATUS_ACTIVE,
+                and_(
+                    ConversationSession.status == STATUS_HUMAN_HANDOFF,
+                    ConversationSession.channel == CHANNEL_VOICE,
+                ),
+            ),
             ConversationSession.last_activity_at < cutoff,
         ).all()
     ]
