@@ -179,6 +179,7 @@ def create_app(config_class=Config):
     from .models.communications import (  # noqa: F401
         automation_settings,
         communication_log,
+        conversation_state,
         garage_communication_settings,
         message_template,
     )

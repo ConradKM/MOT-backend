@@ -19,6 +19,7 @@ from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 from twilio.twiml.voice_response import VoiceResponse
 
+from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
 from app.conversation import automation, session_service, templates
 from app.conversation import queries as conversation_queries
@@ -285,9 +286,51 @@ class ConversationList(MethodView):
     def get(self, args):
         garage = get_current_employee().garage
         items, total = queries.list_conversations(
-            garage, search=args["search"], limit=args["limit"], offset=args["offset"]
+            garage,
+            conversation_filter=args["filter"],
+            search=args["search"],
+            limit=args["limit"],
+            offset=args["offset"],
         )
         return {"items": items, "total": total}
+
+
+@communications_blp.route("/conversations/<string:phone>/archive")
+class ConversationArchive(MethodView):
+    @jwt_required()
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.response(204)
+    def post(self, phone):
+        """Hide this thread from the Inbox. History is untouched; it can be
+        restored. This is the normal "remove from inbox" action."""
+        garage = get_current_employee().garage
+        queries.set_conversation_archived(garage, _normalize_path_phone(phone), True)
+        return ""
+
+
+@communications_blp.route("/conversations/<string:phone>/restore")
+class ConversationRestore(MethodView):
+    @jwt_required()
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.response(204)
+    def post(self, phone):
+        garage = get_current_employee().garage
+        queries.set_conversation_archived(garage, _normalize_path_phone(phone), False)
+        return ""
+
+
+@communications_blp.route("/conversations/<string:phone>")
+class ConversationDelete(MethodView):
+    @jwt_required()
+    @owner_required
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.response(204)
+    def delete(self, phone):
+        """Owner-only soft delete - hides the thread from every filter.
+        Message history rows stay; nothing sent on WhatsApp is affected."""
+        garage = get_current_employee().garage
+        queries.soft_delete_conversation(garage, _normalize_path_phone(phone))
+        return ""
 
 
 @communications_blp.route("/conversations/<string:phone>/messages")
