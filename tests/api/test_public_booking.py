@@ -174,6 +174,38 @@ def test_submit_returns_a_booking_reference(client, session, garage):
     assert row.booking_reference == reference
 
 
+def test_submit_sends_the_customer_an_acknowledgement_email(client, session, garage, monkeypatch):
+    """A public submission is only a PENDING request - the customer still gets
+    an immediate "we've received it" email (the confirmation one comes later,
+    on approval). Goes through the real event bus; only the send itself is
+    stubbed. See tests/test_email_service.py for the email's own content."""
+    sent = []
+    monkeypatch.setattr("app.email.service.send_email", lambda **kwargs: sent.append(kwargs))
+
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_valid_payload())
+
+    assert resp.status_code == 201
+    assert len(sent) == 1
+    assert sent[0]["to"] == "alex.turner@example.com"
+    assert sent[0]["subject"] == "We've received your booking request"
+    # The reference is what lets them sign in to see the request.
+    assert resp.get_json()["booking_reference"] in sent[0]["body"]
+
+
+def test_failed_submit_sends_no_email(client, session, garage, monkeypatch):
+    sent = []
+    monkeypatch.setattr("app.email.service.send_email", lambda **kwargs: sent.append(kwargs))
+
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(preferred_date="2020-01-01"),  # in the past -> rejected
+    )
+
+    assert resp.status_code == 422
+    assert sent == []
+    assert BookingRequest.query.count() == 0
+
+
 def test_submit_reference_logs_the_customer_in(client, session, garage):
     resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_valid_payload())
     body = resp.get_json()

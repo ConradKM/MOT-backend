@@ -126,6 +126,73 @@ def test_appointment_emails_link_to_the_customer_login_page(
     assert "https://app.comaz.co.uk/login" in fake_send.calls[0]["html_body"]
 
 
+# --------------------------------------------------------------------------
+# Booking request received (public booking acknowledgement)
+# --------------------------------------------------------------------------
+
+
+def test_booking_request_received_email_includes_reference_and_request_details(
+    app, fake_send, booking_request
+):
+    log = email_service.send_booking_request_received_email(booking_request)
+
+    assert log is not None
+    assert log.status == email_service.STATUS_SENT
+    assert log.booking_request_id == booking_request.id
+    assert log.to_address == booking_request.customer_email
+    body = fake_send.calls[0]["body"]
+    assert booking_request.booking_reference in body
+    assert booking_request.vehicle_registration in body
+    # Must not claim the appointment is booked - it's still PENDING.
+    assert "Nothing is booked in just yet" in body
+    assert fake_send.calls[0]["subject"] == "We've received your booking request"
+
+
+def test_booking_request_received_email_skipped_with_no_email(
+    app, session, fake_send, booking_request
+):
+    # A WhatsApp/voice-originated request never collects an email address.
+    booking_request.customer_email = None
+    session.commit()
+
+    assert email_service.send_booking_request_received_email(booking_request) is None
+    assert fake_send.calls == []
+
+
+def test_booking_request_received_email_is_deduped_per_request(app, fake_send, booking_request):
+    first = email_service.send_booking_request_received_email(booking_request)
+    second = email_service.send_booking_request_received_email(booking_request)
+
+    assert first is not None
+    assert second is None
+    assert len(fake_send.calls) == 1
+
+
+def test_a_second_booking_request_still_gets_its_own_email(
+    app, session, fake_send, garage, booking_request
+):
+    """Dedupe is per request, not per customer - someone booking twice must
+    still be acknowledged twice."""
+    from app.models.booking_request import BookingRequest
+
+    email_service.send_booking_request_received_email(booking_request)
+    other = BookingRequest(
+        garage_id=garage.id,
+        status="PENDING",
+        booking_reference="BK9999999",
+        customer_first_name=booking_request.customer_first_name,
+        customer_last_name=booking_request.customer_last_name,
+        customer_email=booking_request.customer_email,
+        vehicle_registration="SECOND1",
+        preferred_date=booking_request.preferred_date,
+    )
+    session.add(other)
+    session.commit()
+
+    assert email_service.send_booking_request_received_email(other) is not None
+    assert len(fake_send.calls) == 2
+
+
 def test_appointment_confirmation_includes_appointment_details(
     app, fake_send, make_appointment, vehicle
 ):

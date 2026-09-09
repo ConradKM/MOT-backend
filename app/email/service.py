@@ -39,6 +39,7 @@ from app.communications.events import (
     APPOINTMENT_COMPLETED,
     APPOINTMENT_CREATED,
     APPOINTMENT_RESCHEDULED,
+    BOOKING_REQUEST_CREATED,
 )
 from app.email import send_email
 from app.extensions import db
@@ -77,17 +78,25 @@ def _owner_reply_to(garage: Garage) -> str | None:
     return garage.email
 
 
-def _already_sent(*, trigger_event: str, appointment_id=None, customer_id=None) -> bool:
+def _already_sent(
+    *, trigger_event: str, booking_request_id=None, appointment_id=None, customer_id=None
+) -> bool:
     query = CommunicationLog.query.filter(
         CommunicationLog.channel == CHANNEL_EMAIL,
         CommunicationLog.trigger_event == trigger_event,
         CommunicationLog.status == STATUS_SENT,
     )
-    if appointment_id is not None:
+    # Most specific key first: a booking-request email is per request (a
+    # customer may legitimately submit several), an appointment email per
+    # appointment, and an account email per customer.
+    if booking_request_id is not None:
+        query = query.filter(CommunicationLog.booking_request_id == booking_request_id)
+    elif appointment_id is not None:
         query = query.filter(CommunicationLog.appointment_id == appointment_id)
     elif customer_id is not None:
         query = query.filter(
             CommunicationLog.appointment_id.is_(None),
+            CommunicationLog.booking_request_id.is_(None),
             CommunicationLog.customer_id == customer_id,
         )
     else:
@@ -112,6 +121,7 @@ def _send(
     trigger_event: str,
     customer=None,
     appointment=None,
+    booking_request=None,
 ) -> CommunicationLog | None:
     """Render ``template`` (+ its .txt companion), send it, and log the
     result. Returns None only when there's nowhere to send it (no email on
@@ -122,14 +132,18 @@ def _send(
 
     appointment_id = appointment.id if appointment is not None else None
     customer_id = customer.id if customer is not None else None
+    booking_request_id = booking_request.id if booking_request is not None else None
 
     if _already_sent(
-        trigger_event=trigger_event, appointment_id=appointment_id, customer_id=customer_id
+        trigger_event=trigger_event,
+        booking_request_id=booking_request_id,
+        appointment_id=appointment_id,
+        customer_id=customer_id,
     ):
         logger.info(
             "[email] %s already sent for %s - skipping duplicate send.",
             trigger_event,
-            appointment_id or customer_id,
+            booking_request_id or appointment_id or customer_id,
         )
         return None
 
@@ -150,6 +164,7 @@ def _send(
         "body": text_body,
         "customer_id": customer_id,
         "appointment_id": appointment_id,
+        "booking_request_id": booking_request_id,
     }
 
     try:
@@ -174,6 +189,21 @@ def _vehicle_label(vehicle) -> str | None:
     label = " ".join(p for p in (vehicle.make, vehicle.model) if p) or "Vehicle"
     if vehicle.registration_number:
         label = f"{label} ({vehicle.registration_number})"
+    return label
+
+
+def _booking_request_vehicle_label(booking_request) -> str:
+    """Same shape as :func:`_vehicle_label`, but built from the request's own
+    flat snapshot fields (``vehicle_make``/``vehicle_model``/
+    ``vehicle_registration``) rather than a linked Vehicle row - that snapshot
+    is what the customer actually submitted, and a PENDING request may have no
+    Vehicle yet."""
+    label = (
+        " ".join(p for p in (booking_request.vehicle_make, booking_request.vehicle_model) if p)
+        or "Vehicle"
+    )
+    if booking_request.vehicle_registration:
+        label = f"{label} ({booking_request.vehicle_registration})"
     return label
 
 
@@ -202,6 +232,50 @@ def _appointment_context(appointment) -> dict:
         "notes": appointment.notes,
         "login_url": _login_url(),
     }
+
+
+def send_booking_request_received_email(booking_request) -> CommunicationLog | None:
+    """Acknowledge a public booking submission - the email counterpart to the
+    WhatsApp acknowledgement in app/conversation/automation.py.
+
+    Deliberately *not* the confirmation email: a BookingRequest is PENDING
+    until a staff member approves it (see app/booking_requests/routes.py),
+    which is what creates the appointment and sends
+    :func:`send_appointment_confirmation_email`. This one only says "we've got
+    it". It carries the booking reference, which is a customer-facing code by
+    design - shown on the confirmation screen and already sent to customers
+    over WhatsApp (see app/conversation/workflows.py) - and is what lets them
+    sign in to see the request without a password.
+
+    ``customer_email`` is nullable: a WhatsApp/voice-originated request never
+    collects one (that channel is itself the confirmation channel), and
+    :func:`_send` no-ops when there's no address.
+    """
+    garage = booking_request.garage
+    appointment_type = booking_request.appointment_type
+    return _send(
+        garage=garage,
+        to=booking_request.customer_email,
+        subject="We've received your booking request",
+        template="booking_request_received",
+        context={
+            "business_name": garage.name,
+            "business_phone": garage.phone,
+            "business_email": garage.email,
+            "business_address": garage.address,
+            "first_name": booking_request.customer_first_name,
+            "booking_reference": booking_request.booking_reference,
+            "service_name": appointment_type.name if appointment_type else None,
+            "preferred_date": booking_request.preferred_date,
+            "preferred_time": booking_request.preferred_time,
+            "vehicle_label": _booking_request_vehicle_label(booking_request),
+            "notes": booking_request.notes,
+            "login_url": _login_url(),
+        },
+        trigger_event=BOOKING_REQUEST_CREATED,
+        customer=booking_request.customer,
+        booking_request=booking_request,
+    )
 
 
 def send_account_created_email(customer) -> CommunicationLog | None:

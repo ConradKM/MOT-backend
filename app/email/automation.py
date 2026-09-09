@@ -14,6 +14,7 @@ from app.communications.events import (
     APPOINTMENT_CREATED,
     APPOINTMENT_RESCHEDULED,
     BOOKING_REQUEST_APPROVED,
+    BOOKING_REQUEST_CREATED,
     register_handler,
 )
 
@@ -22,6 +23,7 @@ from .service import (
     send_appointment_changed_email,
     send_appointment_completed_email,
     send_appointment_confirmation_email,
+    send_booking_request_received_email,
 )
 
 
@@ -51,6 +53,14 @@ def _handle_account_created(garage, customer=None, **_context):
         send_account_created_email(customer)
 
 
+def _handle_booking_request_created(garage, booking_request=None, **_context):
+    # The public booking form / conversation engine only creates a PENDING
+    # BookingRequest here - the appointment (and its confirmation email) comes
+    # later, on approval. This is the "we've got your request" acknowledgement.
+    if booking_request is not None:
+        send_booking_request_received_email(booking_request)
+
+
 def _handle_booking_request_approved(garage, appointment=None, **_context):
     # An appointment created by approving a booking request (public booking,
     # WhatsApp/voice) never goes through app/appointments/routes.py's POST -
@@ -70,4 +80,5 @@ def register_email_handlers() -> None:
     register_handler(APPOINTMENT_RESCHEDULED, _handle_appointment_rescheduled)
     register_handler(APPOINTMENT_COMPLETED, _handle_appointment_completed)
     register_handler(ACCOUNT_CREATED, _handle_account_created)
+    register_handler(BOOKING_REQUEST_CREATED, _handle_booking_request_created)
     register_handler(BOOKING_REQUEST_APPROVED, _handle_booking_request_approved)
