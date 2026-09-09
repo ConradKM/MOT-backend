@@ -19,6 +19,14 @@ class CommunicationBookingRequestSchema(Schema):
     status = fields.Str(dump_only=True)
 
 
+class CommunicationStaffSchema(Schema):
+    """The staff member who placed a browser outbound call."""
+
+    id = fields.UUID(dump_only=True)
+    first_name = fields.Str(dump_only=True)
+    last_name = fields.Str(dump_only=True)
+
+
 class CommunicationLogSchema(Schema):
     """Full serialization of one CommunicationLog row.
 
@@ -50,6 +58,7 @@ class CommunicationLogSchema(Schema):
     booking_request = fields.Nested(
         CommunicationBookingRequestSchema, dump_only=True, allow_none=True
     )
+    initiated_by = fields.Nested(CommunicationStaffSchema, dump_only=True, allow_none=True)
 
 
 class CallDetailSchema(CommunicationLogSchema):
@@ -128,6 +137,17 @@ class InitiateCallSchema(Schema):
     def _require_target(self, data, **kwargs):
         if not data.get("customer_id") and not data.get("to"):
             raise ValidationError("Provide either customer_id or to.")
+
+
+class VoiceTokenSchema(Schema):
+    """A short-lived Twilio Voice Access Token for the browser dialler, plus
+    the caller ID the outbound leg will use (never a secret - the token is
+    scoped to *outgoing* calls only)."""
+
+    token = fields.Str(dump_only=True)
+    identity = fields.Str(dump_only=True)
+    expires_in = fields.Int(dump_only=True)
+    caller_id = fields.Str(dump_only=True)
 
 
 class OverviewCapabilitiesSchema(Schema):
