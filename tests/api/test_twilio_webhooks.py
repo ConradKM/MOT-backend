@@ -476,6 +476,34 @@ def test_whatsapp_incoming_does_not_route_through_engine_when_automation_disable
     assert log.external_provider == "twilio"
 
 
+def test_whatsapp_bare_greeting_gets_a_capability_reply_when_automation_enabled(
+    app, session, client, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, whatsapp_sender="whatsapp:+14155238886")
+    )
+    session.add(
+        GarageCommunicationAutomationSettings(
+            garage_id=garage.id, conversation_automation_enabled=True
+        )
+    )
+    session.commit()
+
+    path = "/api/webhooks/twilio/whatsapp/incoming"
+    form = {
+        "To": "whatsapp:+14155238886",
+        "From": "whatsapp:+447123456789",
+        "MessageSid": "SM-greeting-1",
+        "Body": "hello",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+    assert b"<Message>" in resp.data
+    assert b"book" in resp.data.lower()
+
+
 # --------------------------------------------------------------------------
 # WhatsApp: /status
 # --------------------------------------------------------------------------

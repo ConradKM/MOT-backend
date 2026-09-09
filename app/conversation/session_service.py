@@ -25,10 +25,21 @@ from app.models.conversation.conversation_session import (
 # rather than resume against availability that's no longer current.
 SESSION_TIMEOUT_MINUTES = 30
 
+# WhatsApp is asynchronous - a customer often picks a booking back up after
+# lunch or that evening. A 30-minute window drops the flow mid-way; 12 hours
+# keeps it resumable within the same day. Safe because every offered slot is
+# re-validated against real availability at confirmation, so a resumed flow
+# can never book a slot that's since been taken.
+WHATSAPP_SESSION_TIMEOUT_MINUTES = 12 * 60
+
 # ConversationSession.channel value for phone calls (kept as a plain literal
 # here rather than importing the communications model - this module only
 # needs the string).
 CHANNEL_VOICE = "VOICE"
+
+
+def _timeout_minutes(channel: str) -> int:
+    return SESSION_TIMEOUT_MINUTES if channel == CHANNEL_VOICE else WHATSAPP_SESSION_TIMEOUT_MINUTES
 
 
 def get_active_session(garage, channel: str, phone_e164: str) -> ConversationSession | None:
@@ -57,9 +68,14 @@ def is_stale(session: ConversationSession, *, now: datetime | None = None) -> bo
     not silently start replying alongside them. A VOICE HUMAN_HANDOFF has no
     such persistent channel: it only ever meant "we'll arrange a callback"
     on a past call, so a later call - past the normal idle timeout - starts
-    clean rather than being hung up on turn 1 forever (issue #71)."""
+    clean rather than being hung up on turn 1 forever (issue #71).
+
+    The idle timeout itself is per-channel: 30 minutes for a phone call,
+    12 hours for an asynchronous WhatsApp thread."""
     now = now or datetime.now(UTC)
-    idle_too_long = now - session.last_activity_at > timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+    idle_too_long = now - session.last_activity_at > timedelta(
+        minutes=_timeout_minutes(session.channel)
+    )
     if session.status == STATUS_HUMAN_HANDOFF:
         return session.channel == CHANNEL_VOICE and idle_too_long
     return idle_too_long
@@ -178,20 +194,18 @@ def expire_stale_sessions(*, now: datetime | None = None) -> int:
     HUMAN_HANDOFF past the timeout is swept too, matching ``is_stale`` - a
     phone line has no persistent human channel to protect (issue #71)."""
     now = now or datetime.now(UTC)
-    cutoff = now - timedelta(minutes=SESSION_TIMEOUT_MINUTES)
-    stale_ids = [
-        row.id
-        for row in ConversationSession.query.filter(
-            or_(
-                ConversationSession.status == STATUS_ACTIVE,
-                and_(
-                    ConversationSession.status == STATUS_HUMAN_HANDOFF,
-                    ConversationSession.channel == CHANNEL_VOICE,
-                ),
+    # Sweepable statuses first (cheap SQL), then the per-channel timeout via
+    # is_stale() so there's one definition of "stale".
+    candidates = ConversationSession.query.filter(
+        or_(
+            ConversationSession.status == STATUS_ACTIVE,
+            and_(
+                ConversationSession.status == STATUS_HUMAN_HANDOFF,
+                ConversationSession.channel == CHANNEL_VOICE,
             ),
-            ConversationSession.last_activity_at < cutoff,
-        ).all()
-    ]
+        )
+    ).all()
+    stale_ids = [s.id for s in candidates if is_stale(s, now=now)]
     if not stale_ids:
         return 0
     ConversationSession.query.filter(ConversationSession.id.in_(stale_ids)).update(

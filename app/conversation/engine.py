@@ -40,8 +40,10 @@ from .intents import (
     CHECK_APPOINTMENT,
     CHECK_AVAILABILITY,
     CUSTOMER_DETAILS_QUERY,
+    GREETING,
     INTERRUPT_INTENTS,
     MOT_EXPIRY_QUERY,
+    SMALL_TALK,
     SPEAK_TO_HUMAN,
     UNKNOWN,
     RuleBasedIntentResolver,
@@ -78,6 +80,8 @@ _ONE_SHOT_HANDLERS = {
     CHECK_APPOINTMENT: workflows.handle_check_appointment,
     SPEAK_TO_HUMAN: workflows.handle_speak_to_human,
     CHECK_AVAILABILITY: workflows.start_booking,
+    GREETING: workflows.handle_greeting,
+    SMALL_TALK: workflows.handle_small_talk,
 }
 
 
