@@ -77,11 +77,17 @@ def validate_twilio_websocket(request: Request, ws_url: str) -> bool:
         return True
 
     if not is_twilio_configured():
+        current_app.logger.warning("VOICE_WS_SIGNATURE result=fail reason=twilio-not-configured")
         return False
 
     signature = request.headers.get("X-Twilio-Signature", "")
     if not signature:
+        current_app.logger.warning("VOICE_WS_SIGNATURE result=fail reason=no-signature-header")
         return False
 
     validator = RequestValidator(current_app.config["TWILIO_AUTH_TOKEN"])
-    return bool(validator.validate(ws_url, {}, signature))
+    ok = bool(validator.validate(ws_url, {}, signature))
+    current_app.logger.info(
+        "VOICE_WS_SIGNATURE result=%s checked_url=%r", "pass" if ok else "fail", ws_url
+    )
+    return ok

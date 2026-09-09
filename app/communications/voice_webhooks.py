@@ -76,15 +76,27 @@ def incoming_call():
     # a broken ConversationRelay config must never drop the call.
     if conversationrelay_enabled():
         try:
-            return Response(build_incoming_call_twiml(garage), mimetype="text/xml")
+            twiml = build_incoming_call_twiml(garage)
+            current_app.logger.info(
+                "VOICE_INCOMING callSid=%r garage=%s twiml=conversationrelay bytes=%d",
+                call_sid,
+                garage.id,
+                len(twiml),
+            )
+            return Response(twiml, mimetype="text/xml")
         except Exception:
             current_app.logger.exception(
-                "[twilio:voice] ConversationRelay TwiML build failed for garage %s "
-                "(CallSid=%s) - falling back to the static greeting",
-                garage.id,
+                "VOICE_INCOMING callSid=%r garage=%s twiml=build-failed - falling back to static",
                 call_sid,
+                garage.id,
             )
 
+    current_app.logger.info(
+        "VOICE_INCOMING callSid=%r garage=%s twiml=static conversationrelay_enabled=%s",
+        call_sid,
+        garage.id,
+        conversationrelay_enabled(),
+    )
     reply.say(
         f"Thank you for calling {garage.name}. "
         "Our automated booking service is currently being configured."
