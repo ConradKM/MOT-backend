@@ -13,16 +13,25 @@ lets a garage user see or change it.
 
 from __future__ import annotations
 
+from flask import Response, current_app, request
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
+from twilio.twiml.voice_response import VoiceResponse
 
 from app.auth.utils import get_current_employee
 from app.conversation import automation, session_service, templates
 from app.conversation import queries as conversation_queries
+from app.extensions import db
+from app.models.communications.communication_log import (
+    CHANNEL_VOICE,
+    DIRECTION_OUTBOUND,
+    CommunicationLog,
+)
 from app.models.conversation.conversation_session import STATUS_ACTIVE, STATUS_HUMAN_HANDOFF
 from app.models.customer import Customer
-from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
+from app.models.employee import Employee
+from app.phone import InvalidPhoneNumberError, normalize_uk_mobile, normalize_uk_phone
 
 from . import queries
 from .schemas import (
@@ -50,8 +59,15 @@ from .schemas import (
     TemplatePreviewSchema,
     UnreadCountSchema,
     UpdateMessageTemplateSchema,
+    VoiceTokenSchema,
 )
+from .security import validate_twilio_request
 from .service import find_customer_by_phone, send_whatsapp_message
+from .voice_calling import (
+    browser_calling_configured,
+    build_voice_access_token,
+    parse_client_identity,
+)
 
 communications_blp = Blueprint(
     "communications",
@@ -164,6 +180,100 @@ class CallDetail(MethodView):
             abort(404, message="Call not found.")
         call.transcript = queries.get_call_transcript(garage, call)
         return call
+
+
+# --------------------------------------------------------------------------
+# Browser (Twilio Voice SDK) outbound calling - see
+# app/communications/voice_calling.py. Separate from the inbound
+# ConversationRelay assistant; shares only the Twilio account + call log.
+# --------------------------------------------------------------------------
+
+
+@communications_blp.route("/voice/token")
+class VoiceToken(MethodView):
+    @jwt_required()
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.response(200, VoiceTokenSchema)
+    def get(self):
+        """A short-lived Voice Access Token for this staff member to place
+        browser calls for their own business. Never returns the Auth Token,
+        the API Key secret, or any permanent credential."""
+        employee = get_current_employee()
+        if not browser_calling_configured():
+            abort(503, message="Browser calling is not configured for this deployment.")
+        settings = employee.garage.communication_settings
+        if not (settings and settings.voice_phone_number):
+            abort(409, message="This business has no outbound voice number configured.")
+        token, identity = build_voice_access_token(employee.garage, employee)
+        return {
+            "token": token,
+            "identity": identity,
+            "expires_in": int(current_app.config.get("TWILIO_VOICE_TOKEN_TTL", 3600)),
+            "caller_id": settings.voice_phone_number,
+        }
+
+
+@communications_blp.route("/voice/outbound", methods=["POST"])
+@communications_blp.doc(hide=True)
+def voice_outbound():
+    """TwiML Application Voice URL for the browser dialler. Twilio POSTs the
+    dialled ``To``, the ``client:<identity>`` ``From`` and the parent
+    ``CallSid``; we reply with a ``<Dial>`` from the business's own number
+    and log the call once. The caller ID is set here, server-side - the
+    browser can never choose it, so it can't spoof another number - and the
+    garage is re-derived from the signed identity, so a call can't cross
+    tenants. The TwiML App's Status Callback (pointed at
+    ``/api/webhooks/twilio/voice/status``) fills in status + duration."""
+    if not validate_twilio_request(request):
+        return Response("<Response><Reject/></Response>", mimetype="text/xml", status=403)
+
+    ids = parse_client_identity(request.form.get("From", ""))
+    reply = VoiceResponse()
+    if ids is None:
+        reply.say("Sorry, this call could not be placed.")
+        return Response(str(reply), mimetype="text/xml")
+
+    garage_id, employee_id = ids
+    employee = Employee.query.filter_by(id=employee_id, garage_id=garage_id).first()
+    if employee is None:
+        reply.say("Sorry, this call could not be placed.")
+        return Response(str(reply), mimetype="text/xml")
+
+    garage = employee.garage
+    settings = garage.communication_settings
+    if not (settings and settings.voice_phone_number):
+        reply.say("This business is not set up for outbound calling.")
+        return Response(str(reply), mimetype="text/xml")
+
+    try:
+        to_e164 = normalize_uk_phone(request.form.get("To", ""))
+    except InvalidPhoneNumberError:
+        reply.say("Sorry, that number is not valid.")
+        return Response(str(reply), mimetype="text/xml")
+
+    call_sid = request.form.get("CallSid")
+    if call_sid and CommunicationLog.query.filter_by(external_id=call_sid).first() is None:
+        customer = find_customer_by_phone(garage, to_e164)
+        db.session.add(
+            CommunicationLog(
+                garage_id=garage.id,
+                customer_id=customer.id if customer else None,
+                initiated_by_employee_id=employee.id,
+                channel=CHANNEL_VOICE,
+                direction=DIRECTION_OUTBOUND,
+                external_provider="twilio",
+                external_id=call_sid,
+                call_sid=call_sid,
+                from_address=settings.voice_phone_number,
+                to_address=to_e164,
+                status=request.form.get("CallStatus") or "initiated",
+            )
+        )
+        db.session.commit()
+
+    dial = reply.dial(caller_id=settings.voice_phone_number, answer_on_bridge=True)
+    dial.number(to_e164)
+    return Response(str(reply), mimetype="text/xml")
 
 
 @communications_blp.route("/conversations")

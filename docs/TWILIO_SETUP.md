@@ -58,6 +58,8 @@ Set these in the deployment's environment (never commit real values -
 | `TWILIO_AUTH_TOKEN` | to enable communications | Platform master account Auth Token. Verifies inbound webhook signatures (no API-key equivalent); also authenticates the REST client when no API key is set. |
 | `TWILIO_API_KEY_SID` | no (recommended for production) | Standard API Key SID (`SK…`). When set with its secret, the **outbound REST client** authenticates with the key + Account SID instead of the Auth Token. |
 | `TWILIO_API_KEY_SECRET` | no (with `TWILIO_API_KEY_SID`) | The API Key's secret. Both must be set for key auth to take effect; otherwise the client falls back to Account SID + Auth Token. |
+| `TWILIO_TWIML_APP_SID` | no (for browser calling) | A TwiML Application SID (`AP…`). With the API key above, staff can place outbound calls from the Communications UI: `GET /api/communications/voice/token` mints a short-lived Voice Access Token and Twilio fetches call instructions from `POST /api/communications/voice/outbound`. |
+| `TWILIO_VOICE_TOKEN_TTL` | no (default `3600`) | Lifetime, in seconds, of a browser Voice Access Token. |
 | `TWILIO_WEBHOOK_VALIDATE` | no (default `true`) | Set `false` only for local/manual testing with a client that can't sign requests |
 | `TWILIO_WHATSAPP_AUTO_ACK` | no (default `false`) | Send a generic acknowledgement reply to inbound WhatsApp messages |
 | `PUBLIC_API_BASE_URL` | to receive webhooks | This deployment's public HTTPS origin, e.g. `https://api.comaz.example`. Also the origin of the ConversationRelay `wss://…/api/ws/twilio/voice` URL and the URL its handshake signature is checked against. |
@@ -234,6 +236,24 @@ against real Twilio traffic:
   `PUBLIC_API_BASE_URL` filled in.
 - Assign the number to a garage:
   `flask configure-garage-communications --garage <slug> --enable --voice-number +44…`
+
+### 2a. Browser outbound calling (optional)
+
+Lets staff place calls from **Communications → Contact customer** using their
+computer's mic/speakers. Independent of the inbound assistant.
+
+1. **API Key** (Console → Account → API keys & tokens → *Standard*). Set
+   `TWILIO_API_KEY_SID` / `TWILIO_API_KEY_SECRET`.
+2. **TwiML App** (Console → Voice → TwiML → TwiML Apps → Create):
+   - **Voice → Request URL**: `POST {PUBLIC_API_BASE_URL}/api/communications/voice/outbound`
+   - **Voice → Status Callback URL**: `POST {PUBLIC_API_BASE_URL}/api/webhooks/twilio/voice/status`
+     (reuses the existing status handler - this is what records call
+     status + duration; one log row per call).
+   - Copy its SID (`AP…`) into `TWILIO_TWIML_APP_SID`.
+3. Each business still needs a `voice-number` configured (used as the
+   caller ID - the browser can never choose it).
+
+Nothing to configure on the phone number itself for outbound.
 
 ### 3. WhatsApp - development (Sandbox)
 

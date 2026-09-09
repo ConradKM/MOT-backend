@@ -120,6 +120,16 @@ class Config:
     # webhook signature validation (security.py) has no API-key equivalent.
     TWILIO_API_KEY_SID = os.getenv("TWILIO_API_KEY_SID", "")
     TWILIO_API_KEY_SECRET = os.getenv("TWILIO_API_KEY_SECRET", "")
+    # TwiML Application SID for browser (Voice SDK) outbound calling. When
+    # this plus the API key above are set, staff can place calls from the
+    # Communications UI: the browser gets a short-lived Voice Access Token
+    # (app/communications/voice_calling.py) and Twilio fetches call
+    # instructions from POST /api/communications/voice/outbound. Unset =
+    # browser calling stays off (the inbound ConversationRelay assistant is
+    # unaffected either way).
+    TWILIO_TWIML_APP_SID = os.getenv("TWILIO_TWIML_APP_SID", "")
+    # How long a browser Voice Access Token is valid for (seconds).
+    TWILIO_VOICE_TOKEN_TTL = int(os.getenv("TWILIO_VOICE_TOKEN_TTL", "3600"))
     # Twilio signs every webhook request; the app recomputes and compares that
     # signature before trusting the payload (app/communications/security.py).
     # Only ever set to "false" for local/manual testing with a client that

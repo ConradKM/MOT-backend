@@ -50,3 +50,20 @@ def normalize_uk_mobile(raw: str) -> str:
         )
 
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+
+def normalize_uk_phone(raw: str) -> str:
+    """E.164 for any valid UK number - mobile **or** landline. Used for a
+    staff-placed outbound call, which can legitimately dial a landline (the
+    mobile-only :func:`normalize_uk_mobile` is for the "how do we text you"
+    field)."""
+    raw = (raw or "").strip()
+    if not raw:
+        raise InvalidPhoneNumberError("Enter a phone number.")
+    try:
+        parsed = phonenumbers.parse(raw, "GB")
+    except phonenumbers.NumberParseException as exc:
+        raise InvalidPhoneNumberError("Enter a valid UK phone number.") from exc
+    if not phonenumbers.is_valid_number(parsed):
+        raise InvalidPhoneNumberError("Enter a valid UK phone number.")
+    return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)

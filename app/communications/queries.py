@@ -29,6 +29,7 @@ from app.models.communications.communication_log import (
 from app.models.customer import Customer
 
 from .config import garage_communications_enabled, is_twilio_configured
+from .voice_calling import browser_calling_configured
 
 # The garage's own definition of "missed" - a Twilio CallStatus for an
 # inbound call that never connected. Not exhaustive of every Twilio value,
@@ -74,11 +75,12 @@ def capabilities_for(garage) -> dict:
         "whatsapp_configured": bool(
             settings and (settings.whatsapp_sender or settings.messaging_service_sid)
         ),
-        # Placing a call today would only ring the customer with nothing on
-        # the other end - there is no agent/browser-calling bridge yet (see
-        # docs/TWILIO_SETUP.md). This becomes true once that exists, not
-        # merely once Twilio credentials do.
-        "outbound_calling_supported": False,
+        # Staff can place a browser (Voice SDK) call: the deployment has an
+        # API key + TwiML App (voice_calling.browser_calling_configured), and
+        # this business has an outbound number to use as caller ID.
+        "outbound_calling_supported": (
+            browser_calling_configured() and bool(settings and settings.voice_phone_number)
+        ),
     }
 
 

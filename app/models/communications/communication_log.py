@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from app.models.appointments.appointment import Appointment
     from app.models.booking_request import BookingRequest
     from app.models.customer import Customer
+    from app.models.employee import Employee
     from app.models.garage import Garage
 
 CHANNEL_VOICE = "VOICE"
@@ -77,6 +78,11 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     )
     booking_request_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("booking_requests.id", ondelete="SET NULL")
+    )
+    # The staff member who placed this, for a browser (Voice SDK) outbound
+    # call. Null for everything else - inbound calls, WhatsApp, automation.
+    initiated_by_employee_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("employees.id", ondelete="SET NULL"), index=True
     )
 
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -124,3 +130,4 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     customer: Mapped["Customer | None"] = relationship("Customer")
     appointment: Mapped["Appointment | None"] = relationship("Appointment")
     booking_request: Mapped["BookingRequest | None"] = relationship("BookingRequest")
+    initiated_by: Mapped["Employee | None"] = relationship("Employee")
