@@ -15,6 +15,7 @@ from app.communications.events import (
     APPOINTMENT_RESCHEDULED,
     BOOKING_REQUEST_APPROVED,
     BOOKING_REQUEST_CREATED,
+    BOOKING_REQUEST_REJECTED,
     register_handler,
 )
 
@@ -24,6 +25,7 @@ from .service import (
     send_appointment_completed_email,
     send_appointment_confirmation_email,
     send_booking_request_received_email,
+    send_booking_request_rejected_email,
 )
 
 
@@ -61,6 +63,11 @@ def _handle_booking_request_created(garage, booking_request=None, **_context):
         send_booking_request_received_email(booking_request)
 
 
+def _handle_booking_request_rejected(garage, booking_request=None, **_context):
+    if booking_request is not None:
+        send_booking_request_rejected_email(booking_request)
+
+
 def _handle_booking_request_approved(garage, appointment=None, **_context):
     # An appointment created by approving a booking request (public booking,
     # WhatsApp/voice) never goes through app/appointments/routes.py's POST -
@@ -82,3 +89,4 @@ def register_email_handlers() -> None:
     register_handler(ACCOUNT_CREATED, _handle_account_created)
     register_handler(BOOKING_REQUEST_CREATED, _handle_booking_request_created)
     register_handler(BOOKING_REQUEST_APPROVED, _handle_booking_request_approved)
+    register_handler(BOOKING_REQUEST_REJECTED, _handle_booking_request_rejected)
