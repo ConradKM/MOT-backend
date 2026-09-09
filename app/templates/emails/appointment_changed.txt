@@ -1,0 +1,12 @@
+Hi {{ first_name or "there" }},
+
+Your appointment with {{ business_name }} has been updated.
+{% if previous_start_time %}
+Previously: {{ previous_start_time.strftime("%d %B %Y, %H:%M") }}
+{% endif %}
+Now: {{ start_time.strftime("%d %B %Y, %H:%M") }} - {{ end_time.strftime("%H:%M") }}
+
+Service: {{ service_name }}
+{% if vehicle_label %}Vehicle: {{ vehicle_label }}
+{% endif %}
+Questions? Contact {{ business_name }}{% if business_phone %} on {{ business_phone }}{% endif %}.

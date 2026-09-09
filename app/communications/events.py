@@ -32,8 +32,10 @@ logger = logging.getLogger(__name__)
 BOOKING_REQUEST_CREATED = "BOOKING_REQUEST_CREATED"
 BOOKING_REQUEST_APPROVED = "BOOKING_REQUEST_APPROVED"
 BOOKING_REQUEST_REJECTED = "BOOKING_REQUEST_REJECTED"
+APPOINTMENT_CREATED = "APPOINTMENT_CREATED"
 APPOINTMENT_RESCHEDULED = "APPOINTMENT_RESCHEDULED"
 APPOINTMENT_CANCELLED = "APPOINTMENT_CANCELLED"
+APPOINTMENT_COMPLETED = "APPOINTMENT_COMPLETED"
 APPOINTMENT_REMINDER_DUE = "APPOINTMENT_REMINDER_DUE"
 MOT_REMINDER_DUE = "MOT_REMINDER_DUE"
 # An inbound call that never connected (see app/communications/queries.py::
@@ -42,17 +44,24 @@ MISSED_CALL = "MISSED_CALL"
 # A customer asked for a callback via the conversation engine (or, later,
 # any other channel) - see app/conversation/actions.py::create_callback_request.
 CALLBACK_REQUESTED = "CALLBACK_REQUESTED"
+# A customer set a password for the first time (see app/customer_auth/routes.py
+# ::CustomerSetPassword) - "created an account" from their point of view, even
+# though the Customer row itself already existed from booking.
+ACCOUNT_CREATED = "ACCOUNT_CREATED"
 
 EVENT_TYPES = (
     BOOKING_REQUEST_CREATED,
     BOOKING_REQUEST_APPROVED,
     BOOKING_REQUEST_REJECTED,
+    APPOINTMENT_CREATED,
     APPOINTMENT_RESCHEDULED,
     APPOINTMENT_CANCELLED,
+    APPOINTMENT_COMPLETED,
     APPOINTMENT_REMINDER_DUE,
     MOT_REMINDER_DUE,
     MISSED_CALL,
     CALLBACK_REQUESTED,
+    ACCOUNT_CREATED,
 )
 
 EventHandler = Callable[..., None]

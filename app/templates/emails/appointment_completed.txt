@@ -1,0 +1,11 @@
+Hi {{ first_name or "there" }},
+
+Your {{ service_name }} appointment with {{ business_name }} is complete. Here's a summary.
+{% if checklist_items %}
+{% for item in checklist_items %}
+- {{ item.label }}: {{ item.status }}{% if item.notes %} ({{ item.notes }}){% endif %}
+{% endfor %}
+{% endif %}{% if appointment_notes %}
+Notes from {{ business_name }}: {{ appointment_notes }}
+{% endif %}
+Thanks for choosing {{ business_name }}.

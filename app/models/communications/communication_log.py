@@ -103,8 +103,12 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     # Null for WhatsApp/SMS/email and for calls that predate this column.
     call_sid: Mapped[str | None] = mapped_column(String(40), index=True)
 
-    from_address: Mapped[str | None] = mapped_column(String(60))
-    to_address: Mapped[str | None] = mapped_column(String(60))
+    # 320, not the original 60, since this column now also carries email
+    # addresses (channel=EMAIL) - the same width as Customer.email, the
+    # RFC 5321 maximum. Phone numbers and "whatsapp:+..." senders are far
+    # shorter, so this is a pure widening with no effect on other channels.
+    from_address: Mapped[str | None] = mapped_column(String(320))
+    to_address: Mapped[str | None] = mapped_column(String(320))
 
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     # Which app/communications/events.py constant (if any) produced this row -

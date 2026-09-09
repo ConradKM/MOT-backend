@@ -9,6 +9,8 @@ from app.appointments.statuses.defaults import DEFAULT_STATUS_KEYS
 from app.auth.utils import get_current_employee
 from app.communications.events import (
     APPOINTMENT_CANCELLED,
+    APPOINTMENT_COMPLETED,
+    APPOINTMENT_CREATED,
     APPOINTMENT_RESCHEDULED,
     emit_event,
 )
@@ -242,6 +244,11 @@ class AppointmentList(MethodView):
         snapshot_checklist_for_appointment(appointment)
         db.session.commit()
 
+        # Only fires once the booking has actually been persisted - a
+        # validation abort() above or a failed commit never reaches here, so
+        # a confirmation email never goes out for a booking that didn't happen.
+        emit_event(APPOINTMENT_CREATED, garage=appointment.garage, appointment=appointment)
+
         return appointment
 
 
@@ -310,15 +317,23 @@ class AppointmentResource(MethodView):
 
         db.session.commit()
 
-        # Precise, low-risk signals only: a real transition into CANCELLED, or
-        # a real time change on a still-live appointment - never fired just
-        # because *some* field on this general-purpose PATCH changed.
+        # Precise, low-risk signals only: a real transition into CANCELLED or
+        # COMPLETED, or a real time change on a still-live appointment - never
+        # fired just because *some* field on this general-purpose PATCH changed.
         if appointment.status == "CANCELLED" and previous_status != "CANCELLED":
             emit_event(APPOINTMENT_CANCELLED, garage=appointment.garage, appointment=appointment)
+        elif appointment.status == "COMPLETED" and previous_status != "COMPLETED":
+            emit_event(APPOINTMENT_COMPLETED, garage=appointment.garage, appointment=appointment)
         elif appointment.status != "CANCELLED" and (
             appointment.start_time != previous_start or appointment.end_time != previous_end
         ):
-            emit_event(APPOINTMENT_RESCHEDULED, garage=appointment.garage, appointment=appointment)
+            emit_event(
+                APPOINTMENT_RESCHEDULED,
+                garage=appointment.garage,
+                appointment=appointment,
+                previous_start_time=previous_start,
+                previous_end_time=previous_end,
+            )
 
         return appointment
 

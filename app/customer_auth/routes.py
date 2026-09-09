@@ -9,6 +9,7 @@ from flask_jwt_extended import (
 from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from app.communications.events import ACCOUNT_CREATED, emit_event
 from app.extensions import db
 from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
@@ -123,3 +124,8 @@ class CustomerSetPassword(MethodView):
         customer = get_current_customer()
         customer.password_hash = generate_password_hash(data["password"])
         db.session.commit()
+
+        # Fires only after the password is actually saved - a failed commit
+        # never reaches here, so no confirmation email for an account that
+        # wasn't actually created.
+        emit_event(ACCOUNT_CREATED, garage=customer.garage, customer=customer)

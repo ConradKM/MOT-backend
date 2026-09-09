@@ -1,0 +1,12 @@
+Hi {{ first_name or "there" }},
+
+Your appointment with {{ business_name }} is confirmed.
+
+Service: {{ service_name }}
+Date: {{ start_time.strftime("%d %B %Y") }}
+Time: {{ start_time.strftime("%H:%M") }} - {{ end_time.strftime("%H:%M") }}
+{% if vehicle_label %}Vehicle: {{ vehicle_label }}
+{% endif %}{% if notes %}
+Notes: {{ notes }}
+{% endif %}
+Need to change anything? Contact {{ business_name }}{% if business_phone %} on {{ business_phone }}{% endif %}.

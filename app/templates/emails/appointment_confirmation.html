@@ -1,0 +1,17 @@
+{% extends "emails/_base.html" %}
+{% block content %}
+<p style="margin:0 0 16px; font-size:16px; color:#111827;">Hi {{ first_name or "there" }},</p>
+<p style="margin:0 0 20px; font-size:15px; color:#374151; line-height:1.5;">
+  Your appointment with <strong>{{ business_name }}</strong> is confirmed.
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%; font-size:14px; color:#111827; margin-bottom:20px;">
+  <tr><td style="padding:4px 0; color:#6b7280;">Service</td><td style="padding:4px 0; text-align:right;">{{ service_name }}</td></tr>
+  <tr><td style="padding:4px 0; color:#6b7280;">Date</td><td style="padding:4px 0; text-align:right;">{{ start_time.strftime("%d %B %Y") }}</td></tr>
+  <tr><td style="padding:4px 0; color:#6b7280;">Time</td><td style="padding:4px 0; text-align:right;">{{ start_time.strftime("%H:%M") }} - {{ end_time.strftime("%H:%M") }}</td></tr>
+  {% if vehicle_label %}<tr><td style="padding:4px 0; color:#6b7280;">Vehicle</td><td style="padding:4px 0; text-align:right;">{{ vehicle_label }}</td></tr>{% endif %}
+</table>
+{% if notes %}<p style="margin:0 0 16px; font-size:14px; color:#374151;"><strong>Notes:</strong> {{ notes }}</p>{% endif %}
+<p style="margin:0; font-size:13px; color:#9ca3af;">
+  Need to change anything? Contact {{ business_name }}{% if business_phone %} on {{ business_phone }}{% endif %}.
+</p>
+{% endblock %}
