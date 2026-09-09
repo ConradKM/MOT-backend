@@ -22,7 +22,20 @@ from flask import current_app
 _STUB_PROVIDERS = {"postmark", "sendgrid", "ses"}
 
 
-def send_email(*, to: str, subject: str, body: str, html_body: str | None = None) -> None:
+def send_email(
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    html_body: str | None = None,
+    from_name: str | None = None,
+    reply_to: str | None = None,
+) -> None:
+    """``from_name`` sets the display name on the sending address (e.g. "Kingsway
+    MOT" rather than a bare address); ``reply_to`` is who a customer's reply
+    actually reaches - see app/email/service.py, which passes the garage's own
+    name and owner address so mail still reads as coming from the business
+    even though it's sent through this deployment's own verified domain."""
     provider = (current_app.config.get("EMAIL_PROVIDER") or "console").lower()
     sender = current_app.config.get("EMAIL_FROM", "no-reply@localhost")
 
@@ -31,8 +44,10 @@ def send_email(*, to: str, subject: str, body: str, html_body: str | None = None
         # "console" is never selected in production, so reset links are not
         # written to logs there.
         current_app.logger.warning(
-            "[email:console] Would send email\n  from:    %s\n  to:      %s\n  subject: %s\n\n%s\n",
-            sender,
+            "[email:console] Would send email\n  from:    %s\n  reply-to: %s\n  to:      %s\n"
+            "  subject: %s\n\n%s\n",
+            _format_from(sender, from_name),
+            reply_to or "(none)",
             to,
             subject,
             body,
@@ -40,7 +55,14 @@ def send_email(*, to: str, subject: str, body: str, html_body: str | None = None
         return
 
     if provider == "resend":
-        _send_via_resend(to=to, subject=subject, body=body, html_body=html_body)
+        _send_via_resend(
+            to=to,
+            subject=subject,
+            body=body,
+            html_body=html_body,
+            from_name=from_name,
+            reply_to=reply_to,
+        )
         return
 
     if provider in _STUB_PROVIDERS:
@@ -55,7 +77,26 @@ def send_email(*, to: str, subject: str, body: str, html_body: str | None = None
     )
 
 
-def _send_via_resend(*, to: str, subject: str, body: str, html_body: str | None) -> None:
+def _format_from(address: str, name: str | None) -> str:
+    """RFC 5322 "Display Name <address>" form, or just the bare address if
+    there's no name. Quoted so a name containing a comma or similar doesn't
+    get misparsed as multiple addresses; embedded quotes are dropped rather
+    than escaped, since this is a display label, not a value worth failing
+    the send over."""
+    if not name:
+        return address
+    return f'"{name.replace(chr(34), "")}" <{address}>'
+
+
+def _send_via_resend(
+    *,
+    to: str,
+    subject: str,
+    body: str,
+    html_body: str | None,
+    from_name: str | None = None,
+    reply_to: str | None = None,
+) -> None:
     """Send through the Resend API. Never reads/logs the API key itself -
     only whether it's present - and never includes it (or any request
     payload) in the exception it lets propagate on failure."""
@@ -75,12 +116,14 @@ def _send_via_resend(*, to: str, subject: str, body: str, html_body: str | None)
     resend.api_key = api_key
 
     payload: resend.Emails.SendParams = {
-        "from": from_address,
+        "from": _format_from(from_address, from_name),
         "to": [to],
         "subject": subject,
         "text": body,
     }
     if html_body:
         payload["html"] = html_body
+    if reply_to:
+        payload["reply_to"] = reply_to
 
     resend.Emails.send(payload)
