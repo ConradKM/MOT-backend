@@ -1,3 +1,6 @@
+import logging
+import os
+import sys
 import uuid
 
 from flask import Flask
@@ -5,6 +8,25 @@ from flask_cors import CORS
 
 from .config import Config
 from .extensions import api, db, jwt, limiter, migrate, sock
+
+
+def _configure_logging(app: Flask) -> None:
+    """Send application logs to stdout at a configurable level so they show up
+    in the platform log stream (Render). Without this, Flask's logger falls
+    back to ``logging.lastResort`` which drops everything below WARNING - so
+    ``logger.info`` diagnostics (e.g. the VOICE_* markers in
+    app/ws/twilio_voice.py) never appear in production. No-op under tests."""
+    if app.testing:
+        return
+    level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    root = logging.getLogger()
+    if not any(getattr(h, "_comaz_stdout", False) for h in root.handlers):
+        handler = logging.StreamHandler(sys.stdout)
+        handler._comaz_stdout = True  # type: ignore[attr-defined]
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+        root.addHandler(handler)
+    root.setLevel(level)
+    app.logger.setLevel(level)
 
 
 @jwt.token_in_blocklist_loader
@@ -33,6 +55,8 @@ def _employee_token_revoked(_jwt_header, jwt_payload) -> bool:
 def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
+
+    _configure_logging(app)
 
     db.init_app(app)
     migrate.init_app(app, db)
