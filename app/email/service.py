@@ -229,9 +229,7 @@ def send_appointment_completed_email(appointment) -> CommunicationLog | None:
     customer = appointment.customer
     checklist_items = []
     if appointment.checklist is not None:
-        checklist_items = [
-            item for item in appointment.checklist.items if item.visible_to_customer
-        ]
+        checklist_items = [item for item in appointment.checklist.items if item.visible_to_customer]
     context = _appointment_context(appointment)
     context["checklist_items"] = checklist_items
     context["appointment_notes"] = appointment.notes
