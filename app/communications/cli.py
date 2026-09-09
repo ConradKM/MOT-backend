@@ -89,6 +89,39 @@ def configure_garage_communications_command(
     click.echo(f"  messaging_service_sid: {settings.messaging_service_sid or '—'}")
 
 
+@click.command("set-conversation-automation")
+@click.option("--garage", "identifier", required=True, help="Target garage - its slug or its UUID.")
+@click.option(
+    "--enable/--disable",
+    "enabled",
+    required=True,
+    help="Route this business's inbound WhatsApp/Voice messages through the conversation engine.",
+)
+@with_appcontext
+def set_conversation_automation_command(identifier, enabled):
+    """Toggle ONE business's ``conversation_automation_enabled`` flag - the
+    switch inbound webhooks check before handing a message to the
+    conversation engine (off by default). Touches nothing else: every other
+    automation toggle keeps its current value, or its safe default if this
+    business has no settings row yet."""
+    from app.conversation.automation import get_automation_settings, update_automation_settings
+
+    try:
+        garage = resolve_garage(identifier)
+    except GarageNotFoundError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    update_automation_settings(garage, conversation_automation_enabled=enabled)
+    settings = get_automation_settings(garage)
+    click.echo(f"Automation settings for '{garage.name}' ({garage.slug}):")
+    click.echo(f"  conversation_automation_enabled: {settings.conversation_automation_enabled}")
+    click.echo(f"  booking_ack_enabled:            {settings.booking_ack_enabled}")
+    click.echo(f"  booking_confirmation_enabled:   {settings.booking_confirmation_enabled}")
+    click.echo(f"  reminder_enabled:               {settings.reminder_enabled}")
+    click.echo(f"  reminder_hours_before:          {settings.reminder_hours_before}")
+    click.echo(f"  missed_call_ack_enabled:        {settings.missed_call_ack_enabled}")
+
+
 @click.command("twilio-webhook-urls")
 @with_appcontext
 def twilio_webhook_urls_command():

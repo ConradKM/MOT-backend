@@ -17,6 +17,8 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from flask import current_app
+
 from app.extensions import db
 from app.models.communications.communication_log import (
     CHANNEL_VOICE,
@@ -52,8 +54,17 @@ _CHANNEL_MODEL_VALUES = {"VOICE": CHANNEL_VOICE, "WHATSAPP": CHANNEL_WHATSAPP}
 
 # How many consecutive unresolved turns (GENERAL_QUERY/UNKNOWN with nothing
 # actionable) before handing off - Part 19's "repeated failed intent
-# detection", not a single miss.
-_MAX_UNRESOLVED_TURNS = 2
+# detection", not a single miss. Overridable per deployment via
+# CONVERSATION_MAX_UNRESOLVED_TURNS (raised from a hard 2 so an odd
+# transcription or an unknown acronym gets another clear chance first).
+_DEFAULT_MAX_UNRESOLVED_TURNS = 3
+
+
+def _max_unresolved_turns() -> int:
+    return int(
+        current_app.config.get("CONVERSATION_MAX_UNRESOLVED_TURNS", _DEFAULT_MAX_UNRESOLVED_TURNS)
+    )
+
 
 _resolver = RuleBasedIntentResolver()
 
@@ -221,7 +232,7 @@ def _unresolved(ctx: ConversationContext) -> StepResult:
     """GENERAL_QUERY / UNKNOWN - re-prompt once, then hand off rather than
     looping forever (Part 19's "repeated failed intent detection")."""
     count = int(ctx.slots.get("unresolved_count", 0)) + 1
-    if count >= _MAX_UNRESOLVED_TURNS:
+    if count >= _max_unresolved_turns():
         return StepResult(
             response_text="I'll get a member of staff to help with that.",
             workflow_step=None,

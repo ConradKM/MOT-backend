@@ -277,14 +277,25 @@ def test_engine_failure_speaks_an_apology_and_creates_a_callback(app, voice_busi
     assert cb.phone_number == CALLER
 
 
+def test_ambiguous_booking_keeps_the_call_open(app, voice_business, appointment_type):
+    # An unknown service/acronym in a booking request is a clarification, not
+    # a handoff - the assistant asks which service and the call stays open.
+    ws = _run_bridge(app, [_setup(), _prompt("Can I make a MSC booking?")])
+
+    assert ws.tokens()
+    assert not any(m.get("type") == "end" for m in ws.sent)
+
+
 def test_speak_to_human_hands_off_and_ends_the_call(app, voice_business):
+    # An explicit "speak to a person" hands off on that same turn: the bridge
+    # speaks the engine's handoff line, raises a callback, and ends the call.
     ws = _run_bridge(app, [_setup(), _prompt("I want to speak to a real person")])
-    assert ws.tokens()  # the engine speaks a "team will help" line first
+    assert ws.tokens()
+    assert any(m.get("type") == "end" for m in ws.sent)
 
-    # A later turn on the same phone (a distinct call) - the session is now in
-    # HUMAN_HANDOFF, so the bridge speaks the close-out and ends the call.
+    # A later call from the same number while still in HUMAN_HANDOFF also ends,
+    # but must not pile up a second callback.
     ws2 = _run_bridge(app, [_setup(callSid="CAtest0002"), _prompt("hello are you there")])
-
     assert any(m.get("type") == "end" for m in ws2.sent)
     assert CallbackRequest.query.filter_by(garage_id=voice_business.id).count() == 1
 

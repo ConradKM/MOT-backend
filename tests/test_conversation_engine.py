@@ -441,6 +441,21 @@ def test_repeated_unresolved_messages_escalate_to_human(
     session, garage, garage_schedule, appointment_type, user
 ):
     now = _now()
+    # Default CONVERSATION_MAX_UNRESOLVED_TURNS is 3 - two misses still get a
+    # re-prompt, only the third hands off.
+    r1 = _send(garage, PHONE_RAW, "asdkjhaskjdh", now=now)
+    assert r1.needs_human is False
+    r2 = _send(garage, PHONE_RAW, "asdkjhaskjdh again", now=now)
+    assert r2.needs_human is False
+    r3 = _send(garage, PHONE_RAW, "still asdkjhaskjdh", now=now)
+    assert r3.needs_human is True
+
+
+def test_unresolved_escalation_threshold_is_configurable(
+    app, monkeypatch, session, garage, garage_schedule, appointment_type, user
+):
+    monkeypatch.setitem(app.config, "CONVERSATION_MAX_UNRESOLVED_TURNS", 2)
+    now = _now()
     r1 = _send(garage, PHONE_RAW, "asdkjhaskjdh", now=now)
     assert r1.needs_human is False
     r2 = _send(garage, PHONE_RAW, "asdkjhaskjdh again", now=now)
@@ -690,3 +705,113 @@ def test_final_booking_uses_the_corrected_date(
     booking_request = BookingRequest.query.filter_by(garage_id=garage.id).one()
     assert booking_request.preferred_date == new_day
     assert booking_request.vehicle_registration == "AB12CDE"
+
+
+# --------------------------------------------------------------------------
+# Ambiguous booking must clarify, not hand off (issue #71)
+# --------------------------------------------------------------------------
+
+
+def test_ambiguous_booking_acronym_asks_which_service_not_handoff(
+    session, garage, garage_schedule, appointment_type, user
+):
+    r = _send(garage, PHONE_RAW, "Can I make a MSC booking?", now=_now())
+
+    assert r.needs_human is False
+    assert r.workflow_step == "AWAITING_TYPE"
+    assert appointment_type.name in r.response_text
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
+
+
+def test_vague_booking_request_asks_what_service(
+    session, garage, garage_schedule, appointment_type, user
+):
+    r = _send(garage, PHONE_RAW, "I want to book something", now=_now())
+
+    assert r.needs_human is False
+    assert r.workflow_step == "AWAITING_TYPE"
+
+
+def test_unknown_service_name_clarifies_up_to_threshold_then_hands_off(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    # Default threshold is 3 clarification rounds.
+    r0 = _send(garage, PHONE_RAW, "I want to book a flurble", now=now)
+    assert (r0.needs_human, r0.workflow_step) == (False, "AWAITING_TYPE")
+    r1 = _send(garage, PHONE_RAW, "a flurble", now=now)
+    assert (r1.needs_human, r1.workflow_step) == (False, "AWAITING_TYPE")
+    r2 = _send(garage, PHONE_RAW, "still a flurble", now=now)
+    assert (r2.needs_human, r2.workflow_step) == (False, "AWAITING_TYPE")
+
+    r3 = _send(garage, PHONE_RAW, "flurble please", now=now)
+    assert r3.needs_human is True
+    assert r3.response_text  # a spoken handoff line, never a bare end
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
+
+
+def test_a_matched_service_clears_the_clarification_counter(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _send(garage, PHONE_RAW, "book a flurble", now=now)
+    _send(garage, PHONE_RAW, "another flurble", now=now)
+    r = _send(garage, PHONE_RAW, appointment_type.name, now=now)
+    assert r.needs_human is False
+    assert r.workflow_step in ("AWAITING_NAME", "AWAITING_DATE")
+
+
+# --------------------------------------------------------------------------
+# Voice HUMAN_HANDOFF must not trap future calls (issue #71)
+# --------------------------------------------------------------------------
+
+
+def test_voice_handoff_session_expires_so_a_later_call_starts_fresh(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    r1 = _send(garage, PHONE_RAW, "I want to speak to someone", channel="VOICE", now=now)
+    assert r1.needs_human is True
+    sess = ConversationSession.query.filter_by(
+        garage_id=garage.id, channel="VOICE", customer_phone=PHONE_RAW
+    ).one()
+    assert sess.status == "HUMAN_HANDOFF"
+
+    later = now + timedelta(minutes=session_service.SESSION_TIMEOUT_MINUTES + 5)
+    r2 = _send(garage, PHONE_RAW, "what are your opening hours", channel="VOICE", now=later)
+
+    assert r2.needs_human is False
+    assert r2.response_text and "hours" in r2.response_text.lower()
+    sessions = ConversationSession.query.filter_by(
+        garage_id=garage.id, channel="VOICE", customer_phone=PHONE_RAW
+    ).all()
+    # The trapped HUMAN_HANDOFF session was retired; a fresh one handled the call.
+    assert len(sessions) == 2
+    assert {s.status for s in sessions} == {"EXPIRED", "COMPLETED"}
+    assert sess.status == "EXPIRED"
+
+
+def test_whatsapp_handoff_session_never_expires(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _send(garage, PHONE_RAW, "I want to speak to someone", channel="WHATSAPP", now=now)
+    later = now + timedelta(hours=6)
+    r = _send(garage, PHONE_RAW, "hello again", channel="WHATSAPP", now=later)
+
+    assert r.needs_human is True
+    assert r.response_text is None
+
+
+def test_expire_stale_sessions_sweeps_a_stale_voice_handoff(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _send(garage, PHONE_RAW, "I want to speak to someone", channel="VOICE", now=now)
+    later = now + timedelta(hours=2)
+
+    changed = session_service.expire_stale_sessions(now=later)
+
+    assert changed == 1
+    sess = ConversationSession.query.filter_by(garage_id=garage.id, channel="VOICE").one()
+    assert sess.status == "EXPIRED"
