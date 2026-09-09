@@ -181,6 +181,10 @@ def handle_awaiting_type(ctx: ConversationContext, text: str) -> StepResult:
 
 
 def handle_awaiting_type_choice(ctx: ConversationContext, text: str) -> StepResult:
+    correction = _maybe_correct(ctx, text)
+    if correction is not None:
+        return correction
+
     candidate_ids = ctx.slots.get("candidate_type_ids", [])
     candidates = [
         t for t in actions.get_appointment_types(ctx.garage) if str(t.id) in candidate_ids
@@ -202,6 +206,10 @@ def handle_awaiting_type_choice(ctx: ConversationContext, text: str) -> StepResu
 
 
 def handle_awaiting_name(ctx: ConversationContext, text: str) -> StepResult:
+    correction = _maybe_correct(ctx, text)
+    if correction is not None:
+        return correction
+
     parts = text.strip().split()
     if len(parts) < 2:
         return StepResult(
@@ -217,9 +225,10 @@ def handle_awaiting_name(ctx: ConversationContext, text: str) -> StepResult:
 
 
 def _offer_times_for_date(
-    ctx: ConversationContext, day: date, updates: dict, time_window=None
+    ctx: ConversationContext, day: date, updates: dict, time_window=None, appointment_type=None
 ) -> StepResult:
-    appointment_type = _get_appointment_type(ctx.garage, ctx.slots.get("appointment_type_id"))
+    if appointment_type is None:
+        appointment_type = _get_appointment_type(ctx.garage, ctx.slots.get("appointment_type_id"))
     payload = actions.get_availability_for_day(
         ctx.garage, day, appointment_type=appointment_type, now=ctx.now
     )
@@ -265,6 +274,10 @@ def _offer_times_for_date(
 
 
 def handle_awaiting_date(ctx: ConversationContext, text: str) -> StepResult:
+    correction = _maybe_correct(ctx, text)
+    if correction is not None:
+        return correction
+
     day = parse_date_phrase(text, now=ctx.now)
     if day is None:
         return StepResult(
@@ -282,6 +295,10 @@ def handle_awaiting_date(ctx: ConversationContext, text: str) -> StepResult:
 
 
 def handle_awaiting_time(ctx: ConversationContext, text: str) -> StepResult:
+    correction = _maybe_correct(ctx, text)
+    if correction is not None:
+        return correction
+
     day = date.fromisoformat(ctx.slots["preferred_date"])
     exact = parse_exact_time_phrase(text)
     if exact is None:
@@ -335,7 +352,195 @@ def _after_time_resolved(ctx: ConversationContext, updates: dict) -> StepResult:
     )
 
 
+# --------------------------------------------------------------------------
+# Mid-flow corrections / backtracking
+#
+# A caller can change their mind about the day or the service, or ask to go
+# back a step, at any point *before* the BookingRequest is actually created
+# (see _maybe_correct's callers). Once the request exists the session is
+# COMPLETE and a fresh message goes through RESCHEDULE/CANCEL instead - this
+# never mutates a created request.
+# --------------------------------------------------------------------------
+
+_GO_BACK_CUES = (
+    "go back",
+    "step back",
+    "back a step",
+    "previous step",
+    "start over",
+    "start again",
+)
+_CHANGE_DATE_CUES = (
+    "another day",
+    "a different day",
+    "different day",
+    "other day",
+    "another date",
+    "different date",
+    "change the date",
+    "change the day",
+    "change date",
+    "wrong day",
+    "not that day",
+)
+_CHANGE_TYPE_CUES = (
+    "change the service",
+    "different service",
+    "change service",
+    "wrong service",
+    "different appointment",
+    "change the appointment type",
+)
+# Softer phrasing that only counts as a correction when it comes with
+# something concrete - a parsable date, or a different appointment type.
+_CORRECTION_HINTS = (
+    "actually",
+    "instead",
+    "changed my mind",
+    "change my mind",
+    "rather",
+    "can we do",
+    "could we do",
+    "what about",
+    "how about",
+    "make it",
+    "let's do",
+    "lets do",
+)
+
+_POST_DATE_BOOKING_STEPS = frozenset(
+    {
+        AWAITING_TIME,
+        AWAITING_VEHICLE_CONFIRM,
+        AWAITING_VEHICLE_CHOICE,
+        AWAITING_VEHICLE_REG,
+        AWAITING_BOOKING_CONFIRMATION,
+    }
+)
+
+
+def _has_cue(text_lower: str, cues) -> bool:
+    return any(cue in text_lower for cue in cues)
+
+
+def _list_types_prompt(ctx: ConversationContext, prefix: str) -> StepResult:
+    names = ", ".join(t.name for t in actions.get_appointment_types(ctx.garage))
+    return StepResult(
+        response_text=f"{prefix} Which service would you like? {names}",
+        workflow_step=AWAITING_TYPE,
+    )
+
+
+def _restart_date(ctx: ConversationContext) -> StepResult:
+    """Drop any chosen date and time and ask for the day again."""
+    return StepResult(
+        response_text="Sure - what day would you like to come in instead?",
+        workflow_step=AWAITING_DATE,
+        context_updates={"preferred_date": None, "preferred_time": None},
+    )
+
+
+def _apply_date_change(ctx: ConversationContext, day: date, text: str) -> StepResult:
+    """A new day named mid-flow: clear the previously chosen time and re-offer
+    real slots for the new day, via the same authoritative availability path
+    the first choice went through."""
+    return _offer_times_for_date(
+        ctx, day, {"preferred_time": None}, time_window=parse_time_window_phrase(text)
+    )
+
+
+def _apply_type_change(
+    ctx: ConversationContext, new_type: GarageAppointmentType, text: str
+) -> StepResult:
+    """A different service chosen mid-flow. The duration almost always shifts
+    which slots fit, so the chosen time is always cleared; if a day was
+    already picked, availability is re-queried for it against the new type."""
+    updates: dict = {
+        "appointment_type_id": str(new_type.id),
+        "appointment_type_name": new_type.name,
+        "preferred_time": None,
+    }
+    existing_date = ctx.slots.get("preferred_date")
+    if existing_date:
+        day = date.fromisoformat(existing_date)
+        if day >= ctx.now.date():
+            return _offer_times_for_date(
+                ctx,
+                day,
+                updates,
+                time_window=parse_time_window_phrase(text),
+                appointment_type=new_type,
+            )
+    updates["preferred_date"] = None
+    return StepResult(
+        response_text=(
+            f"No problem, I've switched that to a {new_type.name}. "
+            "What day would you like to come in?"
+        ),
+        workflow_step=AWAITING_DATE,
+        context_updates=updates,
+    )
+
+
+def _step_back(ctx: ConversationContext, step: str | None) -> StepResult:
+    """Return to the previous sensible booking step."""
+    if step in (AWAITING_NAME, AWAITING_DATE, AWAITING_TYPE_CHOICE):
+        return _list_types_prompt(ctx, "No problem, let's start again.")
+    if step == AWAITING_TIME:
+        return _restart_date(ctx)
+    if step in (AWAITING_VEHICLE_CONFIRM, AWAITING_VEHICLE_CHOICE, AWAITING_VEHICLE_REG):
+        existing_date = ctx.slots.get("preferred_date")
+        if existing_date:
+            return _offer_times_for_date(
+                ctx,
+                date.fromisoformat(existing_date),
+                {"preferred_time": None, "vehicle_id": None, "vehicle_registration": None},
+            )
+        return _restart_date(ctx)
+    if step == AWAITING_BOOKING_CONFIRMATION:
+        return _after_time_resolved(ctx, {})
+    return _list_types_prompt(ctx, "No problem.")
+
+
+def _maybe_correct(ctx: ConversationContext, text: str) -> StepResult | None:
+    """If ``text`` is a correction (new day, new service, or "go back") rather
+    than an answer to the question the current step asked, return the
+    resulting :class:`StepResult`; otherwise ``None`` so the step's normal
+    handler runs. Wired into every booking step from AWAITING_DATE onward,
+    before the BookingRequest is created."""
+    lowered = text.strip().lower()
+    if not lowered:
+        return None
+    step = ctx.session.workflow_step
+
+    if _has_cue(lowered, _GO_BACK_CUES):
+        return _step_back(ctx, step)
+
+    current_type_id = ctx.slots.get("appointment_type_id")
+    if current_type_id:
+        match = match_appointment_type(ctx.garage, text)
+        if (
+            match.matched is not None
+            and str(match.matched.id) != str(current_type_id)
+            and _has_cue(lowered, _CHANGE_TYPE_CUES + _CORRECTION_HINTS)
+        ):
+            return _apply_type_change(ctx, match.matched, text)
+
+    if step in _POST_DATE_BOOKING_STEPS:
+        day = parse_date_phrase(text, now=ctx.now)
+        if day is not None and day >= ctx.now.date():
+            return _apply_date_change(ctx, day, text)
+        if _has_cue(lowered, _CHANGE_DATE_CUES):
+            return _restart_date(ctx)
+
+    return None
+
+
 def handle_awaiting_vehicle_confirm(ctx: ConversationContext, text: str) -> StepResult:
+    correction = _maybe_correct(ctx, text)
+    if correction is not None:
+        return correction
+
     if _is_yes(text):
         return _to_confirmation(ctx, {})
     if _is_no(text):
@@ -351,6 +556,10 @@ def handle_awaiting_vehicle_confirm(ctx: ConversationContext, text: str) -> Step
 
 
 def handle_awaiting_vehicle_choice(ctx: ConversationContext, text: str) -> StepResult:
+    correction = _maybe_correct(ctx, text)
+    if correction is not None:
+        return correction
+
     if ctx.customer is None:
         return StepResult(
             response_text="I'll get a member of staff to look into that for you.",
@@ -373,6 +582,10 @@ def handle_awaiting_vehicle_choice(ctx: ConversationContext, text: str) -> StepR
 
 
 def handle_awaiting_vehicle_reg(ctx: ConversationContext, text: str) -> StepResult:
+    correction = _maybe_correct(ctx, text)
+    if correction is not None:
+        return correction
+
     registration = text.strip().upper().replace(" ", "")
     if not (4 <= len(registration) <= 10):
         return StepResult(
@@ -444,6 +657,10 @@ def _to_confirmation(ctx: ConversationContext, updates: dict) -> StepResult:
 
 
 def handle_awaiting_booking_confirmation(ctx: ConversationContext, text: str) -> StepResult:
+    correction = _maybe_correct(ctx, text)
+    if correction is not None:
+        return correction
+
     if not _is_yes(text):
         if _is_no(text):
             return StepResult(

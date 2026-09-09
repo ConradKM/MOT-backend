@@ -552,3 +552,185 @@ def test_customer_communications_404s_for_other_tenants_customer(
 def test_customer_communications_requires_auth(client, customer):
     resp = client.get(f"/api/customers/{customer.id}/communications")
     assert resp.status_code == 401
+
+
+# --------------------------------------------------------------------------
+# Voice call vs. ConversationRelay transcript turns (issue #63)
+#
+# Every automated call writes one call-level VOICE row (external_provider
+# "twilio") plus one CommunicationLog row per transcript turn (provider
+# "comaz_conversation_engine"). Turns must group under the call and never be
+# counted or listed as calls of their own.
+# --------------------------------------------------------------------------
+
+ENGINE = "comaz_conversation_engine"
+
+
+def _call_row(session, garage, call_sid, **overrides):
+    return _log(
+        session,
+        garage,
+        external_provider="twilio",
+        external_id=call_sid,
+        call_sid=call_sid,
+        from_address=CALLER,
+        **overrides,
+    )
+
+
+def _turn_rows(session, garage, call_sid, n, *, base_time=None):
+    base_time = base_time or datetime.now(UTC)
+    rows = []
+    for i in range(n):
+        direction = "INBOUND" if i % 2 == 0 else "OUTBOUND"
+        rows.append(
+            _log(
+                session,
+                garage,
+                external_provider=ENGINE,
+                external_id=f"{call_sid}:{i + 1}" if direction == "INBOUND" else None,
+                call_sid=call_sid,
+                direction=direction,
+                status="received" if direction == "INBOUND" else "sent",
+                body=f"turn {i + 1}",
+                created_at=base_time + timedelta(seconds=i),
+            )
+        )
+    return rows
+
+
+def test_one_call_with_ten_turns_counts_as_one_call(session, garage, authenticated_client):
+    now = datetime.now(UTC)
+    _call_row(session, garage, "CA111", created_at=now, status="completed")
+    _turn_rows(session, garage, "CA111", 10, base_time=now)
+
+    body = authenticated_client.get("/api/communications/overview").get_json()
+    assert body["calls_today"] == 1
+    assert len(body["recent"]) == 1
+    assert body["recent"][0]["external_provider"] == "twilio"
+
+    calls = authenticated_client.get("/api/communications/calls").get_json()
+    assert calls["total"] == 1
+    assert len(calls["items"]) == 1
+
+
+def test_two_calls_with_many_turns_count_as_two(session, garage, authenticated_client):
+    now = datetime.now(UTC)
+    _call_row(session, garage, "CA-A", created_at=now, status="completed")
+    _turn_rows(session, garage, "CA-A", 6, base_time=now)
+    _call_row(session, garage, "CA-B", created_at=now, status="completed")
+    _turn_rows(session, garage, "CA-B", 4, base_time=now)
+
+    body = authenticated_client.get("/api/communications/overview").get_json()
+    assert body["calls_today"] == 2
+
+    calls = authenticated_client.get("/api/communications/calls").get_json()
+    assert calls["total"] == 2
+
+
+def test_missed_call_count_is_distinct_calls_not_turns(session, garage, authenticated_client):
+    now = datetime.now(UTC)
+    _call_row(session, garage, "CA-M1", created_at=now, direction="INBOUND", status="no-answer")
+    _call_row(session, garage, "CA-M2", created_at=now, direction="INBOUND", status="busy")
+    _turn_rows(session, garage, "CA-M1", 8, base_time=now)
+
+    body = authenticated_client.get("/api/communications/overview").get_json()
+    assert body["missed_calls_today"] == 2
+
+
+def test_call_detail_includes_the_transcript(session, garage, authenticated_client):
+    now = datetime.now(UTC)
+    call = _call_row(session, garage, "CA-DET", created_at=now, status="completed")
+    _log(
+        session,
+        garage,
+        external_provider=ENGINE,
+        call_sid="CA-DET",
+        direction="INBOUND",
+        external_id="CA-DET:1",
+        status="received",
+        body="hello",
+        created_at=now,
+    )
+    _log(
+        session,
+        garage,
+        external_provider=ENGINE,
+        call_sid="CA-DET",
+        direction="OUTBOUND",
+        status="sent",
+        body="Hi, how can I help?",
+        created_at=now + timedelta(seconds=1),
+    )
+    _log(
+        session,
+        garage,
+        external_provider=ENGINE,
+        call_sid="CA-DET",
+        direction="SYSTEM",
+        status="sent",
+        body="Booking request #abcd1234 created",
+        created_at=now + timedelta(seconds=2),
+    )
+
+    resp = authenticated_client.get(f"/api/communications/calls/{call.id}")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["id"] == str(call.id)
+    assert [t["body"] for t in body["transcript"]] == [
+        "hello",
+        "Hi, how can I help?",
+        "Booking request #abcd1234 created",
+    ]
+
+
+def test_transcript_turn_id_is_not_itself_a_call(session, garage, authenticated_client):
+    now = datetime.now(UTC)
+    _call_row(session, garage, "CA-X", created_at=now, status="completed")
+    turns = _turn_rows(session, garage, "CA-X", 4, base_time=now)
+
+    # A transcript-turn row id is not a call - the detail endpoint 404s it.
+    resp = authenticated_client.get(f"/api/communications/calls/{turns[0].id}")
+    assert resp.status_code == 404
+
+
+def test_call_grouping_never_crosses_tenants(session, garage, second_garage, authenticated_client):
+    now = datetime.now(UTC)
+    call = _call_row(session, garage, "CA-DUP", created_at=now, status="completed")
+    # Same CallSid string, different tenant - must not be pulled in.
+    _log(
+        session,
+        second_garage,
+        external_provider=ENGINE,
+        call_sid="CA-DUP",
+        direction="INBOUND",
+        status="received",
+        body="other tenant turn",
+        created_at=now,
+    )
+
+    body = authenticated_client.get(f"/api/communications/calls/{call.id}").get_json()
+    assert body["transcript"] == []
+
+
+def test_whatsapp_overview_is_unchanged_by_call_grouping(session, garage, authenticated_client):
+    now = datetime.now(UTC)
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        status="received",
+        from_address=WHATSAPP_SENDER,
+        to_address=WHATSAPP_SENDER,
+        body="hi",
+        created_at=now,
+    )
+    _call_row(session, garage, "CA-WA", created_at=now, status="completed")
+    _turn_rows(session, garage, "CA-WA", 5, base_time=now)
+
+    body = authenticated_client.get("/api/communications/overview").get_json()
+    assert body["whatsapp_unread"] == 1
+    assert body["calls_today"] == 1
+    # recent = 1 WhatsApp message + 1 call (not 1 + 6)
+    assert len(body["recent"]) == 2

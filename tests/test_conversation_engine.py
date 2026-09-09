@@ -14,6 +14,7 @@ import pytest
 
 from app.conversation import automation, engine, session_service
 from app.models.appointments.appointment import Appointment
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.communications.communication_log import CommunicationLog
 from app.models.conversation.callback_request import CallbackRequest
@@ -553,3 +554,139 @@ def test_automation_settings_default_to_conversation_automation_disabled(garage)
     settings = automation._automation_settings(garage)
     assert settings.conversation_automation_enabled is False
     assert settings.booking_ack_enabled is True
+
+
+# --------------------------------------------------------------------------
+# Mid-flow corrections / backtracking (issue #62)
+#
+# A caller can change the day or the service, or ask to go back, at any
+# point before the BookingRequest is actually created.
+# --------------------------------------------------------------------------
+
+
+def _first_offered_slot(response_text: str) -> str:
+    return response_text.split("have ")[1].split(",")[0].split(" ")[0]
+
+
+def _session_ctx(garage):
+    return (
+        ConversationSession.query.filter_by(garage_id=garage.id, customer_phone=PHONE_RAW)
+        .one()
+        .context
+    )
+
+
+def _book_up_to_time(garage, now):
+    """Unrecognised caller, as far as AWAITING_TIME on the first open weekday.
+    Returns (first_day, response_at_time_step)."""
+    first_day = _next_open_weekday(now)
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    _send(garage, PHONE_RAW, "Jane Doe", now=now)
+    r = _send(garage, PHONE_RAW, first_day.strftime("%A"), now=now)
+    assert r.workflow_step == "AWAITING_TIME"
+    return first_day, r
+
+
+def test_change_date_after_selecting_a_date(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    first_day, _ = _book_up_to_time(garage, now)
+    new_day = _next_open_weekday(now, min_days_ahead=5)
+    assert new_day != first_day
+
+    r = _send(garage, PHONE_RAW, f"actually {new_day.strftime('%A')} instead", now=now)
+
+    assert r.workflow_step == "AWAITING_TIME"
+    assert new_day.strftime("%A") in r.response_text
+    ctx = _session_ctx(garage)
+    assert ctx["preferred_date"] == new_day.isoformat()
+    assert not ctx.get("preferred_time")
+
+
+def test_change_date_after_selecting_a_time(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _day, r_time = _book_up_to_time(garage, now)
+    r_veh = _send(garage, PHONE_RAW, _first_offered_slot(r_time.response_text), now=now)
+    assert r_veh.workflow_step == "AWAITING_VEHICLE_REG"
+    assert _session_ctx(garage)["preferred_time"]  # a time is now set
+
+    new_day = _next_open_weekday(now, min_days_ahead=5)
+    r = _send(garage, PHONE_RAW, f"can we do {new_day.strftime('%A')} instead", now=now)
+
+    assert r.workflow_step == "AWAITING_TIME"
+    ctx = _session_ctx(garage)
+    assert ctx["preferred_date"] == new_day.isoformat()
+    assert not ctx.get("preferred_time")  # the old time did not survive
+
+
+def test_change_appointment_type_mid_flow(session, garage, garage_schedule, appointment_type, user):
+    service = GarageAppointmentType(
+        garage_id=garage.id, name="Service", status="ACTIVE", default_duration_minutes=90
+    )
+    session.add(service)
+    session.commit()
+
+    now = _now()
+    _first_day, _ = _book_up_to_time(garage, now)
+    assert _session_ctx(garage)["appointment_type_id"] == str(appointment_type.id)
+
+    r = _send(garage, PHONE_RAW, "actually I need a Service instead", now=now)
+
+    ctx = _session_ctx(garage)
+    assert ctx["appointment_type_id"] == str(service.id)
+    assert not ctx.get("preferred_time")
+    assert r.workflow_step in ("AWAITING_TIME", "AWAITING_DATE")
+
+
+def test_go_back_returns_to_the_previous_step(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _book_up_to_time(garage, now)
+
+    r = _send(garage, PHONE_RAW, "go back", now=now)
+
+    assert r.workflow_step == "AWAITING_DATE"
+    ctx = _session_ctx(garage)
+    assert not ctx.get("preferred_date")
+    assert not ctx.get("preferred_time")
+
+
+def test_no_stale_time_survives_a_date_change(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _day, r_time = _book_up_to_time(garage, now)
+    _send(garage, PHONE_RAW, _first_offered_slot(r_time.response_text), now=now)
+
+    new_day = _next_open_weekday(now, min_days_ahead=5)
+    _send(garage, PHONE_RAW, f"actually {new_day.strftime('%A')}", now=now)
+
+    # We are back at the time step with no time chosen - a bare "yes" must
+    # not fall through and book anything.
+    r = _send(garage, PHONE_RAW, "yes", now=now)
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
+    assert "time" in r.response_text.lower()
+
+
+def test_final_booking_uses_the_corrected_date(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    first_day, _ = _book_up_to_time(garage, now)
+    new_day = _next_open_weekday(now, min_days_ahead=5)
+    assert new_day != first_day
+
+    r_time = _send(garage, PHONE_RAW, f"actually {new_day.strftime('%A')} instead", now=now)
+    r_veh = _send(garage, PHONE_RAW, _first_offered_slot(r_time.response_text), now=now)
+    assert r_veh.workflow_step == "AWAITING_VEHICLE_REG"
+    _send(garage, PHONE_RAW, "AB12 CDE", now=now)
+    r_done = _send(garage, PHONE_RAW, "yes", now=now)
+
+    assert r_done.workflow_step is None
+    booking_request = BookingRequest.query.filter_by(garage_id=garage.id).one()
+    assert booking_request.preferred_date == new_day
+    assert booking_request.vehicle_registration == "AB12CDE"

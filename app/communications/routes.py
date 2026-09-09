@@ -31,6 +31,7 @@ from .schemas import (
     CallbackRequestListQueryArgsSchema,
     CallbackRequestListResponseSchema,
     CallbackRequestSchema,
+    CallDetailSchema,
     CallListQueryArgsSchema,
     CallListResponseSchema,
     CommunicationLogSchema,
@@ -155,12 +156,13 @@ class CallList(MethodView):
 class CallDetail(MethodView):
     @jwt_required()
     @communications_blp.doc(**_AUTH_DOC)
-    @communications_blp.response(200, CommunicationLogSchema)
+    @communications_blp.response(200, CallDetailSchema)
     def get(self, call_id):
         garage = get_current_employee().garage
         call = queries.get_call_detail(garage, call_id)
         if call is None:
             abort(404, message="Call not found.")
+        call.transcript = queries.get_call_transcript(garage, call)
         return call
 
 

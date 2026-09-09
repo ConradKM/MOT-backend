@@ -50,7 +50,7 @@ def _speak(ws, text: str, *, last: bool = True) -> None:
         _send(ws, {"type": "text", "token": text, "last": last})
 
 
-def _run_engine(garage, phone_e164: str, text: str, external_id: str):
+def _run_engine(garage, phone_e164: str, text: str, external_id: str, call_sid: str | None):
     """One engine turn. Never raises - a failure becomes a spoken apology +
     a callback request, so the caller is never left with dead air."""
     try:
@@ -60,6 +60,7 @@ def _run_engine(garage, phone_e164: str, text: str, external_id: str):
             phone_e164=phone_e164,
             text=text,
             external_message_id=external_id,
+            call_sid=call_sid,
         )
     except Exception:
         current_app.logger.exception("[twilio:voice:ws] engine failure for garage %s", garage.id)
@@ -177,7 +178,7 @@ def twilio_voice_bridge(ws) -> None:
                 if not text:
                     continue
                 turn += 1
-                result = _run_engine(garage, phone_e164, text, f"{call_sid}:{turn}")
+                result = _run_engine(garage, phone_e164, text, f"{call_sid}:{turn}", call_sid)
                 if result is None:
                     _speak(ws, _APOLOGY)
                     _send(
@@ -208,7 +209,7 @@ def twilio_voice_bridge(ws) -> None:
                 if not digit:
                     continue
                 turn += 1
-                result = _run_engine(garage, phone_e164, digit, f"{call_sid}:{turn}")
+                result = _run_engine(garage, phone_e164, digit, f"{call_sid}:{turn}", call_sid)
                 if result is None:
                     _speak(ws, _APOLOGY)
                     break

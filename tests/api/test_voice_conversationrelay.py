@@ -306,6 +306,31 @@ def test_call_log_row_is_tagged_with_the_detected_intent(app, client, voice_busi
     assert row.intent == "BUSINESS_HOURS_QUERY"
 
 
+def test_transcript_turns_carry_the_call_sid_for_grouping(app, client, voice_business, monkeypatch):
+    _configure_twilio(app, monkeypatch)
+    client.post(
+        "/api/webhooks/twilio/voice/incoming",
+        data={"To": VOICE_NUMBER, "From": CALLER, "CallSid": "CAtest0001"},
+    )
+
+    _run_bridge(
+        app,
+        [
+            _setup(),
+            _prompt("what are your opening hours"),
+            _prompt("and where are you based"),
+        ],
+    )
+
+    rows = CommunicationLog.query.filter_by(garage_id=voice_business.id, channel="VOICE").all()
+    # The call-level row plus every engine transcript turn share one call_sid.
+    assert rows
+    assert all(r.call_sid == "CAtest0001" for r in rows)
+    # And exactly one of them is the call-level row (not an engine turn).
+    call_level = [r for r in rows if r.external_provider != "comaz_conversation_engine"]
+    assert len(call_level) == 1
+
+
 def test_dtmf_digit_is_fed_to_the_engine_as_text(app, voice_business):
     ws = _run_bridge(app, [_setup(), {"type": "dtmf", "dtmf": "1"}])
     # A lone "1" is an unresolved turn - the engine still answers rather than

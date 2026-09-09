@@ -60,6 +60,7 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     __tablename__ = "communication_logs"
     __table_args__ = (
         Index("ix_communication_logs_garage_id_created_at", "garage_id", "created_at"),
+        Index("ix_communication_logs_garage_id_call_sid", "garage_id", "call_sid"),
     )
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -87,6 +88,14 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     # CallSid). Null for a SKIPPED_NOT_CONFIGURED row, since no provider was
     # ever contacted.
     external_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+
+    # The Twilio CallSid this row belongs to, when it belongs to a phone
+    # call. Set on the one call-level row (from voice_webhooks.py::
+    # incoming_call) *and* on every conversation-engine transcript turn for
+    # that call, so a call's turns can be grouped under it without ever
+    # counting each turn as its own call (see app/communications/queries.py).
+    # Null for WhatsApp/SMS/email and for calls that predate this column.
+    call_sid: Mapped[str | None] = mapped_column(String(40), index=True)
 
     from_address: Mapped[str | None] = mapped_column(String(60))
     to_address: Mapped[str | None] = mapped_column(String(60))
