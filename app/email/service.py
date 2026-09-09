@@ -47,11 +47,34 @@ from app.models.communications.communication_log import (
     DIRECTION_OUTBOUND,
     CommunicationLog,
 )
+from app.models.employee import Employee
+from app.models.garage import Garage
+from app.models.role import Role
 
 logger = logging.getLogger(__name__)
 
 STATUS_SENT = "SENT"
 STATUS_FAILED = "FAILED"
+
+
+def _owner_reply_to(garage: Garage) -> str | None:
+    """Where a customer's reply should actually land: the garage's earliest
+    active OWNER account (same join app/employees/routes.py uses to count
+    owners), falling back to the garage's own contact email if it somehow has
+    none - never the platform's sending address."""
+    owner: Employee | None = (
+        Employee.query.join(Employee.roles)
+        .filter(
+            Employee.garage_id == garage.id,
+            Employee.is_active.is_(True),
+            Role.name == "OWNER",
+        )
+        .order_by(Employee.created_at)
+        .first()
+    )
+    if owner is not None:
+        return owner.email
+    return garage.email
 
 
 def _already_sent(*, trigger_event: str, appointment_id=None, customer_id=None) -> bool:
@@ -114,12 +137,14 @@ def _send(
     html_body = render_template(f"emails/{template}.html", **render_context)
     text_body = render_template(f"emails/{template}.txt", **render_context)
 
+    reply_to = _owner_reply_to(garage)
     provider = current_app.config.get("EMAIL_PROVIDER", "console")
     common_fields = {
         "garage_id": garage.id,
         "channel": CHANNEL_EMAIL,
         "direction": DIRECTION_OUTBOUND,
         "external_provider": provider,
+        "from_address": reply_to,
         "to_address": to,
         "trigger_event": trigger_event,
         "body": text_body,
@@ -128,7 +153,14 @@ def _send(
     }
 
     try:
-        send_email(to=to, subject=subject, body=text_body, html_body=html_body)
+        send_email(
+            to=to,
+            subject=subject,
+            body=text_body,
+            html_body=html_body,
+            from_name=garage.name,
+            reply_to=reply_to,
+        )
     except Exception as exc:  # a notification must never break the caller
         logger.exception("[email] send failed for trigger_event=%s", trigger_event)
         return _log(status=STATUS_FAILED, error_message=str(exc), **common_fields)
