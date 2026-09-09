@@ -1,0 +1,17 @@
+Hi {{ first_name or "there" }},
+
+Thanks for your booking request - we've received it and {{ business_name }} will be in touch to confirm your appointment shortly. Nothing is booked in just yet.
+{% if booking_reference %}
+Your reference: {{ booking_reference }}
+{% endif %}{% if service_name %}
+Service: {{ service_name }}
+{% endif %}
+Requested date: {{ preferred_date.strftime("%d %B %Y") }}
+{% if preferred_time %}Requested time: {{ preferred_time.strftime("%H:%M") }}
+{% endif %}{% if vehicle_label %}Vehicle: {{ vehicle_label }}
+{% endif %}{% if notes %}
+Your notes: {{ notes }}
+{% endif %}{% if login_url %}
+View your booking: {{ login_url }}
+{% endif %}
+Need to change anything? Contact {{ business_name }}{% if business_phone %} on {{ business_phone }}{% endif %}.

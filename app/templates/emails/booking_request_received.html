@@ -1,0 +1,33 @@
+{% extends "emails/_base.html" %}
+{% block content %}
+<p style="margin:0 0 16px; font-size:16px; color:#111827;">Hi {{ first_name or "there" }},</p>
+<p style="margin:0 0 20px; font-size:15px; color:#374151; line-height:1.5;">
+  Thanks for your booking request - we've received it and <strong>{{ business_name }}</strong> will be
+  in touch to confirm your appointment shortly. Nothing is booked in just yet.
+</p>
+{% if booking_reference %}
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%; margin-bottom:20px; background-color:#f9fafb; border:1px solid #e5e7eb; border-radius:6px;">
+  <tr>
+    <td style="padding:12px 16px;">
+      <span style="font-size:12px; color:#6b7280; text-transform:uppercase;">Your reference</span><br>
+      <strong style="font-size:18px; color:#111827; letter-spacing:1px;">{{ booking_reference }}</strong>
+    </td>
+  </tr>
+</table>
+{% endif %}
+<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%; font-size:14px; color:#111827; margin-bottom:20px;">
+  {% if service_name %}<tr><td style="padding:4px 0; color:#6b7280;">Service</td><td style="padding:4px 0; text-align:right;">{{ service_name }}</td></tr>{% endif %}
+  <tr><td style="padding:4px 0; color:#6b7280;">Requested date</td><td style="padding:4px 0; text-align:right;">{{ preferred_date.strftime("%d %B %Y") }}</td></tr>
+  {% if preferred_time %}<tr><td style="padding:4px 0; color:#6b7280;">Requested time</td><td style="padding:4px 0; text-align:right;">{{ preferred_time.strftime("%H:%M") }}</td></tr>{% endif %}
+  {% if vehicle_label %}<tr><td style="padding:4px 0; color:#6b7280;">Vehicle</td><td style="padding:4px 0; text-align:right;">{{ vehicle_label }}</td></tr>{% endif %}
+</table>
+{% if notes %}<p style="margin:0 0 16px; font-size:14px; color:#374151;"><strong>Your notes:</strong> {{ notes }}</p>{% endif %}
+{% if login_url %}
+<p style="margin:0 0 20px;">
+  <a href="{{ login_url }}" style="display:inline-block; background-color:#1f2937; color:#ffffff; text-decoration:none; padding:10px 20px; border-radius:6px; font-size:14px;">View your booking</a>
+</p>
+{% endif %}
+<p style="margin:0; font-size:13px; color:#9ca3af;">
+  Need to change anything? Contact {{ business_name }}{% if business_phone %} on {{ business_phone }}{% endif %}.
+</p>
+{% endblock %}
