@@ -13,6 +13,7 @@ from app.communications.events import (
     APPOINTMENT_COMPLETED,
     APPOINTMENT_CREATED,
     APPOINTMENT_RESCHEDULED,
+    BOOKING_REQUEST_APPROVED,
     register_handler,
 )
 
@@ -50,6 +51,17 @@ def _handle_account_created(garage, customer=None, **_context):
         send_account_created_email(customer)
 
 
+def _handle_booking_request_approved(garage, appointment=None, **_context):
+    # An appointment created by approving a booking request (public booking,
+    # WhatsApp/voice) never goes through app/appointments/routes.py's POST -
+    # see app/booking_requests/routes.py - so it never emits APPOINTMENT_CREATED
+    # itself. This is the "a real appointment now exists" signal for that path,
+    # the same way app/conversation/automation.py's WhatsApp handler already
+    # treats it as the booking-confirmation moment.
+    if appointment is not None:
+        send_appointment_confirmation_email(appointment)
+
+
 def register_email_handlers() -> None:
     """Called once from create_app(), same idempotent-registration contract
     as app/conversation/automation.py::register_default_handlers - safe to
@@ -58,3 +70,4 @@ def register_email_handlers() -> None:
     register_handler(APPOINTMENT_RESCHEDULED, _handle_appointment_rescheduled)
     register_handler(APPOINTMENT_COMPLETED, _handle_appointment_completed)
     register_handler(ACCOUNT_CREATED, _handle_account_created)
+    register_handler(BOOKING_REQUEST_APPROVED, _handle_booking_request_approved)

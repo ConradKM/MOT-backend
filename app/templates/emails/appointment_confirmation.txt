@@ -8,5 +8,7 @@ Time: {{ start_time.strftime("%H:%M") }} - {{ end_time.strftime("%H:%M") }}
 {% if vehicle_label %}Vehicle: {{ vehicle_label }}
 {% endif %}{% if notes %}
 Notes: {{ notes }}
+{% endif %}{% if login_url %}
+View your appointment: {{ login_url }}
 {% endif %}
 Need to change anything? Contact {{ business_name }}{% if business_phone %} on {{ business_phone }}{% endif %}.

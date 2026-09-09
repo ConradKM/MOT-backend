@@ -93,6 +93,39 @@ def test_account_created_email_skipped_with_no_address_on_file(app, fake_send, s
 # --------------------------------------------------------------------------
 
 
+def test_send_uses_business_name_and_owner_email_as_reply_to(
+    app, fake_send, make_appointment, user
+):
+    """``user`` (see conftest.py) is the primary garage's OWNER - the send
+    should read as coming from the business, with replies routed to its
+    owner, never a bare address or the platform's own sending domain."""
+    appointment = make_appointment(datetime.datetime(2026, 10, 1, 9, 0, tzinfo=datetime.UTC))
+
+    log = email_service.send_appointment_confirmation_email(appointment)
+
+    call = fake_send.calls[0]
+    assert call["from_name"] == appointment.garage.name
+    assert call["reply_to"] == user.email
+    assert log.from_address == user.email
+
+
+def test_owner_reply_to_falls_back_to_garage_email_with_no_owner(app, garage):
+    # The bare `garage` fixture has no employees at all.
+    assert email_service._owner_reply_to(garage) == garage.email
+
+
+def test_appointment_emails_link_to_the_customer_login_page(
+    app, monkeypatch, fake_send, make_appointment
+):
+    monkeypatch.setitem(app.config, "APP_BASE_URL", "https://app.comaz.co.uk")
+    appointment = make_appointment(datetime.datetime(2026, 10, 1, 9, 0, tzinfo=datetime.UTC))
+
+    email_service.send_appointment_confirmation_email(appointment)
+
+    assert "https://app.comaz.co.uk/login" in fake_send.calls[0]["body"]
+    assert "https://app.comaz.co.uk/login" in fake_send.calls[0]["html_body"]
+
+
 def test_appointment_confirmation_includes_appointment_details(
     app, fake_send, make_appointment, vehicle
 ):

@@ -130,6 +130,35 @@ def test_approve_creates_and_links_customer_vehicle_appointment(
     assert appointment.status == "BOOKED"
 
 
+def test_approve_triggers_appointment_confirmation_email(
+    authenticated_user, session, garage, booking_request, monkeypatch
+):
+    """Approving a booking request creates its own Appointment (see
+    app/booking_requests/routes.py) rather than going through
+    app/appointments/routes.py's POST - app/email/automation.py subscribes to
+    BOOKING_REQUEST_APPROVED separately so this path also gets a confirmation
+    email, not just staff booking directly on the calendar."""
+    appt_type = _make_type(session, garage)
+    box = {}
+    monkeypatch.setattr(
+        "app.email.automation.send_appointment_confirmation_email",
+        lambda appointment: box.update(appointment_id=str(appointment.id)),
+    )
+
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/approve",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "appointment_type_id": str(appt_type.id),
+            "start_time": START,
+            "end_time": "2026-11-03T09:45:00+00:00",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert box["appointment_id"] == resp.get_json()["appointment_id"]
+
+
 def test_approve_snapshots_the_types_price_onto_the_appointment(
     authenticated_user, session, garage, booking_request
 ):

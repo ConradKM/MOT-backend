@@ -47,11 +47,34 @@ from app.models.communications.communication_log import (
     DIRECTION_OUTBOUND,
     CommunicationLog,
 )
+from app.models.employee import Employee
+from app.models.garage import Garage
+from app.models.role import Role
 
 logger = logging.getLogger(__name__)
 
 STATUS_SENT = "SENT"
 STATUS_FAILED = "FAILED"
+
+
+def _owner_reply_to(garage: Garage) -> str | None:
+    """Where a customer's reply should actually land: the garage's earliest
+    active OWNER account (same join app/employees/routes.py uses to count
+    owners), falling back to the garage's own contact email if it somehow has
+    none - never the platform's sending address."""
+    owner: Employee | None = (
+        Employee.query.join(Employee.roles)
+        .filter(
+            Employee.garage_id == garage.id,
+            Employee.is_active.is_(True),
+            Role.name == "OWNER",
+        )
+        .order_by(Employee.created_at)
+        .first()
+    )
+    if owner is not None:
+        return owner.email
+    return garage.email
 
 
 def _already_sent(*, trigger_event: str, appointment_id=None, customer_id=None) -> bool:
@@ -114,12 +137,14 @@ def _send(
     html_body = render_template(f"emails/{template}.html", **render_context)
     text_body = render_template(f"emails/{template}.txt", **render_context)
 
+    reply_to = _owner_reply_to(garage)
     provider = current_app.config.get("EMAIL_PROVIDER", "console")
     common_fields = {
         "garage_id": garage.id,
         "channel": CHANNEL_EMAIL,
         "direction": DIRECTION_OUTBOUND,
         "external_provider": provider,
+        "from_address": reply_to,
         "to_address": to,
         "trigger_event": trigger_event,
         "body": text_body,
@@ -128,7 +153,14 @@ def _send(
     }
 
     try:
-        send_email(to=to, subject=subject, body=text_body, html_body=html_body)
+        send_email(
+            to=to,
+            subject=subject,
+            body=text_body,
+            html_body=html_body,
+            from_name=garage.name,
+            reply_to=reply_to,
+        )
     except Exception as exc:  # a notification must never break the caller
         logger.exception("[email] send failed for trigger_event=%s", trigger_event)
         return _log(status=STATUS_FAILED, error_message=str(exc), **common_fields)
@@ -145,6 +177,15 @@ def _vehicle_label(vehicle) -> str | None:
     return label
 
 
+def _login_url() -> str | None:
+    """The customer portal's sign-in page (APP_BASE_URL + "/login") - never a
+    staff URL. Used both as the account-created email's "Sign in" link and as
+    the "View your appointment" link on the appointment emails, so both point
+    at the same place customers already know from CustomerSetPassword."""
+    base = (current_app.config.get("APP_BASE_URL") or "").rstrip("/")
+    return f"{base}/login" if base else None
+
+
 def _appointment_context(appointment) -> dict:
     garage = appointment.garage
     customer = appointment.customer
@@ -159,6 +200,7 @@ def _appointment_context(appointment) -> dict:
         "end_time": appointment.end_time,
         "vehicle_label": _vehicle_label(appointment.vehicle),
         "notes": appointment.notes,
+        "login_url": _login_url(),
     }
 
 
@@ -167,7 +209,6 @@ def send_account_created_email(customer) -> CommunicationLog | None:
     app/customer_auth/routes.py::CustomerSetPassword. Never includes the
     password itself, only the email address it's now tied to."""
     garage = customer.garage
-    base_url = (current_app.config.get("APP_BASE_URL") or "").rstrip("/") or None
     return _send(
         garage=garage,
         to=customer.email,
@@ -180,7 +221,7 @@ def send_account_created_email(customer) -> CommunicationLog | None:
             "business_address": garage.address,
             "first_name": customer.first_name,
             "email": customer.email,
-            "sign_in_url": base_url,
+            "sign_in_url": _login_url(),
         },
         trigger_event=ACCOUNT_CREATED,
         customer=customer,

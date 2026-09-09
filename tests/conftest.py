@@ -507,6 +507,7 @@ _SECTION_BY_SUFFIX = [
     ("api/test_twilio_webhooks.py", "Twilio Webhooks"),
     ("test_communications.py", "Communications Service"),
     ("test_email_service.py", "Email Service"),
+    ("test_email_provider.py", "Email Provider"),
     ("test_phone.py", "Phone Normalisation"),
     ("test_health.py", "Health Check"),
 ]
