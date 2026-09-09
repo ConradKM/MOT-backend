@@ -106,6 +106,14 @@ class Config:
     # Reset tokens live ~30 minutes.
     PASSWORD_RESET_TOKEN_MINUTES = int(os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30"))
 
+    # Resend-specific credentials for EMAIL_PROVIDER=resend (see app/email).
+    # Both fall back to the generic EMAIL_API_KEY/EMAIL_FROM above so a
+    # deployment that already set those doesn't need to duplicate them - set
+    # RESEND_API_KEY/RESEND_FROM_EMAIL explicitly to override just for Resend.
+    # Never hard-code a real key here; never log this value.
+    RESEND_API_KEY = os.getenv("RESEND_API_KEY", os.getenv("EMAIL_API_KEY", ""))
+    RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", EMAIL_FROM)
+
     # --- Twilio communications (see app/communications) ------------------
     # CoMaz OS's own (master) Twilio account. Both unset (the default) is a
     # fully supported, permanent state for a deployment that hasn't turned on

@@ -235,6 +235,46 @@ def test_set_password_too_short_is_rejected(customer_client):
 
 
 # --------------------------------------------------------------------------
+# Set password -> account-created email
+#
+# Through the real event bus (app/communications/events.py ->
+# app/email/automation.py), not by calling the email service directly -
+# rendering/dedupe/Resend-failure handling is covered by
+# tests/test_email_service.py.
+# --------------------------------------------------------------------------
+
+
+def _capture_account_created(monkeypatch):
+    box = {}
+    monkeypatch.setattr(
+        "app.email.automation.send_account_created_email",
+        lambda customer: box.update(customer_id=str(customer.id), email=customer.email),
+    )
+    return box
+
+
+def test_set_password_triggers_account_created_email(customer_client, customer, monkeypatch):
+    box = _capture_account_created(monkeypatch)
+
+    resp = customer_client.post(
+        "/api/customer/auth/set-password", json={"password": "a-brand-new-password"}
+    )
+
+    assert resp.status_code == 204
+    assert box["customer_id"] == str(customer.id)
+    assert box["email"] == customer.email
+
+
+def test_failed_set_password_does_not_trigger_email(customer_client, monkeypatch):
+    box = _capture_account_created(monkeypatch)
+
+    resp = customer_client.post("/api/customer/auth/set-password", json={"password": "short"})
+
+    assert resp.status_code == 422
+    assert box == {}
+
+
+# --------------------------------------------------------------------------
 # Refresh
 # --------------------------------------------------------------------------
 

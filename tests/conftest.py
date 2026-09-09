@@ -500,11 +500,13 @@ _SECTION_BY_SUFFIX = [
     ("api/test_mot_records.py", "MOT API"),
     ("api/test_appointment_types.py", "Appointment Type API"),
     ("api/test_appointment_statuses.py", "Appointment Status API"),
+    ("api/test_appointment_emails.py", "Appointment Email Triggers"),
     ("api/test_checklist_templates.py", "Checklist Template API"),
     ("api/test_appointment_checklists.py", "Appointment Checklist API"),
     ("api/test_checklist_item_media.py", "Checklist Media API"),
     ("api/test_twilio_webhooks.py", "Twilio Webhooks"),
     ("test_communications.py", "Communications Service"),
+    ("test_email_service.py", "Email Service"),
     ("test_phone.py", "Phone Normalisation"),
     ("test_health.py", "Health Check"),
 ]

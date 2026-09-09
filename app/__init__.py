@@ -153,6 +153,7 @@ def create_app(config_class=Config):
     # gevent worker in production).
     from . import ws  # noqa: F401
     from .conversation.automation import register_default_handlers
+    from .email.automation import register_email_handlers
     from .models import (  # noqa: F401
         booking_request,
         customer,
@@ -186,5 +187,6 @@ def create_app(config_class=Config):
     from .models.conversation import callback_request, conversation_session  # noqa: F401
 
     register_default_handlers()
+    register_email_handlers()
 
     return app
