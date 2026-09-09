@@ -734,3 +734,145 @@ def test_whatsapp_overview_is_unchanged_by_call_grouping(session, garage, authen
     assert body["calls_today"] == 1
     # recent = 1 WhatsApp message + 1 call (not 1 + 6)
     assert len(body["recent"]) == 2
+
+
+# --------------------------------------------------------------------------
+# Conversation management: archive / restore / delete + filters (issue #79)
+# --------------------------------------------------------------------------
+
+ADDR = "whatsapp:+447123400777"
+PHONE = "+447123400777"
+
+
+def _wa(session, garage, direction="INBOUND", **over):
+    return _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction=direction,
+        from_address=ADDR if direction == "INBOUND" else WHATSAPP_SENDER,
+        to_address=WHATSAPP_SENDER if direction == "INBOUND" else ADDR,
+        body="hi",
+        **over,
+    )
+
+
+def _phones(resp):
+    return {c["phone"] for c in resp.get_json()["items"]}
+
+
+def test_archive_removes_a_thread_from_the_inbox_and_restore_brings_it_back(
+    session, garage, authenticated_client
+):
+    _wa(session, garage)
+    assert PHONE in _phones(authenticated_client.get("/api/communications/conversations"))
+
+    assert (
+        authenticated_client.post(f"/api/communications/conversations/{PHONE}/archive").status_code
+        == 204
+    )
+    assert PHONE not in _phones(authenticated_client.get("/api/communications/conversations"))
+    assert PHONE in _phones(
+        authenticated_client.get("/api/communications/conversations?filter=archived")
+    )
+    item = authenticated_client.get("/api/communications/conversations?filter=archived").get_json()[
+        "items"
+    ][0]
+    assert item["archived"] is True
+
+    authenticated_client.post(f"/api/communications/conversations/{PHONE}/restore")
+    assert PHONE in _phones(authenticated_client.get("/api/communications/conversations"))
+
+
+def test_needs_attention_filter_shows_unread_threads_only(session, garage, authenticated_client):
+    _wa(session, garage, read_at=None)  # unread
+    other = "whatsapp:+447123400888"
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=other,
+        to_address=WHATSAPP_SENDER,
+        body="read one",
+        read_at=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+
+    phones = _phones(
+        authenticated_client.get("/api/communications/conversations?filter=needs_attention")
+    )
+    assert phones == {PHONE}
+
+
+def test_archived_thread_is_excluded_from_needs_attention(session, garage, authenticated_client):
+    _wa(session, garage, read_at=None)
+    authenticated_client.post(f"/api/communications/conversations/{PHONE}/archive")
+    phones = _phones(
+        authenticated_client.get("/api/communications/conversations?filter=needs_attention")
+    )
+    assert PHONE not in phones
+
+
+def test_archive_state_is_tenant_scoped(
+    session, garage, second_garage, second_user, authenticated_client
+):
+    _wa(session, garage)
+    _log(
+        session,
+        second_garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=ADDR,
+        to_address=WHATSAPP_SENDER,
+        body="garage B",
+    )
+    authenticated_client.post(f"/api/communications/conversations/{PHONE}/archive")
+
+    # Garage A: archived. Garage B: still in its own inbox.
+    assert PHONE not in _phones(authenticated_client.get("/api/communications/conversations"))
+    from app.communications import queries
+
+    b_items, _ = queries.list_conversations(second_garage)
+    assert any(c["phone"] == PHONE and c["archived"] is False for c in b_items)
+
+
+def test_soft_delete_is_owner_only(session, garage, staff_role, client):
+    from flask_jwt_extended import create_access_token
+    from werkzeug.security import generate_password_hash
+
+    from app.models.employee import Employee
+    from tests.conftest import DEFAULT_PASSWORD
+
+    _wa(session, garage)
+    staff = Employee(
+        garage_id=garage.id,
+        email="staff-a@garage-a.example",
+        password_hash=generate_password_hash(DEFAULT_PASSWORD),
+        roles=[staff_role],
+    )
+    session.add(staff)
+    session.commit()
+    token = create_access_token(identity=str(staff.id))
+
+    resp = client.delete(
+        f"/api/communications/conversations/{PHONE}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403
+
+
+def test_soft_delete_hides_from_every_filter_but_keeps_history(
+    session, garage, authenticated_client
+):
+    _wa(session, garage)
+    assert (
+        authenticated_client.delete(f"/api/communications/conversations/{PHONE}").status_code == 204
+    )
+    for f in ("inbox", "archived", "needs_attention"):
+        assert PHONE not in _phones(
+            authenticated_client.get(f"/api/communications/conversations?filter={f}")
+        )
+    msgs = authenticated_client.get(
+        f"/api/communications/conversations/{PHONE}/messages"
+    ).get_json()
+    assert len(msgs["messages"]) == 1  # nothing unsent, history intact

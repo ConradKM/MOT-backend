@@ -26,6 +26,11 @@ from app.models.communications.communication_log import (
     DIRECTION_OUTBOUND,
     CommunicationLog,
 )
+from app.models.communications.conversation_state import WhatsAppConversationState
+from app.models.conversation.conversation_session import (
+    STATUS_HUMAN_HANDOFF,
+    ConversationSession,
+)
 from app.models.customer import Customer
 
 from .config import garage_communications_enabled, is_twilio_configured
@@ -238,10 +243,64 @@ def get_call_transcript(garage, call: CommunicationLog) -> list[CommunicationLog
     return rows
 
 
+CONVERSATION_FILTERS = ("inbox", "needs_attention", "archived")
+
+
+def _conversation_states(garage) -> dict[str, WhatsAppConversationState]:
+    return {
+        s.phone_e164: s
+        for s in WhatsAppConversationState.query.filter_by(garage_id=garage.id).all()
+    }
+
+
+def _handoff_phones(garage) -> set[str]:
+    rows = ConversationSession.query.filter_by(
+        garage_id=garage.id, channel=CHANNEL_WHATSAPP, status=STATUS_HUMAN_HANDOFF
+    ).all()
+    return {r.customer_phone for r in rows}
+
+
+def set_conversation_archived(garage, phone_e164: str, archived: bool) -> None:
+    state = WhatsAppConversationState.query.filter_by(
+        garage_id=garage.id, phone_e164=phone_e164
+    ).first()
+    if state is None:
+        state = WhatsAppConversationState(garage_id=garage.id, phone_e164=phone_e164)
+        db.session.add(state)
+    state.archived_at = datetime.now(UTC) if archived else None
+    db.session.commit()
+
+
+def soft_delete_conversation(garage, phone_e164: str) -> None:
+    """Owner-only. Hides the thread from every filter; the message history
+    rows are untouched (nothing is unsent - see the model docstring)."""
+    state = WhatsAppConversationState.query.filter_by(
+        garage_id=garage.id, phone_e164=phone_e164
+    ).first()
+    if state is None:
+        state = WhatsAppConversationState(garage_id=garage.id, phone_e164=phone_e164)
+        db.session.add(state)
+    state.deleted_at = datetime.now(UTC)
+    db.session.commit()
+
+
 def list_conversations(
-    garage, *, search: str | None = None, limit: int | None = None, offset: int = 0
+    garage,
+    *,
+    conversation_filter: str = "inbox",
+    search: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> tuple[list[dict], int]:
-    """Every WhatsApp thread for this garage, most recently active first.
+    """WhatsApp threads for this garage, most recently active first, narrowed
+    by ``conversation_filter``:
+
+    * ``inbox`` (default) - active threads (not archived, not deleted)
+    * ``needs_attention`` - inbox threads with an unread message or a
+      handed-off automation session
+    * ``archived`` - archived threads (still not deleted)
+
+    A soft-deleted thread never appears in any of them.
 
     Grouped in Python from CommunicationLog rows rather than a dedicated
     Conversation table or a windowed SQL query - the simplest correct thing
@@ -278,7 +337,26 @@ def list_conversations(
         if row.direction == DIRECTION_INBOUND and row.read_at is None:
             convo["unread_count"] += 1
 
-    result = list(conversations.values())
+    states = _conversation_states(garage)
+    handoff = _handoff_phones(garage) if conversation_filter == "needs_attention" else set()
+    result: list[dict] = []
+    for convo in conversations.values():
+        state = states.get(convo["phone"])
+        if state is not None and state.deleted_at is not None:
+            continue  # soft-deleted: never shown
+        archived = state is not None and state.archived_at is not None
+        convo["archived"] = archived
+
+        if conversation_filter == "archived":
+            if not archived:
+                continue
+        elif archived:
+            continue  # inbox / needs_attention both exclude archived
+        elif conversation_filter == "needs_attention" and not (
+            convo["unread_count"] > 0 or convo["phone"] in handoff
+        ):
+            continue
+        result.append(convo)
 
     if search:
         pattern = search.strip().lower()

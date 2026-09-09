@@ -83,6 +83,10 @@ class CallListResponseSchema(Schema):
 
 
 class ConversationListQueryArgsSchema(Schema):
+    filter = fields.Str(
+        load_default="inbox",
+        validate=validate.OneOf(["inbox", "needs_attention", "archived"]),
+    )
     search = fields.Str(load_default=None)
     limit = fields.Int(load_default=None, validate=validate.Range(min=1, max=200))
     offset = fields.Int(load_default=0, validate=validate.Range(min=0))
@@ -93,6 +97,7 @@ class ConversationSchema(Schema):
     customer = fields.Nested(CommunicationCustomerSchema, dump_only=True, allow_none=True)
     last_message = fields.Nested(CommunicationLogSchema, dump_only=True)
     unread_count = fields.Int(dump_only=True)
+    archived = fields.Bool(dump_only=True)
 
 
 class ConversationListResponseSchema(Schema):
