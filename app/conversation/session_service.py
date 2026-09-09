@@ -162,6 +162,16 @@ def complete_session(session: ConversationSession) -> None:
     db.session.commit()
 
 
+def clear_context(session: ConversationSession, *, now: datetime | None = None) -> None:
+    """Drop the slot context and current step but keep the session ACTIVE -
+    "start again" mid-flow, so a fresh flow doesn't inherit a half-filled
+    booking. Status and intent are left for ``_finalize`` to set."""
+    session.context = {}
+    session.workflow_step = None
+    session.last_activity_at = now or datetime.now(UTC)
+    db.session.commit()
+
+
 def handoff_to_human(
     session: ConversationSession, reason: str, *, now: datetime | None = None
 ) -> None:

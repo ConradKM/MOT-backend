@@ -927,3 +927,181 @@ def test_voice_session_still_expires_at_thirty_minutes(
     # 45 min > the 30-min voice window: the follow-up starts a fresh session,
     # so "Jane Doe" is not read as the name step of the old booking flow.
     assert r.workflow_step != "AWAITING_DATE"
+
+
+# --------------------------------------------------------------------------
+# Interruptible workflows: topic switch, navigation, multi-intent (issue #75)
+# --------------------------------------------------------------------------
+
+
+def _session(garage, phone=PHONE_RAW):
+    return ConversationSession.query.filter_by(garage_id=garage.id, customer_phone=phone).one()
+
+
+def _to_awaiting_date(garage, now):
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    r = _send(garage, PHONE_RAW, "Jane Doe", now=now)
+    assert r.workflow_step == "AWAITING_DATE"
+
+
+def test_booking_interrupted_by_hours_question_then_resumes(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _to_awaiting_date(garage, now)
+
+    r = _send(garage, PHONE_RAW, "what time do you close?", now=now)
+    assert r.needs_human is False
+    assert "17:00" in r.response_text  # answered the actual question
+    assert "carry on" in r.response_text.lower()  # offered to resume
+    sess = _session(garage)
+    assert sess.workflow_step == "AWAITING_RESUME"
+    assert sess.context["resume_step"] == "AWAITING_DATE"
+
+    # Answering the day directly resumes the booking.
+    r2 = _send(garage, PHONE_RAW, _next_open_weekday(now).strftime("%A"), now=now)
+    assert r2.workflow_step == "AWAITING_TIME"
+
+
+def test_booking_interrupted_by_price_question(
+    session, garage, garage_schedule, appointment_type, user
+):
+    appointment_type.base_price = Decimal("54.85")
+    session.commit()
+    now = _now()
+    _to_awaiting_date(garage, now)
+
+    r = _send(garage, PHONE_RAW, "how much is an MOT?", now=now)
+    assert r.needs_human is False
+    assert "£" in r.response_text
+    assert _session(garage).workflow_step == "AWAITING_RESUME"
+
+    r2 = _send(garage, PHONE_RAW, "yes carry on", now=now)
+    assert r2.workflow_step == "AWAITING_DATE"
+
+
+def test_multi_intent_faq_answered_in_one_reply(
+    session, garage, garage_schedule, appointment_type, user
+):
+    garage.address = "1 Test Street"
+    garage.postcode = "TE1 1ST"
+    appointment_type.base_price = Decimal("54.85")
+    session.commit()
+
+    r = _send(garage, PHONE_RAW, "what are your prices, opening hours and address?", now=_now())
+    body = r.response_text
+    assert "17:00" in body  # hours
+    assert "TE1 1ST" in body  # address
+    assert "£" in body  # price
+    assert r.needs_human is False
+
+
+def test_multi_intent_faq_mid_booking_then_resume(
+    session, garage, garage_schedule, appointment_type, user
+):
+    appointment_type.base_price = Decimal("54.85")
+    session.commit()
+    now = _now()
+    _send(garage, PHONE_RAW, "can I book an appointment please", now=now)
+    assert _session(garage).workflow_step == "AWAITING_TYPE"
+
+    # The exact production message that used to loop "which service?".
+    r = _send(
+        garage,
+        PHONE_RAW,
+        "actually answer questions about prices opening hours and where you are",
+        now=now,
+    )
+    assert r.needs_human is False
+    assert "17:00" in r.response_text
+    assert "£" in r.response_text
+    assert _session(garage).workflow_step == "AWAITING_RESUME"
+
+
+def test_start_again_resets_a_half_filled_booking(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _to_awaiting_date(garage, now)
+
+    r = _send(garage, PHONE_RAW, "start again", now=now)
+    assert r.needs_human is False
+    sess = _session(garage)
+    assert sess.workflow_step is None
+    assert sess.context == {}
+
+
+def test_back_to_the_beginning_is_never_matched_to_a_service(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _send(garage, PHONE_RAW, "can I book an appointment please", now=now)  # AWAITING_TYPE
+
+    r = _send(garage, PHONE_RAW, "back to the beginning", now=now)
+    assert r.needs_human is False  # did NOT escalate
+    assert "which" not in r.response_text.lower()  # not "which service?"
+    assert _session(garage).workflow_step is None
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
+
+
+def test_cancel_that_mid_booking_stops_the_flow(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _to_awaiting_date(garage, now)
+
+    r = _send(garage, PHONE_RAW, "cancel that", now=now)
+    assert r.needs_human is False
+    assert "nothing has been booked" in r.response_text.lower()
+    # A fresh message afterwards starts clean, not mid-booking.
+    r2 = _send(garage, PHONE_RAW, "what are your opening hours", now=now)
+    assert r2.workflow_step is None
+    assert "17:00" in r2.response_text
+
+
+def test_never_mind_mid_booking_stops_the_flow(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _to_awaiting_date(garage, now)
+    r = _send(garage, PHONE_RAW, "never mind", now=now)
+    assert r.needs_human is False
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
+
+
+def test_go_back_from_time_returns_to_the_date_step(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _to_awaiting_date(garage, now)
+    r = _send(garage, PHONE_RAW, _next_open_weekday(now).strftime("%A"), now=now)
+    assert r.workflow_step == "AWAITING_TIME"
+
+    r2 = _send(garage, PHONE_RAW, "go back", now=now)
+    assert r2.needs_human is False
+    assert r2.workflow_step == "AWAITING_DATE"
+
+
+def test_correction_of_the_service_still_works_mid_flow(
+    session, garage, garage_schedule, appointment_type, user
+):
+    service = GarageAppointmentType(
+        garage_id=garage.id, name="Service", status="ACTIVE", default_duration_minutes=90
+    )
+    session.add(service)
+    session.commit()
+
+    now = _now()
+    _to_awaiting_date(garage, now)
+    r = _send(garage, PHONE_RAW, "actually I need a Service instead", now=now)
+    assert r.needs_human is False
+    assert _session(garage).context["appointment_type_id"] == str(service.id)
+
+
+def test_one_odd_message_mid_booking_does_not_hand_off(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    _to_awaiting_date(garage, now)
+    r = _send(garage, PHONE_RAW, "asdkjhaskjdh", now=now)
+    assert r.needs_human is False  # clarify, don't escalate

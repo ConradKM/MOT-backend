@@ -97,19 +97,46 @@ before the generic "mot" keyword in `CREATE_BOOKING` ever gets a chance:
 `RESCHEDULE_APPOINTMENT`, `CANCEL_APPOINTMENT`, `APPOINTMENT_PRICE_QUERY`,
 `APPOINTMENT_TYPE_QUERY`, `BUSINESS_HOURS_QUERY`, `BUSINESS_LOCATION_QUERY`,
 `MOT_EXPIRY_QUERY`, `CUSTOMER_DETAILS_QUERY`, `CALLBACK_REQUEST`,
-`SPEAK_TO_HUMAN`, `GREETING`, `SMALL_TALK`, `GENERAL_QUERY`, `UNKNOWN`.
+`SPEAK_TO_HUMAN`, `GREETING`, `SMALL_TALK`, `RESET_FLOW`, `ABANDON_FLOW`,
+`GO_BACK`, `GENERAL_QUERY`, `UNKNOWN`.
 
 `resolve()` first normalises the message (lower-case, trim punctuation,
 expand common WhatsApp shorthand - `u`/`ur`/`pls`/`appt`/`tmrw`/`resched`),
-then runs the ordered rules. Only if nothing actionable matches does a bare
-"hi" / "help" / "menu" become `GREETING` (a short capability intro) or a
-"thanks" / "that's all" become `SMALL_TALK` - a greeting *with* a request
-("hi, can I book an MOT") still routes to the request.
+then checks the **navigation** phrases ("start again", "back to the
+beginning", "cancel that", "never mind", "go back") - anchored to the whole
+message so "cancel that" is `ABANDON_FLOW` while "cancel my appointment on
+Friday" still falls through to `CANCEL_APPOINTMENT`. Then the ordered
+rules. Only if nothing actionable matches does a bare "hi" / "help" / "menu"
+become `GREETING` (a short capability intro) or a "thanks" / "that's all"
+become `SMALL_TALK` - a greeting *with* a request ("hi, can I book an MOT")
+still routes to the request.
 
-`INTERRUPT_INTENTS = (SPEAK_TO_HUMAN, CALLBACK_REQUEST, CANCEL_APPOINTMENT)` -
-a customer can always ask for a human, a callback, or to cancel outright,
-even mid-booking-flow; `engine._dispatch` checks this before trying to
-interpret a reply as whatever slot is currently being asked for.
+## Interruptible workflows
+
+`engine._dispatch` never treats a mid-workflow message as slot input
+blindly. In order, once a `workflow_step` is set:
+
+1. **`NAV_INTENTS` (`RESET_FLOW` / `ABANDON_FLOW` / `GO_BACK`)** -
+   `reset_flow` wipes the slot context and asks what the customer wants;
+   `abandon_flow` stops the flow (nothing booked); `go_back` walks the
+   booking one step back (`workflows._step_back`). "back to the beginning"
+   is never passed to appointment matching.
+2. **`INTERRUPT_INTENTS` (`SPEAK_TO_HUMAN` / `CALLBACK_REQUEST` /
+   `CANCEL_APPOINTMENT`)** - a human / callback / cancel-an-appointment
+   always wins.
+3. **A clear FAQ mid-flow** (`intents.detect_faq_intents` - hours, location,
+   price, service list) - the question(s) are answered in one reply and the
+   flow is parked at `AWAITING_RESUME` (`context.resume_step` /
+   `resume_intent`). `handle_awaiting_resume` then takes "yes"/"continue" as
+   resume, "no" as abandon, and anything else as the answer to the paused
+   step (so "Friday" both resumes and moves on). Several FAQ intents in one
+   message are all answered (`_combined_faq`).
+4. Otherwise the step handler runs - which does its own `_maybe_correct`
+   check for an in-step correction ("actually make it Friday").
+
+At the top level (no active workflow) a multi-FAQ message
+("prices, opening hours and address?") is likewise answered in full rather
+than narrowed to one intent.
 
 ---
 

@@ -53,13 +53,25 @@ def _speech_hints(garage) -> str:
     return ", ".join(out)[:_HINTS_MAX_CHARS]
 
 
+def _welcome_greeting(garage) -> str:
+    """Point callers at the stronger channels first (online booking, and
+    WhatsApp when the business has it), then offer to help on the call.
+    Voice conversational quality is a later dedicated task - until then the
+    greeting sets expectations honestly."""
+    settings = getattr(garage, "communication_settings", None)
+    has_whatsapp = bool(settings and (settings.whatsapp_sender or settings.messaging_service_sid))
+    quickest = "book online or message us on WhatsApp" if has_whatsapp else "book online"
+    return (
+        f"Thanks for calling {garage.name}. I can help with booking enquiries here, "
+        f"though for the quickest service you can {quickest}. How can I help?"
+    )
+
+
 def build_incoming_call_twiml(garage) -> str:
     """The ConversationRelay TwiML for a resolved inbound call. Raises on a
     genuine build error so the caller can fall back to the static greeting."""
     cfg = current_app.config
-    greeting = (
-        f"Thanks for calling {garage.name}. I'm the automated booking assistant. How can I help?"
-    )
+    greeting = _welcome_greeting(garage)
 
     response = VoiceResponse()
     connect = response.connect()
