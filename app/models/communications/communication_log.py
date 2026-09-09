@@ -82,7 +82,7 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     # The staff member who placed this, for a browser (Voice SDK) outbound
     # call. Null for everything else - inbound calls, WhatsApp, automation.
     initiated_by_employee_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("employees.id", ondelete="SET NULL")
+        Uuid, ForeignKey("employees.id", ondelete="SET NULL"), index=True
     )
 
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
