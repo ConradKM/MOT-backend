@@ -7,5 +7,7 @@ Your {{ service_name }} appointment with {{ business_name }} is complete. Here's
 {% endfor %}
 {% endif %}{% if appointment_notes %}
 Notes from {{ business_name }}: {{ appointment_notes }}
+{% endif %}{% if login_url %}
+View your appointment: {{ login_url }}
 {% endif %}
 Thanks for choosing {{ business_name }}.

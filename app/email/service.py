@@ -177,6 +177,15 @@ def _vehicle_label(vehicle) -> str | None:
     return label
 
 
+def _login_url() -> str | None:
+    """The customer portal's sign-in page (APP_BASE_URL + "/login") - never a
+    staff URL. Used both as the account-created email's "Sign in" link and as
+    the "View your appointment" link on the appointment emails, so both point
+    at the same place customers already know from CustomerSetPassword."""
+    base = (current_app.config.get("APP_BASE_URL") or "").rstrip("/")
+    return f"{base}/login" if base else None
+
+
 def _appointment_context(appointment) -> dict:
     garage = appointment.garage
     customer = appointment.customer
@@ -191,6 +200,7 @@ def _appointment_context(appointment) -> dict:
         "end_time": appointment.end_time,
         "vehicle_label": _vehicle_label(appointment.vehicle),
         "notes": appointment.notes,
+        "login_url": _login_url(),
     }
 
 
@@ -199,7 +209,6 @@ def send_account_created_email(customer) -> CommunicationLog | None:
     app/customer_auth/routes.py::CustomerSetPassword. Never includes the
     password itself, only the email address it's now tied to."""
     garage = customer.garage
-    base_url = (current_app.config.get("APP_BASE_URL") or "").rstrip("/") or None
     return _send(
         garage=garage,
         to=customer.email,
@@ -212,7 +221,7 @@ def send_account_created_email(customer) -> CommunicationLog | None:
             "business_address": garage.address,
             "first_name": customer.first_name,
             "email": customer.email,
-            "sign_in_url": base_url,
+            "sign_in_url": _login_url(),
         },
         trigger_event=ACCOUNT_CREATED,
         customer=customer,

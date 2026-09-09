@@ -24,6 +24,11 @@
 {% if appointment_notes %}
 <p style="margin:0 0 16px; font-size:14px; color:#374151;"><strong>Notes from {{ business_name }}:</strong> {{ appointment_notes }}</p>
 {% endif %}
+{% if login_url %}
+<p style="margin:0 0 20px;">
+  <a href="{{ login_url }}" style="display:inline-block; background-color:#1f2937; color:#ffffff; text-decoration:none; padding:10px 20px; border-radius:6px; font-size:14px;">View your appointment</a>
+</p>
+{% endif %}
 <p style="margin:0; font-size:13px; color:#9ca3af;">
   Thanks for choosing {{ business_name }}.
 </p>

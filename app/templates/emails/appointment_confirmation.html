@@ -11,6 +11,11 @@
   {% if vehicle_label %}<tr><td style="padding:4px 0; color:#6b7280;">Vehicle</td><td style="padding:4px 0; text-align:right;">{{ vehicle_label }}</td></tr>{% endif %}
 </table>
 {% if notes %}<p style="margin:0 0 16px; font-size:14px; color:#374151;"><strong>Notes:</strong> {{ notes }}</p>{% endif %}
+{% if login_url %}
+<p style="margin:0 0 20px;">
+  <a href="{{ login_url }}" style="display:inline-block; background-color:#1f2937; color:#ffffff; text-decoration:none; padding:10px 20px; border-radius:6px; font-size:14px;">View your appointment</a>
+</p>
+{% endif %}
 <p style="margin:0; font-size:13px; color:#9ca3af;">
   Need to change anything? Contact {{ business_name }}{% if business_phone %} on {{ business_phone }}{% endif %}.
 </p>
