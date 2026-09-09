@@ -272,8 +272,17 @@ def set_conversation_archived(garage, phone_e164: str, archived: bool) -> None:
 
 
 def soft_delete_conversation(garage, phone_e164: str) -> None:
-    """Owner-only. Hides the thread from every filter; the message history
-    rows are untouched (nothing is unsent - see the model docstring)."""
+    """Owner-only. Clears the current thread out of the inbox: ``deleted_at``
+    is a *cut-off*, not a permanent block. Every message up to now stops
+    showing (in any filter, and in the thread view), but the phone number is
+    not suppressed - a later inbound or outbound message has a timestamp
+    after this cut-off, so it starts a genuinely fresh thread that appears in
+    the Inbox with normal unread/automation behaviour.
+
+    The ``CommunicationLog`` rows are left in place for audit (they still
+    surface on the customer's own communications history); they just don't
+    repopulate the new thread. Archiving is cleared too - delete supersedes
+    it, and a reactivated thread must not come back pre-archived."""
     state = WhatsAppConversationState.query.filter_by(
         garage_id=garage.id, phone_e164=phone_e164
     ).first()
@@ -281,6 +290,7 @@ def soft_delete_conversation(garage, phone_e164: str) -> None:
         state = WhatsAppConversationState(garage_id=garage.id, phone_e164=phone_e164)
         db.session.add(state)
     state.deleted_at = datetime.now(UTC)
+    state.archived_at = None
     db.session.commit()
 
 
@@ -300,7 +310,9 @@ def list_conversations(
       handed-off automation session
     * ``archived`` - archived threads (still not deleted)
 
-    A soft-deleted thread never appears in any of them.
+    A soft-deleted thread drops out of all of them, but only up to its
+    deletion cut-off: a later message reopens it as a fresh thread (see
+    ``soft_delete_conversation``).
 
     Grouped in Python from CommunicationLog rows rather than a dedicated
     Conversation table or a windowed SQL query - the simplest correct thing
@@ -316,16 +328,32 @@ def list_conversations(
         .all()
     )
 
+    states = _conversation_states(garage)
+    # `deleted_at` is a cut-off, not a tombstone: a thread that was deleted
+    # is rebuilt from scratch by any message that arrives afterwards. Rows at
+    # or before the cut-off belong to the closed thread and are dropped here,
+    # so a phone with nothing newer simply doesn't appear.
+    delete_cutoffs = {
+        phone: s.deleted_at for phone, s in states.items() if s.deleted_at is not None
+    }
+
     conversations: dict[str, dict] = {}
     for row in rows:
         counterpart = row.from_address if row.direction == DIRECTION_INBOUND else row.to_address
         if not counterpart:
             continue
 
+        phone = _strip_whatsapp_prefix(counterpart)
+        if phone is None:
+            continue
+        cutoff = delete_cutoffs.get(phone)
+        if cutoff is not None and row.created_at <= cutoff:
+            continue
+
         convo = conversations.get(counterpart)
         if convo is None:
             convo = {
-                "phone": _strip_whatsapp_prefix(counterpart),
+                "phone": phone,
                 "customer": row.customer,
                 "last_message": row,
                 "unread_count": 0,
@@ -337,14 +365,18 @@ def list_conversations(
         if row.direction == DIRECTION_INBOUND and row.read_at is None:
             convo["unread_count"] += 1
 
-    states = _conversation_states(garage)
     handoff = _handoff_phones(garage) if conversation_filter == "needs_attention" else set()
     result: list[dict] = []
     for convo in conversations.values():
         state = states.get(convo["phone"])
-        if state is not None and state.deleted_at is not None:
-            continue  # soft-deleted: never shown
-        archived = state is not None and state.archived_at is not None
+        # Only surviving rows reached this point, so a thread here is live by
+        # definition. An `archived_at` from before a delete cut-off is stale
+        # (delete clears it anyway) and must not re-archive the fresh thread.
+        archived = (
+            state is not None
+            and state.archived_at is not None
+            and (state.deleted_at is None or state.archived_at > state.deleted_at)
+        )
         convo["archived"] = archived
 
         if conversation_filter == "archived":
@@ -378,17 +410,23 @@ def get_conversation_messages(
     garage, phone_e164: str, *, limit: int | None = None
 ) -> list[CommunicationLog]:
     """Chronological (oldest first) - the most recent ``limit`` messages,
-    reversed back into reading order."""
+    reversed back into reading order.
+
+    If the thread was deleted, only messages after that cut-off are returned:
+    the reopened thread starts fresh from the deletion point, it does not
+    replay the old history (those rows still exist for audit)."""
     address = _whatsapp_address(phone_e164)
-    rows = (
-        CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_WHATSAPP)
-        .filter(
-            or_(CommunicationLog.from_address == address, CommunicationLog.to_address == address)
-        )
-        .order_by(CommunicationLog.created_at.desc())
-        .limit(_clamp_limit(limit))
-        .all()
+    query = CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_WHATSAPP).filter(
+        or_(CommunicationLog.from_address == address, CommunicationLog.to_address == address)
     )
+
+    state = WhatsAppConversationState.query.filter_by(
+        garage_id=garage.id, phone_e164=phone_e164
+    ).first()
+    if state is not None and state.deleted_at is not None:
+        query = query.filter(CommunicationLog.created_at > state.deleted_at)
+
+    rows = query.order_by(CommunicationLog.created_at.desc()).limit(_clamp_limit(limit)).all()
     return list(reversed(rows))
 
 

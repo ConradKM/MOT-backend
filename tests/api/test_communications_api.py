@@ -745,6 +745,7 @@ PHONE = "+447123400777"
 
 
 def _wa(session, garage, direction="INBOUND", **over):
+    over.setdefault("body", "hi")
     return _log(
         session,
         garage,
@@ -752,7 +753,6 @@ def _wa(session, garage, direction="INBOUND", **over):
         direction=direction,
         from_address=ADDR if direction == "INBOUND" else WHATSAPP_SENDER,
         to_address=WHATSAPP_SENDER if direction == "INBOUND" else ADDR,
-        body="hi",
         **over,
     )
 
@@ -861,10 +861,10 @@ def test_soft_delete_is_owner_only(session, garage, staff_role, client):
     assert resp.status_code == 403
 
 
-def test_soft_delete_hides_from_every_filter_but_keeps_history(
+def test_soft_delete_hides_from_every_filter_and_clears_the_thread_view(
     session, garage, authenticated_client
 ):
-    _wa(session, garage)
+    log = _wa(session, garage)
     assert (
         authenticated_client.delete(f"/api/communications/conversations/{PHONE}").status_code == 204
     )
@@ -872,7 +872,121 @@ def test_soft_delete_hides_from_every_filter_but_keeps_history(
         assert PHONE not in _phones(
             authenticated_client.get(f"/api/communications/conversations?filter={f}")
         )
+    # The thread view is cleared - it does not replay the closed history...
     msgs = authenticated_client.get(
         f"/api/communications/conversations/{PHONE}/messages"
     ).get_json()
-    assert len(msgs["messages"]) == 1  # nothing unsent, history intact
+    assert msgs["messages"] == []
+    # ...but nothing is unsent and the row is still stored for audit.
+    assert CommunicationLog.query.filter_by(id=log.id).count() == 1
+
+
+def test_soft_deleted_thread_reappears_fresh_when_the_customer_messages_again(
+    session, garage, authenticated_client
+):
+    old = datetime(2026, 9, 1, tzinfo=UTC)
+    _wa(session, garage, body="old history", created_at=old, read_at=old)
+    assert (
+        authenticated_client.delete(f"/api/communications/conversations/{PHONE}").status_code == 204
+    )
+    assert PHONE not in _phones(authenticated_client.get("/api/communications/conversations"))
+
+    # A brand-new inbound message, after the deletion cut-off.
+    _wa(session, garage, body="hello again", read_at=None)
+
+    inbox = authenticated_client.get("/api/communications/conversations").get_json()
+    item = next(c for c in inbox["items"] if c["phone"] == PHONE)
+    assert item["archived"] is False
+    assert item["unread_count"] == 1  # new-message notification works
+    assert item["last_message"]["body"] == "hello again"
+
+    # The reopened thread starts from the deletion point - no old history.
+    msgs = authenticated_client.get(
+        f"/api/communications/conversations/{PHONE}/messages"
+    ).get_json()["messages"]
+    assert [m["body"] for m in msgs] == ["hello again"]
+
+
+def test_soft_deleted_thread_reopens_on_a_new_outbound_message(
+    session, garage, authenticated_client, customer
+):
+    customer.phone = PHONE
+    session.commit()
+    _wa(session, garage, body="old", created_at=datetime(2026, 9, 1, tzinfo=UTC))
+    authenticated_client.delete(f"/api/communications/conversations/{PHONE}")
+    assert PHONE not in _phones(authenticated_client.get("/api/communications/conversations"))
+
+    resp = authenticated_client.post(
+        "/api/communications/whatsapp/send",
+        json={"customer_id": str(customer.id), "body": "reopening the thread"},
+    )
+    assert resp.status_code == 200
+
+    inbox = authenticated_client.get("/api/communications/conversations").get_json()
+    item = next(c for c in inbox["items"] if c["phone"] == PHONE)
+    assert item["last_message"]["body"] == "reopening the thread"
+    msgs = authenticated_client.get(
+        f"/api/communications/conversations/{PHONE}/messages"
+    ).get_json()["messages"]
+    assert [m["body"] for m in msgs] == ["reopening the thread"]
+
+
+def test_soft_delete_does_not_touch_the_customer_or_their_audit_history(
+    session, garage, authenticated_client, customer
+):
+    customer.phone = PHONE
+    session.commit()
+    _wa(session, garage, body="history", customer_id=customer.id)
+    authenticated_client.delete(f"/api/communications/conversations/{PHONE}")
+
+    # Customer record untouched...
+    from app.models.customer import Customer
+
+    assert Customer.query.filter_by(id=customer.id).count() == 1
+    # ...and their own communications history still shows the message.
+    audit = authenticated_client.get(f"/api/customers/{customer.id}/communications").get_json()
+    assert any(row["body"] == "history" for row in audit)
+
+
+def test_soft_delete_reactivation_is_tenant_scoped(
+    session, garage, second_garage, authenticated_client
+):
+    _wa(session, garage, body="A old", created_at=datetime(2026, 9, 1, tzinfo=UTC))
+    _log(
+        session,
+        second_garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address=ADDR,
+        to_address=WHATSAPP_SENDER,
+        body="B thread",
+    )
+    authenticated_client.delete(f"/api/communications/conversations/{PHONE}")
+    _wa(session, garage, body="A fresh")
+
+    from app.communications import queries
+
+    a_items, _ = queries.list_conversations(garage)
+    b_items, _ = queries.list_conversations(second_garage)
+    a = next(c for c in a_items if c["phone"] == PHONE)
+    b = next(c for c in b_items if c["phone"] == PHONE)
+    assert a["last_message"].body == "A fresh"
+    assert b["last_message"].body == "B thread"  # garage B never affected
+
+
+def test_automation_still_replies_after_a_thread_was_deleted(session, garage, authenticated_client):
+    """Deleting the inbox thread is staff-only view state - it must not stop
+    the conversation engine handling the customer's next inbound message."""
+    _wa(session, garage, body="old", created_at=datetime(2026, 9, 1, tzinfo=UTC))
+    authenticated_client.delete(f"/api/communications/conversations/{PHONE}")
+
+    from app.communications import queries
+
+    # The engine reads the thread the same way; after deletion it sees a
+    # clean slate, then the new inbound, exactly like a first-time contact.
+    _wa(session, garage, body="I need an MOT", read_at=None)
+    msgs = queries.get_conversation_messages(garage, PHONE)
+    assert [m.body for m in msgs] == ["I need an MOT"]
+
+    inbox, _ = queries.list_conversations(garage, conversation_filter="needs_attention")
+    assert any(c["phone"] == PHONE and c["unread_count"] == 1 for c in inbox)
