@@ -49,6 +49,11 @@ AWAITING_RESCHEDULE_CONFIRMATION = "AWAITING_RESCHEDULE_CONFIRMATION"
 
 AWAITING_CALLBACK_REASON = "AWAITING_CALLBACK_REASON"
 
+# Not a slot-fill step: the customer asked something off-topic mid-flow, we
+# answered it, and now we're waiting to hear whether they want to carry on
+# with the paused workflow (context carries `resume_step` / `resume_intent`).
+AWAITING_RESUME = "AWAITING_RESUME"
+
 _YES_WORDS = {
     "yes",
     "yep",
@@ -130,6 +135,10 @@ class StepResult:
     needs_human: bool = False
     handoff_reason: str | None = None
     complete: bool = False
+    # Wipe the session's slot context before applying the rest of this
+    # result - used by "start again" / "cancel that" so a fresh flow doesn't
+    # inherit a half-filled booking. context_updates still merge on top.
+    reset_context: bool = False
 
 
 @dataclass
@@ -1430,6 +1439,154 @@ def handle_small_talk(ctx: ConversationContext, text: str) -> StepResult:
 
 
 # --------------------------------------------------------------------------
+# Flow control - "start again" / "cancel that" / "go back" / resume-after-aside
+# --------------------------------------------------------------------------
+
+_MENU_LINE = (
+    "I can help you book, check, change or cancel an appointment, or answer "
+    "questions about prices, opening hours and where we are."
+)
+
+
+def reset_flow(ctx: ConversationContext, text: str = "") -> StepResult:
+    """ "Start again" / "back to the beginning" - drop any half-filled booking
+    and hand control back to the customer."""
+    return StepResult(
+        response_text=f"No problem - let's start fresh. What would you like to do? {_MENU_LINE}",
+        workflow_step=None,
+        reset_context=True,
+    )
+
+
+def abandon_flow(ctx: ConversationContext, text: str = "") -> StepResult:
+    """ "Cancel that" / "never mind" - stop the current flow. Nothing was
+    booked; the next message starts clean."""
+    return StepResult(
+        response_text=(
+            "Okay, I've stopped that - nothing has been booked. "
+            "Message any time you'd like to pick it back up."
+        ),
+        workflow_step=None,
+        complete=True,
+        reset_context=True,
+    )
+
+
+def go_back(ctx: ConversationContext, text: str = "") -> StepResult:
+    """ "Go back a step". Booking has a real step-by-step history to walk;
+    the shorter cancel/reschedule flows just restart cleanly."""
+    step = ctx.session.workflow_step
+    if ctx.session.intent == CREATE_BOOKING and step in BOOKING_STEP_HANDLERS:
+        return _step_back(ctx, step)
+    if step == AWAITING_RESUME:
+        return _reprompt_step(ctx, ctx.slots.get("resume_step"), ctx.slots.get("resume_intent"))
+    return reset_flow(ctx)
+
+
+_RESUME_VERBS = {
+    CREATE_BOOKING: "carry on with your booking",
+    RESCHEDULE_APPOINTMENT: "carry on rescheduling your appointment",
+    CANCEL_APPOINTMENT: "carry on cancelling your appointment",
+}
+_RESUME_YES = (
+    "continue",
+    "carry on",
+    "carry-on",
+    "keep going",
+    "keep booking",
+    "go on",
+    "resume",
+    "back to booking",
+    "back to the booking",
+    "the booking",
+    "my booking",
+    "where we were",
+    "where we left off",
+)
+
+
+def resume_prompt(intent: str | None) -> str:
+    verb = _RESUME_VERBS.get(intent or "", "carry on where we left off")
+    return f"Would you like to {verb}?"
+
+
+def _reprompt_step(
+    ctx: ConversationContext, step: str | None, intent: str | None = None
+) -> StepResult:
+    """Re-ask the question a paused workflow step was waiting on, so a
+    resumed conversation doesn't leave the customer guessing."""
+    slots = ctx.slots
+    if step == AWAITING_TYPE or step == AWAITING_TYPE_CHOICE:
+        names = ", ".join(t.name for t in actions.get_appointment_types(ctx.garage))
+        return StepResult(
+            response_text=f"Great - which service would you like? {names}",
+            workflow_step=AWAITING_TYPE,
+        )
+    if step == AWAITING_NAME:
+        return StepResult(
+            response_text="Could I get your full name to put on the booking?",
+            workflow_step=AWAITING_NAME,
+        )
+    if step == AWAITING_DATE:
+        return StepResult(
+            response_text="What day would you like to come in?", workflow_step=AWAITING_DATE
+        )
+    if step == AWAITING_TIME and slots.get("preferred_date"):
+        return _offer_times_for_date(ctx, date.fromisoformat(slots["preferred_date"]), {})
+    if step in (AWAITING_VEHICLE_CONFIRM, AWAITING_VEHICLE_CHOICE) and slots.get("preferred_time"):
+        return _after_time_resolved(ctx, {})
+    if step == AWAITING_VEHICLE_REG:
+        return StepResult(
+            response_text="What's the vehicle's registration number?",
+            workflow_step=AWAITING_VEHICLE_REG,
+        )
+    if step == AWAITING_BOOKING_CONFIRMATION and slots.get("preferred_time"):
+        return _to_confirmation(ctx, {})
+    if step in (AWAITING_RESCHEDULE_DATE, AWAITING_RESCHEDULE_TIME):
+        return StepResult(
+            response_text="What day would you like to move it to?",
+            workflow_step=AWAITING_RESCHEDULE_DATE,
+        )
+    # Anything we can't cleanly re-enter (a mid-vehicle step with no time, an
+    # unknown step): fall back to a clean start rather than a dead end.
+    return reset_flow(ctx)
+
+
+def handle_awaiting_resume(ctx: ConversationContext, text: str) -> StepResult:
+    """After we answered an off-topic question mid-flow: is the customer
+    carrying on, dropping it, or just going ahead and answering the paused
+    step? (Another off-topic question is caught by engine._dispatch before
+    it reaches here.)"""
+    lowered = text.strip().lower()
+    resume_step = ctx.slots.get("resume_step")
+    resume_intent = ctx.slots.get("resume_intent")
+
+    if _is_no(text):
+        return StepResult(
+            response_text=(
+                "No problem - I haven't booked anything. Message any time you'd like to."
+            ),
+            workflow_step=None,
+            complete=True,
+            reset_context=True,
+        )
+
+    handler = STEP_HANDLERS.get(resume_step) if resume_step else None
+    if handler is None:
+        return StepResult(
+            response_text=f"Let's carry on. What would you like to do? {_MENU_LINE}",
+            workflow_step=None,
+        )
+
+    if _is_yes(text) or any(p in lowered for p in _RESUME_YES):
+        return _reprompt_step(ctx, resume_step, resume_intent)
+
+    # Not an explicit yes/no - treat it as the answer to the paused step, so
+    # "Friday" both resumes and moves the booking on.
+    return handler(ctx, text)
+
+
+# --------------------------------------------------------------------------
 # SPEAK_TO_HUMAN / CALLBACK_REQUEST
 # --------------------------------------------------------------------------
 
@@ -1482,6 +1639,7 @@ STEP_HANDLERS = {
     **RESCHEDULE_STEP_HANDLERS,
     **MOT_STEP_HANDLERS,
     **CALLBACK_STEP_HANDLERS,
+    AWAITING_RESUME: handle_awaiting_resume,
 }
 
 INTENT_STARTERS = {

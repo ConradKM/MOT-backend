@@ -133,6 +133,33 @@ def test_incoming_call_returns_conversationrelay_twiml_when_enabled(
     assert appointment_type.name in body  # a speech hint
 
 
+def test_welcome_greeting_points_callers_at_the_stronger_channels(
+    app, client, voice_business, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    monkeypatch.setitem(app.config, "TWILIO_CONVERSATIONRELAY_ENABLED", True)
+
+    # No WhatsApp sender configured -> online booking only.
+    resp = client.post(
+        "/api/webhooks/twilio/voice/incoming",
+        data={"To": VOICE_NUMBER, "From": CALLER, "CallSid": "CA1"},
+    )
+    body = resp.get_data(as_text=True)
+    assert "book online" in body
+    assert "WhatsApp" not in body
+
+    # With a WhatsApp sender -> mention WhatsApp too.
+    voice_business.communication_settings.whatsapp_sender = "whatsapp:+14155238886"
+    from app.extensions import db
+
+    db.session.commit()
+    resp2 = client.post(
+        "/api/webhooks/twilio/voice/incoming",
+        data={"To": VOICE_NUMBER, "From": CALLER, "CallSid": "CA2"},
+    )
+    assert "WhatsApp" in resp2.get_data(as_text=True)
+
+
 def test_incoming_call_falls_back_to_static_greeting_when_twiml_build_raises(
     app, client, voice_business, monkeypatch
 ):

@@ -32,6 +32,13 @@ GREETING = "GREETING"
 # "thanks" / "cheers" / "that's all" on their own - a polite acknowledgement
 # and close.
 SMALL_TALK = "SMALL_TALK"
+# Navigation / flow-control - a customer steering the conversation itself
+# rather than answering the current question. Handled by engine._dispatch
+# *before* the message is ever passed to a workflow step (so "back to the
+# beginning" is never fed to appointment matching).
+RESET_FLOW = "RESET_FLOW"  # "start again", "back to the beginning", "restart"
+ABANDON_FLOW = "ABANDON_FLOW"  # "cancel that", "never mind", "forget it", "stop"
+GO_BACK = "GO_BACK"  # "go back", "back a step", "undo that"
 GENERAL_QUERY = "GENERAL_QUERY"
 UNKNOWN = "UNKNOWN"
 
@@ -51,8 +58,25 @@ INTENTS = (
     SPEAK_TO_HUMAN,
     GREETING,
     SMALL_TALK,
+    RESET_FLOW,
+    ABANDON_FLOW,
+    GO_BACK,
     GENERAL_QUERY,
     UNKNOWN,
+)
+
+# Steer-the-conversation intents (engine._dispatch handles these before a
+# workflow step ever sees the message).
+NAV_INTENTS = (RESET_FLOW, ABANDON_FLOW, GO_BACK)
+
+# Pure-FAQ intents whose one-shot answer is safe to (a) combine with others
+# in a single reply and (b) answer mid-workflow without disturbing the
+# paused flow.
+FAQ_INTENTS = (
+    BUSINESS_HOURS_QUERY,
+    BUSINESS_LOCATION_QUERY,
+    APPOINTMENT_PRICE_QUERY,
+    APPOINTMENT_TYPE_QUERY,
 )
 
 # Intents that should always win, even mid-workflow - a customer can always
@@ -140,6 +164,41 @@ _SMALL_TALK_RE = re.compile(
     r"that'?s (all|it|everything)|that is all|nothing else|"
     r"no (that'?s|thats) (all|it|everything)|all good|we'?re good|i'?m good|no thanks)"
     r"[\s,]*(thanks|thank you|cheers|bye)?$",
+    re.IGNORECASE,
+)
+
+# Flow-control phrases. Anchored to the whole (normalised) message so
+# "cancel that" is ABANDON_FLOW while "cancel my appointment on Friday" still
+# falls through to CANCEL_APPOINTMENT below. Checked before _RULES so a
+# navigation phrase is never mistaken for a service name or a date.
+# A little conversational filler is allowed in front of any of these.
+_NAV_PREFIX = r"^(please\s+|ok(ay)?,?\s+|right,?\s+|actually,?\s+|erm,?\s+|hmm,?\s+|no,?\s+)*"
+
+_RESET_RE = re.compile(
+    _NAV_PREFIX + r"("
+    r"start (over|again|from scratch|from the start)|"
+    r"restart|reset|start from scratch|start from the beginning|"
+    r"back to (the )?(start|beginning|top|very beginning)|"
+    r"(go )?right back to the start|from the (start|top|beginning)|begin again|"
+    r"let'?s start (over|again)|scrap (all|everything) and start again"
+    r")$",
+    re.IGNORECASE,
+)
+_ABANDON_RE = re.compile(
+    _NAV_PREFIX + r"("
+    r"never ?mind|forget (it|that|about it|this)|forget the whole thing|"
+    r"cancel (that|this|it)|stop( it| this)?|drop it|leave it|"
+    r"not now|not right now|not anymore|don'?t bother|scrap (that|it|this)|"
+    r"i (don'?t|do not) want to (do this|book|continue)( anymore)?|"
+    r"changed my mind"
+    r")$",
+    re.IGNORECASE,
+)
+_GO_BACK_RE = re.compile(
+    _NAV_PREFIX + r"("
+    r"go back( a step| one step)?|back a step|back one step|one step back|"
+    r"previous( step| question)?|undo( that)?|go back to the (last|previous) (step|question)"
+    r")$",
     re.IGNORECASE,
 )
 
@@ -254,13 +313,21 @@ _RULES: tuple[tuple[str, re.Pattern], ...] = (
                 "how much is",
                 "how much does",
                 "how much for",
+                "how much would",
+                "how much will",
+                "how much",
                 "what does it cost",
                 "what's the cost",
                 "what is the cost",
                 "price of",
                 "price for",
+                "prices",
+                "pricing",
+                "price list",
                 "cost of",
                 "cost for",
+                "what do you charge",
+                "how much do you charge",
             )
         ),
     ),
@@ -269,11 +336,21 @@ _RULES: tuple[tuple[str, re.Pattern], ...] = (
         _phrase_pattern(
             (
                 "opening hours",
+                "opening time",
                 "what time do you open",
                 "what time do you close",
+                "when do you open",
+                "when do you close",
+                "how late are you open",
                 "are you open",
+                "you open today",
+                "you open tomorrow",
+                "open on saturday",
+                "open on sunday",
                 "when are you open",
                 "your hours",
+                "what are your hours",
+                "business hours",
             )
         ),
     ),
@@ -282,10 +359,19 @@ _RULES: tuple[tuple[str, re.Pattern], ...] = (
         _phrase_pattern(
             (
                 "where are you",
-                "your address",
-                "what's your address",
+                "where you are",
+                "where you're",
+                "where's your",
+                "where is your",
+                "where are you based",
+                "where you based",
+                "address",
                 "your location",
+                "where's it",
+                "located",
                 "how do i find you",
+                "how to find you",
+                "directions to you",
                 "postcode",
             )
         ),
@@ -295,11 +381,16 @@ _RULES: tuple[tuple[str, re.Pattern], ...] = (
         _phrase_pattern(
             (
                 "what services",
+                "which services",
+                "what services do you",
                 "what do you offer",
                 "what can you do",
                 "do you do mots",
                 "do you do services",
                 "what appointments",
+                "types of appointment",
+                "kind of appointments",
+                "list of services",
             )
         ),
     ),
@@ -357,6 +448,18 @@ _RULES: tuple[tuple[str, re.Pattern], ...] = (
 
 _QUESTION_HINT = re.compile(r"\?|^(what|when|where|how|can|could|do you|is there)\b", re.IGNORECASE)
 
+# The pattern for a given intent, for detect_faq_intents() below.
+_RULE_BY_INTENT: dict[str, re.Pattern] = dict(_RULES)
+
+
+def detect_faq_intents(text: str) -> list[str]:
+    """Every pure-FAQ intent (`FAQ_INTENTS`) whose pattern the message
+    matches, in a stable order - so "prices, opening hours and address"
+    comes back as three intents to answer together, not one picked and the
+    rest dropped. Empty when the message asks nothing FAQ-like."""
+    normalised = _normalise(text)
+    return [i for i in FAQ_INTENTS if _RULE_BY_INTENT[i].search(normalised)]
+
 
 class RuleBasedIntentResolver:
     """Deterministic keyword/phrase matching - no external service, no
@@ -369,6 +472,15 @@ class RuleBasedIntentResolver:
         normalised = _normalise(text)
         if not normalised:
             return UNKNOWN
+
+        # Steering the conversation itself always wins - and "back to the
+        # beginning" must never reach a workflow's slot parser.
+        if _RESET_RE.match(normalised):
+            return RESET_FLOW
+        if _ABANDON_RE.match(normalised):
+            return ABANDON_FLOW
+        if _GO_BACK_RE.match(normalised):
+            return GO_BACK
 
         for intent, pattern in _RULES:
             if pattern.search(normalised):

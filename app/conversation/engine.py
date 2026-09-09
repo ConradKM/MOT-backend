@@ -32,6 +32,7 @@ from app.models.conversation.conversation_session import STATUS_HUMAN_HANDOFF
 
 from . import actions, session_service, workflows
 from .intents import (
+    ABANDON_FLOW,
     APPOINTMENT_PRICE_QUERY,
     APPOINTMENT_TYPE_QUERY,
     BUSINESS_HOURS_QUERY,
@@ -40,13 +41,17 @@ from .intents import (
     CHECK_APPOINTMENT,
     CHECK_AVAILABILITY,
     CUSTOMER_DETAILS_QUERY,
+    GO_BACK,
     GREETING,
     INTERRUPT_INTENTS,
     MOT_EXPIRY_QUERY,
+    NAV_INTENTS,
+    RESET_FLOW,
     SMALL_TALK,
     SPEAK_TO_HUMAN,
     UNKNOWN,
     RuleBasedIntentResolver,
+    detect_faq_intents,
 )
 from .workflows import ConversationContext, StepResult
 
@@ -82,6 +87,19 @@ _ONE_SHOT_HANDLERS = {
     CHECK_AVAILABILITY: workflows.start_booking,
     GREETING: workflows.handle_greeting,
     SMALL_TALK: workflows.handle_small_talk,
+    RESET_FLOW: workflows.reset_flow,
+    ABANDON_FLOW: workflows.reset_flow,
+    GO_BACK: workflows.reset_flow,
+}
+
+# The one-shot handlers whose reply is a self-contained FAQ answer - safe to
+# run several of in one turn, and to run mid-workflow without touching the
+# paused flow.
+_FAQ_HANDLERS = {
+    APPOINTMENT_PRICE_QUERY: workflows.handle_price_query,
+    APPOINTMENT_TYPE_QUERY: workflows.handle_appointment_type_query,
+    BUSINESS_HOURS_QUERY: workflows.handle_business_hours_query,
+    BUSINESS_LOCATION_QUERY: workflows.handle_business_location_query,
 }
 
 
@@ -196,14 +214,28 @@ def handle_message(
 
 
 def _dispatch(ctx: ConversationContext, text: str, intent_guess: str) -> tuple[str, StepResult]:
+    """Route one message. Mid-workflow this classifies the message before
+    ever treating it as slot input:
+
+      D) navigation / reset  ("start again", "go back", "cancel that")
+      E) human handoff / callback / cancel-an-appointment  (INTERRUPT_INTENTS)
+      C) a clear off-topic FAQ ("what time do you close?") - answered, with
+         the booking held so it can resume
+      A/B) the expected answer, or an in-step correction (the step handler,
+           which runs `_maybe_correct` itself)
+    """
     session = ctx.session
 
     if session.workflow_step:
-        # A customer can always interrupt an in-progress flow to ask for a
-        # human, a callback, or to cancel outright - checked before trying
-        # to interpret the reply as whatever slot we were waiting for.
+        if intent_guess in NAV_INTENTS:
+            return _handle_nav(ctx, text, intent_guess)
+
         if intent_guess in INTERRUPT_INTENTS:
             return intent_guess, _start_intent(ctx, intent_guess, text)
+
+        aside = _answer_aside(ctx, text)
+        if aside is not None:
+            return aside
 
         handler = workflows.STEP_HANDLERS.get(session.workflow_step)
         if handler is not None:
@@ -214,7 +246,79 @@ def _dispatch(ctx: ConversationContext, text: str, intent_guess: str) -> tuple[s
             session.workflow_step,
         )
 
+    multi = _answer_multi_faq(ctx, text)
+    if multi is not None:
+        return multi
+
     return intent_guess, _start_intent(ctx, intent_guess, text)
+
+
+def _handle_nav(ctx: ConversationContext, text: str, intent_guess: str) -> tuple[str, StepResult]:
+    """Steer-the-conversation commands, handled without the current step ever
+    seeing the message (so "back to the beginning" never reaches appointment
+    matching)."""
+    if intent_guess == RESET_FLOW:
+        return RESET_FLOW, workflows.reset_flow(ctx, text)
+    if intent_guess == ABANDON_FLOW:
+        return ABANDON_FLOW, workflows.abandon_flow(ctx, text)
+    # GO_BACK - keep the flow's own intent so the session stays "in" it.
+    return ctx.session.intent or GO_BACK, workflows.go_back(ctx, text)
+
+
+def _combined_faq(ctx: ConversationContext, intents: list[str], text: str) -> str:
+    """Run each FAQ handler and join its answer - "prices, hours and where
+    are you" comes back as all three, concisely, in one reply."""
+    parts: list[str] = []
+    for intent in intents:
+        handler = _FAQ_HANDLERS.get(intent)
+        if handler is None:
+            continue
+        answer = handler(ctx, text).response_text
+        if answer and answer not in parts:
+            parts.append(answer)
+    return "\n\n".join(parts)
+
+
+def _answer_multi_faq(ctx: ConversationContext, text: str) -> tuple[str, StepResult] | None:
+    """Top-level (no active workflow): a message asking several FAQ things at
+    once is answered in full, not narrowed to one."""
+    found = detect_faq_intents(text)
+    if len(found) < 2:
+        return None
+    body = _combined_faq(ctx, found, text)
+    if not body:
+        return None
+    return found[0], StepResult(
+        response_text=f"{body}\n\nIf you'd like to book one in, just let me know.",
+        workflow_step=None,
+        complete=True,
+    )
+
+
+def _answer_aside(ctx: ConversationContext, text: str) -> tuple[str, StepResult] | None:
+    """Mid-workflow: the message is a clear FAQ, not an answer to the current
+    step. Answer it (all of it, if several were asked), then hold the flow at
+    AWAITING_RESUME so the customer can carry on."""
+    found = detect_faq_intents(text)
+    if not found:
+        return None
+    body = _combined_faq(ctx, found, text)
+    if not body:
+        return None
+
+    session = ctx.session
+    if session.workflow_step == workflows.AWAITING_RESUME:
+        paused_step = ctx.slots.get("resume_step")
+        paused_intent = ctx.slots.get("resume_intent")
+    else:
+        paused_step = session.workflow_step
+        paused_intent = session.intent
+
+    return session.intent or found[0], StepResult(
+        response_text=f"{body}\n\n{workflows.resume_prompt(paused_intent)}",
+        workflow_step=workflows.AWAITING_RESUME,
+        context_updates={"resume_step": paused_step, "resume_intent": paused_intent},
+    )
 
 
 def _start_intent(ctx: ConversationContext, intent: str, text: str) -> StepResult:
@@ -233,22 +337,32 @@ def _start_intent(ctx: ConversationContext, intent: str, text: str) -> StepResul
 
 
 def _unresolved(ctx: ConversationContext) -> StepResult:
-    """GENERAL_QUERY / UNKNOWN - re-prompt once, then hand off rather than
-    looping forever (Part 19's "repeated failed intent detection")."""
+    """GENERAL_QUERY / UNKNOWN - clarify (not escalate) for the first few
+    turns, then hand off rather than looping forever (Part 19's "repeated
+    failed intent detection")."""
     count = int(ctx.slots.get("unresolved_count", 0)) + 1
     if count >= _max_unresolved_turns():
         return StepResult(
-            response_text="I'll get a member of staff to help with that.",
+            response_text=(
+                "I'm not quite following - let me get a member of the team to help you."
+            ),
             workflow_step=None,
             needs_human=True,
             handoff_reason="Repeated failed intent detection.",
         )
+    if count == 1:
+        message = (
+            "I can help you book an appointment, check or change an existing one, or answer "
+            "questions about prices, opening hours and where we are. What would you like to do?"
+        )
+    else:
+        message = (
+            'Sorry, I still didn\'t catch that. Try something like "book an MOT for Friday", '
+            '"how much is a service" or "what are your opening hours" - or say "speak to '
+            'someone" for the team.'
+        )
     return StepResult(
-        response_text=(
-            "Sorry, I didn't quite follow that. I can help you book, check, "
-            "cancel or reschedule an appointment, or connect you with the team - "
-            "what would you like to do?"
-        ),
+        response_text=message,
         workflow_step=None,
         context_updates={"unresolved_count": count},
     )
@@ -270,6 +384,8 @@ def _finalize(session, intent: str, result: StepResult, *, now: datetime) -> Non
     only ``set_workflow_step`` used to record it, so completed one-shot
     turns were silently reported back as UNKNOWN."""
     session.intent = intent
+    if getattr(result, "reset_context", False):
+        session_service.clear_context(session, now=now)
     if result.needs_human:
         session_service.handoff_to_human(
             session, result.handoff_reason or "Automation could not continue safely.", now=now
