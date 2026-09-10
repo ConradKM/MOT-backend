@@ -24,6 +24,13 @@ BUSINESS_HOURS_QUERY = "BUSINESS_HOURS_QUERY"
 BUSINESS_LOCATION_QUERY = "BUSINESS_LOCATION_QUERY"
 MOT_EXPIRY_QUERY = "MOT_EXPIRY_QUERY"
 CUSTOMER_DETAILS_QUERY = "CUSTOMER_DETAILS_QUERY"
+# "you've spelt my name wrong", "change my name to …" - a correction to the
+# customer's own name on their CoMaz record (handled after phone-number
+# identification; writes the canonical Customer row).
+UPDATE_CUSTOMER_NAME = "UPDATE_CUSTOMER_NAME"
+# "change my email / phone / address" - a data change WhatsApp can't safely
+# make; the assistant explains that and offers a human instead of looping.
+UPDATE_CONTACT_DETAILS = "UPDATE_CONTACT_DETAILS"
 CALLBACK_REQUEST = "CALLBACK_REQUEST"
 SPEAK_TO_HUMAN = "SPEAK_TO_HUMAN"
 # A message that's only a hello / "what can you do" / "help" - answered with a
@@ -54,6 +61,8 @@ INTENTS = (
     BUSINESS_LOCATION_QUERY,
     MOT_EXPIRY_QUERY,
     CUSTOMER_DETAILS_QUERY,
+    UPDATE_CUSTOMER_NAME,
+    UPDATE_CONTACT_DETAILS,
     CALLBACK_REQUEST,
     SPEAK_TO_HUMAN,
     GREETING,
@@ -92,6 +101,7 @@ INTERRUPT_INTENTS = (
     CALLBACK_REQUEST,
     CANCEL_APPOINTMENT,
     RESCHEDULE_APPOINTMENT,
+    UPDATE_CUSTOMER_NAME,
 )
 
 
@@ -213,10 +223,36 @@ _GO_BACK_RE = re.compile(
 )
 
 
+# A name correction: "change my name", "my name is wrong / spelt wrong",
+# "that's not my name", "it should be <x>". Deliberately before CREATE_BOOKING
+# so "change my name" never reads as "change" -> reschedule / a booking edit.
+_UPDATE_NAME_RE = re.compile(
+    r"("
+    r"(change|update|correct|fix|amend|edit)\s+(my\s+)?name|"
+    r"my\s+name\s+(is\s+)?(wrong|incorrect|spelt?\s+wrong|misspelt|spelled\s+wrong)|"
+    r"(you'?ve|you\s+have)\s+(got\s+)?my\s+name\s+wrong|"
+    r"(that'?s|that\s+is)\s+not\s+my\s+name|"
+    r"wrong\s+name\s+on\s+(my\s+)?(account|record|file)|"
+    r"my\s+name\s+should\s+be|spelt\s+my\s+name\s+wrong"
+    r")",
+    re.IGNORECASE,
+)
+# Any other "change my <contact detail>" - WhatsApp can't safely do these, so
+# they route to a short explain-and-offer-a-human handler, not the booking flow.
+_UPDATE_DETAILS_RE = re.compile(
+    r"(change|update|correct|amend|edit)\s+(my\s+)?"
+    r"(email(\s+address)?|e-?mail|phone(\s+number)?|mobile(\s+number)?|number|"
+    r"address|postcode|contact\s+details?|details)",
+    re.IGNORECASE,
+)
+
+
 # Ordered most-specific-first: the first matching rule wins, so (e.g.)
 # "when is my mot due" hits MOT_EXPIRY_QUERY before the generic "mot" keyword
 # in CREATE_BOOKING ever gets a chance to misfire.
 _RULES: tuple[tuple[str, re.Pattern], ...] = (
+    (UPDATE_CUSTOMER_NAME, _UPDATE_NAME_RE),
+    (UPDATE_CONTACT_DETAILS, _UPDATE_DETAILS_RE),
     (
         SPEAK_TO_HUMAN,
         _phrase_pattern(

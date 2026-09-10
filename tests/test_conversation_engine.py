@@ -1213,3 +1213,146 @@ def test_one_odd_message_mid_booking_does_not_hand_off(
     _to_awaiting_date(garage, now)
     r = _send(garage, PHONE_RAW, "asdkjhaskjdh", now=now)
     assert r.needs_human is False  # clarify, don't escalate
+
+
+# --------------------------------------------------------------------------
+# Audit regressions - the +44 7925 392354 conversation
+# --------------------------------------------------------------------------
+
+
+def _known(session, customer):
+    customer.phone = PHONE_RAW
+    session.commit()
+    return customer
+
+
+def test_book_for_24th_september_stays_24_september(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    """The exact failure: 'book for the 24th September' was turned into the
+    next Tuesday (15 September)."""
+    _known(session, customer)
+    now = _now()  # Monday 7 September 2026
+
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    r = _send(garage, PHONE_RAW, "the 24th september", now=now)
+
+    assert r.needs_human is False
+    assert "24 September" in r.response_text
+    assert "15 September" not in r.response_text
+    assert r.workflow_step in {"AWAITING_TIME", "AWAITING_DATE"}  # times, or "nothing that day"
+    # If slots were offered, the stored preferred_date is the 24th.
+    if r.workflow_step == "AWAITING_TIME":
+        assert _session(garage).context["preferred_date"] == "2026-09-24"
+
+
+def test_tuesday_24th_september_is_the_24th_not_the_next_tuesday(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    _known(session, customer)
+    now = _now()
+
+    r = _send(garage, PHONE_RAW, "can i book an MOT for Tuesday 24th september", now=now)
+
+    assert r.needs_human is False
+    assert "24 September" in r.response_text
+    assert "15 September" not in r.response_text
+    if r.workflow_step == "AWAITING_TIME":
+        assert _session(garage).context["preferred_date"] == "2026-09-24"
+
+
+def test_a_date_more_than_seven_days_out_is_accepted(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    _known(session, customer)
+    now = _now()
+    far = _next_open_weekday(now, min_days_ahead=21)  # ~3 weeks out
+    phrase = f"{far.day} {far.strftime('%B')}"  # e.g. "28 September"
+
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    r = _send(garage, PHONE_RAW, phrase, now=now)
+
+    assert r.needs_human is False
+    # Not a re-ask, not "we can only book up to ...".
+    assert "what day" not in r.response_text.lower()
+    assert "only take bookings up to" not in r.response_text.lower()
+    assert (
+        far.strftime("%d %B").lstrip("0") in r.response_text
+        or far.strftime("%B") in r.response_text
+    )
+
+
+def test_numeric_date_format_is_understood(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    _known(session, customer)
+    now = _now()
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    r = _send(garage, PHONE_RAW, "24/09", now=now)
+    assert r.needs_human is False
+    assert "24 September" in r.response_text
+
+
+def test_customer_can_correct_their_name_and_it_updates_the_record(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    _known(session, customer)
+    now = _now()
+
+    r1 = _send(garage, PHONE_RAW, "you've spelt my name wrong, it should be Jonathan Reed", now=now)
+    assert r1.needs_human is False
+    assert r1.workflow_step == "AWAITING_NAME_CORRECTION_CONFIRM"
+    assert "Jonathan Reed" in r1.response_text
+
+    r2 = _send(garage, PHONE_RAW, "yes", now=now)
+    assert r2.needs_human is False
+    session.refresh(customer)
+    assert (customer.first_name, customer.last_name) == ("Jonathan", "Reed")
+
+
+def test_name_correction_asks_for_the_name_when_not_given_inline(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    _known(session, customer)
+    now = _now()
+    r1 = _send(garage, PHONE_RAW, "can you change my name?", now=now)
+    assert r1.workflow_step == "AWAITING_NAME_CORRECTION"
+    r2 = _send(garage, PHONE_RAW, "Jonathan Reed", now=now)
+    assert r2.workflow_step == "AWAITING_NAME_CORRECTION_CONFIRM"
+    _send(garage, PHONE_RAW, "yes please", now=now)
+    session.refresh(customer)
+    assert customer.first_name == "Jonathan"
+
+
+def test_name_correction_from_an_unrecognised_number_hands_off(
+    session, garage, garage_schedule, appointment_type, user
+):
+    now = _now()
+    r = _send(garage, "+447999000123", "my name is wrong, change it to Sam Blake", now=now)
+    assert r.needs_human is True
+    assert r.workflow_step is None
+
+
+def test_switching_from_booking_to_name_correction_midflow(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    _known(session, customer)
+    now = _now()
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    assert _session(garage).workflow_step == "AWAITING_DATE"
+
+    r = _send(garage, PHONE_RAW, "wait, you've got my name wrong", now=now)
+    assert r.needs_human is False
+    assert r.workflow_step in {"AWAITING_NAME_CORRECTION", "AWAITING_NAME_CORRECTION_CONFIRM"}
+
+
+def test_change_email_is_explained_and_handed_off_not_looped_into_booking(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    _known(session, customer)
+    now = _now()
+    r = _send(garage, PHONE_RAW, "can you change my email address please", now=now)
+    assert r.needs_human is True
+    assert "which service" not in r.response_text.lower()
+    assert "what day" not in r.response_text.lower()
+    assert "security" in r.response_text.lower() or "can't change" in r.response_text.lower()

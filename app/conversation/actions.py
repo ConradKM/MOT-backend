@@ -58,6 +58,16 @@ def get_availability_for_day(garage, day: date, *, appointment_type=None, now=No
     return availability.single_day(garage, day, now, appointment_type=appointment_type)
 
 
+def latest_bookable_day(garage, *, now=None) -> date:
+    """The furthest-ahead date this garage currently accepts bookings for -
+    the same ``max_advance_days`` window the public booking page enforces
+    (app/public_booking/availability.py::booking_window). Used to give a
+    clear "we can only book up to <date>" instead of a vague re-ask."""
+    now = now or datetime.now(UTC)
+    _, window_end = availability.booking_window(availability.resolve_settings(garage), now.date())
+    return window_end
+
+
 def find_next_available_days(
     garage, *, appointment_type=None, start_day: date, now=None, limit: int = 5
 ) -> list[date]:
@@ -269,6 +279,26 @@ def reschedule_appointment(
     db.session.commit()
 
     emit_event(APPOINTMENT_RESCHEDULED, garage=garage, appointment=appointment)
+    return True, None
+
+
+def update_customer_name(
+    garage, customer: Customer, first_name: str, last_name: str
+) -> tuple[bool, str | None]:
+    """Correct the customer's own name on the canonical ``Customer`` row -
+    the same record the staff UI, calls, WhatsApp inbox and appointments all
+    read from, so the fix is global, not session-local. Tenant-scoped: only
+    ever touches a customer that belongs to ``garage``. Name only - never
+    email, phone, or any business-/security-controlled field."""
+    first = (first_name or "").strip()
+    last = (last_name or "").strip()
+    if not first or not last or len(first) > 100 or len(last) > 100:
+        return False, "invalid_name"
+    if customer.garage_id != garage.id:
+        return False, "cross_tenant"
+    customer.first_name = first
+    customer.last_name = last
+    db.session.commit()
     return True, None
 
 

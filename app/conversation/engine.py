@@ -50,6 +50,7 @@ from .intents import (
     SMALL_TALK,
     SPEAK_TO_HUMAN,
     UNKNOWN,
+    UPDATE_CONTACT_DETAILS,
     RuleBasedIntentResolver,
     detect_faq_intents,
 )
@@ -84,6 +85,7 @@ _ONE_SHOT_HANDLERS = {
     CUSTOMER_DETAILS_QUERY: workflows.handle_customer_details_query,
     CHECK_APPOINTMENT: workflows.handle_check_appointment,
     SPEAK_TO_HUMAN: workflows.handle_speak_to_human,
+    UPDATE_CONTACT_DETAILS: workflows.handle_update_contact_details,
     CHECK_AVAILABILITY: workflows.start_booking,
     GREETING: workflows.handle_greeting,
     SMALL_TALK: workflows.handle_small_talk,
