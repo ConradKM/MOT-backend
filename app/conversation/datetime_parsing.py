@@ -39,10 +39,120 @@ _WEEKDAYS = {
 }
 _WEEKDAY_PATTERN = re.compile(r"\b(next\s+)?(" + "|".join(_WEEKDAYS) + r")\b", re.IGNORECASE)
 
+_MONTHS = {
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sept": 9, "sep": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}  # fmt: skip
+_MONTHS_ALT = "|".join(sorted(_MONTHS, key=len, reverse=True))
+_ORD = r"(?:st|nd|rd|th)"
+
+# "24 September", "24th Sept 2026", "September 24", "on the 24th of September"
+_DAY_MONTH = re.compile(
+    rf"\b(\d{{1,2}}){_ORD}?\s+(?:of\s+)?({_MONTHS_ALT})\b(?:\s+(\d{{4}}))?", re.IGNORECASE
+)
+_MONTH_DAY = re.compile(
+    rf"\b({_MONTHS_ALT})\s+(\d{{1,2}}){_ORD}?\b(?:,?\s+(\d{{4}}))?", re.IGNORECASE
+)
+# ISO 2026-09-24
+_ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
+# 24/09, 24-9-2026, 24.09.26  (day-first, UK)
+_NUMERIC = re.compile(r"\b(\d{1,2})[/.\-](\d{1,2})(?:[/.\-](\d{2}|\d{4}))?\b")
+# "the 24th" - day of month only. Requires the ordinal suffix: a bare number
+# ("2") is left alone, since mid-conversation that's an option number or a
+# time far more often than a day of the month.
+_DAY_ONLY_ORD = re.compile(rf"\b(?:the\s+)?(\d{{1,2}}){_ORD}\b", re.IGNORECASE)
+
+
+def _year_for(month: int, day: int, today: date) -> int:
+    """Pick the sensible year for a day/month with no year given: this year
+    if it hasn't passed yet, otherwise next year."""
+    try:
+        this_year = date(today.year, month, day)
+    except ValueError:
+        return today.year
+    return today.year if this_year >= today else today.year + 1
+
+
+def _safe_date(year: int, month: int, day: int) -> date | None:
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def parse_explicit_date(text: str, *, now: datetime) -> date | None:
+    """A concrete calendar date the customer stated outright - "24th September",
+    "24/09", "2026-09-24", "the 24th". ``None`` if the text names no such
+    date. A year that isn't given is inferred (this year, or next if the
+    day/month has already passed); a date in the past is never returned.
+
+    Kept separate from :func:`parse_date_phrase` so callers can tell "the
+    customer gave an exact date" from "the customer said a weekday" - an
+    explicit date must win over a weekday word in the same message
+    ("Tuesday 24th September" is the 24th, not the next Tuesday).
+    """
+    if not text:
+        return None
+    today = now.date()
+
+    m = _ISO.search(text)
+    if m:
+        # A full y-m-d is unambiguous - honour it or reject it outright, never
+        # fall through and re-read its "-01-01" tail as a day/month.
+        d = _safe_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        return d if d and d >= today else None
+
+    for pat, day_grp, month_grp in ((_DAY_MONTH, 1, 2), (_MONTH_DAY, 2, 1)):
+        m = pat.search(text)
+        if m:
+            month = _MONTHS[m.group(month_grp).lower()]
+            day = int(m.group(day_grp))
+            year = int(m.group(3)) if m.group(3) else _year_for(month, day, today)
+            d = _safe_date(year, month, day)
+            if d and d >= today:
+                return d
+
+    m = _NUMERIC.search(text)
+    if m:
+        day, month = int(m.group(1)), int(m.group(2))
+        raw_year = m.group(3)
+        if raw_year:
+            year = int(raw_year) + 2000 if len(raw_year) == 2 else int(raw_year)
+        else:
+            year = _year_for(month, day, today) if month <= 12 else today.year
+        d = _safe_date(year, month, day)
+        if d and d >= today:
+            return d
+
+    m = _DAY_ONLY_ORD.search(text)
+    if m:
+        day = int(m.group(1))
+        for offset in (0, 1, 2):  # this month, next, or the one after
+            month = today.month + offset
+            year = today.year + (month - 1) // 12
+            month = (month - 1) % 12 + 1
+            d = _safe_date(year, month, day)
+            if d and d >= today:
+                return d
+
+    return None
+
 
 def parse_date_phrase(text: str, *, now: datetime) -> date | None:
-    """A concrete date from a phrase like "tomorrow", "Friday", "next Tuesday" -
-    or ``None`` if nothing recognisable is in there. Always today-or-later.
+    """A concrete date from a phrase like "tomorrow", "Friday", "next Tuesday",
+    "24th September", "24/09" - or ``None`` if nothing recognisable is in
+    there. Always today-or-later. An explicit calendar date always wins over
+    a weekday word in the same message.
     """
     if not text:
         return None
@@ -55,6 +165,10 @@ def parse_date_phrase(text: str, *, now: datetime) -> date | None:
         return today + timedelta(days=1)
     if "today" in lowered or "this afternoon" in lowered or "this morning" in lowered:
         return today
+
+    explicit = parse_explicit_date(text, now=now)
+    if explicit is not None:
+        return explicit
 
     match = _WEEKDAY_PATTERN.search(lowered)
     if match:

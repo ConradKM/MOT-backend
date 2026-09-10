@@ -11,6 +11,7 @@ here writes to the session directly.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 
@@ -25,7 +26,12 @@ from app.models.vehicle import Vehicle
 from . import actions
 from .appointment_matching import match_appointment_type
 from .datetime_parsing import parse_date_phrase, parse_exact_time_phrase, parse_time_window_phrase
-from .intents import CANCEL_APPOINTMENT, CREATE_BOOKING, RESCHEDULE_APPOINTMENT
+from .intents import (
+    CANCEL_APPOINTMENT,
+    CREATE_BOOKING,
+    RESCHEDULE_APPOINTMENT,
+    UPDATE_CUSTOMER_NAME,
+)
 
 # --- workflow step names ----------------------------------------------------
 
@@ -159,6 +165,10 @@ def _format_date(d: date) -> str:
     return d.strftime("%A %d %B")
 
 
+def _latest_bookable_day(ctx: ConversationContext) -> date:
+    return actions.latest_bookable_day(ctx.garage, now=ctx.now)
+
+
 def _format_slots(slots: list[dict], limit: int = 4) -> str:
     times = [s["start"] for s in slots if s["status"] != "booked"][:limit]
     return ", ".join(times)
@@ -201,7 +211,7 @@ def start_booking(ctx: ConversationContext, text: str) -> StepResult:
 
     match = match_appointment_type(ctx.garage, text)
     if match.matched is not None:
-        return _after_type_resolved(ctx, match.matched)
+        return _after_type_resolved(ctx, match.matched, text)
 
     if match.is_ambiguous:
         names = " or ".join(t.name for t in match.candidates)
@@ -239,7 +249,7 @@ def start_booking(ctx: ConversationContext, text: str) -> StepResult:
 
 
 def _after_type_resolved(
-    ctx: ConversationContext, appointment_type: GarageAppointmentType
+    ctx: ConversationContext, appointment_type: GarageAppointmentType, text: str = ""
 ) -> StepResult:
     updates = {
         "appointment_type_id": str(appointment_type.id),
@@ -247,13 +257,29 @@ def _after_type_resolved(
         "clarify_rounds": 0,
     }
 
+    # A date the customer already stated in the opening message ("book an MOT
+    # for the 24th September") is honoured - don't ask "what day" again.
+    stated_day = parse_date_phrase(text, now=ctx.now)
+    if stated_day is not None and stated_day < ctx.now.date():
+        stated_day = None
+
     if ctx.customer is None:
+        if stated_day is not None:
+            updates["preferred_date"] = stated_day.isoformat()
         return StepResult(
             response_text=f"Great, I can help book a {appointment_type.name}. Could I get your full name first?",
             workflow_step=AWAITING_NAME,
             context_updates=updates,
         )
 
+    if stated_day is not None:
+        return _offer_times_for_date(
+            ctx,
+            stated_day,
+            updates,
+            time_window=parse_time_window_phrase(text),
+            appointment_type=appointment_type,
+        )
     return StepResult(
         response_text=f"Great, I can help book a {appointment_type.name}. What day would you like to come in?",
         workflow_step=AWAITING_DATE,
@@ -314,10 +340,20 @@ def handle_awaiting_name(ctx: ConversationContext, text: str) -> StepResult:
             workflow_step=AWAITING_NAME,
         )
     first, last = parts[0], " ".join(parts[1:])
+    name_updates = {"customer_first_name": first, "customer_last_name": last}
+
+    # If they already gave a date in the opening message, go straight to
+    # offering times for it rather than asking "what day" now.
+    stashed = ctx.slots.get("preferred_date")
+    if stashed:
+        day = date.fromisoformat(stashed)
+        if day >= ctx.now.date():
+            return _offer_times_for_date(ctx, day, {**name_updates, "preferred_date": None})
+
     return StepResult(
         response_text=f"Thanks {first}. What day would you like to come in?",
         workflow_step=AWAITING_DATE,
-        context_updates={"customer_first_name": first, "customer_last_name": last},
+        context_updates=name_updates,
     )
 
 
@@ -378,12 +414,25 @@ def handle_awaiting_date(ctx: ConversationContext, text: str) -> StepResult:
     day = parse_date_phrase(text, now=ctx.now)
     if day is None:
         return StepResult(
-            response_text="Sorry, what day would you like to come in (e.g. Tuesday, or tomorrow)?",
+            response_text=(
+                "Sorry, what day would you like to come in? You can give me a weekday, "
+                '"tomorrow", or a date like "24th September".'
+            ),
             workflow_step=AWAITING_DATE,
         )
     if day < ctx.now.date():
         return StepResult(
             response_text="That date's already passed - what day would you like instead?",
+            workflow_step=AWAITING_DATE,
+        )
+
+    latest = _latest_bookable_day(ctx)
+    if day > latest:
+        return StepResult(
+            response_text=(
+                f"We can only take bookings up to {_format_date(latest)} at the moment. "
+                "Could you pick a day on or before then?"
+            ),
             workflow_step=AWAITING_DATE,
         )
 
@@ -1208,6 +1257,180 @@ RESCHEDULE_STEP_HANDLERS = {
 
 
 # --------------------------------------------------------------------------
+# UPDATE_CUSTOMER_NAME  - correct the customer's own name on their CoMaz
+# record. Verification here is possession of the WhatsApp number the record
+# is matched to (ctx.customer is set only when the inbound number already
+# belongs to a known customer). The write goes through actions.py to the
+# canonical Customer row, so the fix shows everywhere in CoMaz, not just in
+# this session. Email / phone / address changes are deliberately NOT done
+# here (see handle_update_contact_details).
+# --------------------------------------------------------------------------
+
+AWAITING_NAME_CORRECTION = "AWAITING_NAME_CORRECTION"
+AWAITING_NAME_CORRECTION_CONFIRM = "AWAITING_NAME_CORRECTION_CONFIRM"
+
+# Cues that introduce the corrected name, e.g. "... it should be Jon Reid".
+# The *rightmost* match wins, so "you've spelt my name wrong, it should be
+# Jon Reid" takes the tail after "should be", not after "spelt".
+_NAME_CUE = re.compile(
+    r"\b(?:should\s+be|chang(?:e|ed)\s+(?:it\s+)?to|correct(?:ed)?\s+(?:it\s+)?to|"
+    r"make\s+it|put\s+it\s+(?:down\s+)?as|spell\s+it|name\s+is|name\s+to|name\s*[:=]|it'?s|its)\b",
+    re.IGNORECASE,
+)
+_NAME_STOP_WORDS = {
+    "wrong", "not", "the", "a", "my", "name", "is", "please", "actually",
+    "no", "yes", "it", "should", "be", "change", "correct", "to",
+}  # fmt: skip
+_NAME_WORD = re.compile(r"[A-Za-z][A-Za-z'\-.]*")
+
+
+def _extract_name(text: str, *, whole_is_name: bool) -> tuple[str, str] | None:
+    """A first + last name from the message. When ``whole_is_name`` the entire
+    reply is treated as the name ("Jon Reid" answered to "what should it
+    be?"); otherwise a name is only taken when a cue introduces it ("... it
+    should be Jon Reid"), so "can you change my name?" yields nothing and we
+    ask. Returns ``None`` when there's no clean two-part name."""
+    stripped = text.strip()
+    matches = list(_NAME_CUE.finditer(stripped))
+    if matches:
+        candidate = stripped[matches[-1].end() :]
+    elif whole_is_name:
+        candidate = stripped
+    else:
+        return None
+
+    candidate = candidate.strip(" .!?,\"':;-").strip()
+    candidate = re.sub(r"^(my\s+name\s+)", "", candidate, flags=re.IGNORECASE).strip()
+    candidate = re.sub(r"\s+(please|thanks|thank\s+you|ta)$", "", candidate, flags=re.IGNORECASE)
+
+    parts = [p for p in candidate.split() if p]
+    if not (2 <= len(parts) <= 4):
+        return None
+    if any(p.lower() in _NAME_STOP_WORDS for p in parts):
+        return None
+    if not all(_NAME_WORD.fullmatch(p) for p in parts):
+        return None
+    return parts[0].strip("."), " ".join(parts[1:])
+
+
+def _need_identity_for_change(ctx: ConversationContext, what: str) -> StepResult:
+    return StepResult(
+        response_text=(
+            f"I can only {what} once I can confirm who I'm speaking to, and this "
+            "number isn't linked to an account yet. I'll get a member of the team to help."
+        ),
+        workflow_step=None,
+        needs_human=True,
+        handoff_reason=f"{what} requested from an unrecognised number.",
+    )
+
+
+def start_update_name(ctx: ConversationContext, text: str) -> StepResult:
+    if ctx.customer is None:
+        return _need_identity_for_change(ctx, "update the name on an account")
+
+    current = f"{ctx.customer.first_name} {ctx.customer.last_name}"
+    name = _extract_name(text, whole_is_name=False)
+    if name is None:
+        return StepResult(
+            response_text=(
+                f"I've got your name as {current}. What should it be? Please send your full name."
+            ),
+            workflow_step=AWAITING_NAME_CORRECTION,
+        )
+    return StepResult(
+        response_text=(
+            f"Just to confirm - change the name on your account from {current} to "
+            f"{name[0]} {name[1]}?"
+        ),
+        workflow_step=AWAITING_NAME_CORRECTION_CONFIRM,
+        context_updates={"pending_first_name": name[0], "pending_last_name": name[1]},
+    )
+
+
+def handle_awaiting_name_correction(ctx: ConversationContext, text: str) -> StepResult:
+    if ctx.customer is None:
+        return _need_identity_for_change(ctx, "update the name on an account")
+    name = _extract_name(text, whole_is_name=True)
+    if name is None:
+        return StepResult(
+            response_text="Sorry, could you send your full name (first and last)?",
+            workflow_step=AWAITING_NAME_CORRECTION,
+        )
+    current = f"{ctx.customer.first_name} {ctx.customer.last_name}"
+    return StepResult(
+        response_text=(
+            f"Just to confirm - change the name on your account from {current} to "
+            f"{name[0]} {name[1]}?"
+        ),
+        workflow_step=AWAITING_NAME_CORRECTION_CONFIRM,
+        context_updates={"pending_first_name": name[0], "pending_last_name": name[1]},
+    )
+
+
+def handle_awaiting_name_correction_confirm(ctx: ConversationContext, text: str) -> StepResult:
+    first = ctx.slots.get("pending_first_name")
+    last = ctx.slots.get("pending_last_name")
+    if not first or not last:
+        return start_update_name(ctx, "")
+    if ctx.customer is None:
+        return _need_identity_for_change(ctx, "update the name on an account")
+
+    if _is_no(text):
+        return StepResult(
+            response_text=(
+                f"No problem - I've left it as {ctx.customer.first_name} {ctx.customer.last_name}."
+            ),
+            workflow_step=None,
+            complete=True,
+            reset_context=True,
+        )
+    if not _is_yes(text):
+        return StepResult(
+            response_text=f"Shall I change your name to {first} {last}? (yes/no)",
+            workflow_step=AWAITING_NAME_CORRECTION_CONFIRM,
+        )
+
+    ok, reason = actions.update_customer_name(ctx.garage, ctx.customer, first, last)
+    if not ok:
+        return StepResult(
+            response_text="I couldn't update that - I'll get a member of the team to sort it.",
+            workflow_step=None,
+            needs_human=True,
+            handoff_reason=f"Customer name update failed ({reason}).",
+        )
+    return StepResult(
+        response_text=f"Done - your name is now {first} {last}. That'll update across our system.",
+        workflow_step=None,
+        complete=True,
+        reset_context=True,
+        actions_performed=[f"Customer {str(ctx.customer.id)[:8]} name updated to {first} {last}"],
+    )
+
+
+def handle_update_contact_details(ctx: ConversationContext, text: str) -> StepResult:
+    """Any other "change my email/phone/address" - not something WhatsApp can
+    safely do. Explain plainly and hand to a human; never loop back into
+    booking."""
+    return StepResult(
+        response_text=(
+            "For security I can't change contact details like your email, phone number "
+            "or address over WhatsApp. I'll pass this to the team and they'll sort it "
+            "for you. Is there anything else I can help with in the meantime?"
+        ),
+        workflow_step=None,
+        needs_human=True,
+        handoff_reason="Customer asked to change contact details (not permitted over WhatsApp).",
+    )
+
+
+NAME_UPDATE_STEP_HANDLERS = {
+    AWAITING_NAME_CORRECTION: handle_awaiting_name_correction,
+    AWAITING_NAME_CORRECTION_CONFIRM: handle_awaiting_name_correction_confirm,
+}
+
+
+# --------------------------------------------------------------------------
 # One-shot deterministic queries
 # --------------------------------------------------------------------------
 
@@ -1637,6 +1860,7 @@ STEP_HANDLERS = {
     **BOOKING_STEP_HANDLERS,
     **CANCEL_STEP_HANDLERS,
     **RESCHEDULE_STEP_HANDLERS,
+    **NAME_UPDATE_STEP_HANDLERS,
     **MOT_STEP_HANDLERS,
     **CALLBACK_STEP_HANDLERS,
     AWAITING_RESUME: handle_awaiting_resume,
@@ -1646,4 +1870,5 @@ INTENT_STARTERS = {
     CREATE_BOOKING: start_booking,
     CANCEL_APPOINTMENT: start_cancel,
     RESCHEDULE_APPOINTMENT: start_reschedule,
+    UPDATE_CUSTOMER_NAME: start_update_name,
 }
