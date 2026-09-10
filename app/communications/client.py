@@ -54,13 +54,36 @@ def get_twilio_client() -> Client | None:
 def get_twilio_client_for_garage(garage) -> Client | None:
     """The Twilio client that should act on ``garage``'s behalf.
 
-    Every garage runs from the platform master account today. Once a garage
-    has its own ``twilio_subaccount_sid`` (see
-    GarageCommunicationSettings), calls should be scoped to that subaccount
-    instead - but a subaccount has its own Auth Token, which CoMaz OS does not
-    yet have anywhere safe to store (see docs/TWILIO_SETUP.md). This function
-    is the one place that will change when it does; nothing else in the
-    codebase should reach for ``get_twilio_client()`` directly for a
-    garage-specific send.
+    A garage with its own ``twilio_subaccount_sid`` (allocated by Platform
+    Admin - see app/communications/provisioning) is scoped to that
+    subaccount, so its sends are billed, logged and rate-limited separately
+    from every other tenant's. A garage without one still runs from the
+    platform master account, which is the correct behaviour for every tenant
+    onboarded before subaccounts existed.
+
+    The scoping uses the **master** credentials against the subaccount's
+    2010-04-01 resource path rather than the subaccount's own Auth Token: the
+    classic REST API supports a parent acting on a subaccount's Messages and
+    Calls, so the common send path never has to decrypt a stored credential.
+    (Messaging Senders v2 has no such path and does need the subaccount's own
+    token - that is why app/communications/provisioning/subaccounts.py exists
+    and why only it reaches for one.)
+
+    Returns ``None`` when Twilio isn't configured at all, exactly as before,
+    so every caller's existing skip-and-log path is unchanged.
     """
-    return get_twilio_client()
+    base = get_twilio_client()
+    if base is None:
+        return None
+
+    settings = getattr(garage, "communication_settings", None)
+    subaccount_sid = getattr(settings, "twilio_subaccount_sid", None) if settings else None
+    if not subaccount_sid:
+        return base
+
+    cfg = current_app.config
+    api_key_sid = cfg.get("TWILIO_API_KEY_SID")
+    api_key_secret = cfg.get("TWILIO_API_KEY_SECRET")
+    if api_key_sid and api_key_secret:
+        return Client(api_key_sid, api_key_secret, subaccount_sid)
+    return Client(cfg["TWILIO_ACCOUNT_SID"], cfg["TWILIO_AUTH_TOKEN"], subaccount_sid)

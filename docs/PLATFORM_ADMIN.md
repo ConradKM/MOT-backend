@@ -245,6 +245,37 @@ into MRR needs prices, which live outside this system today.
 
 ## Operations
 
+Three sections, addressing three different questions: **Health** (is the
+platform's own machinery working?), **Communications Setup** (which businesses
+are not live yet, and who are they waiting on?) and **Failures** (what did not
+arrive, and what should we do about it?).
+
+### Communications Setup
+
+Provisioning and monitoring Twilio Voice and WhatsApp per business - the
+cross-business worklist, and a per-business workflow at
+**Businesses > [a business] > Communications**. Documented in full in
+[`COMMUNICATIONS_ONBOARDING.md`](COMMUNICATIONS_ONBOARDING.md); the parts that
+matter to this boundary:
+
+- Every write is `@superadmin_required` and audited. These endpoints spend
+  money, create resources in a third-party account, and call and message real
+  people.
+- **No response carries a secret.** No schema has a field for a Twilio Auth
+  Token, a subaccount Auth Token, a Meta access token or a one-time code. The
+  two secrets that come *in* are `load_only`: an attached subaccount token is
+  encrypted on arrival (`app/communications/secrets.py`), and Meta's OTP is
+  forwarded to Twilio and never persisted.
+- Onboarding state is a **state machine per channel**, not a set of booleans,
+  so "waiting for Twilio", "waiting for Meta", "waiting for the customer" and
+  "it failed" are distinguishable - which is what decides who acts next.
+- One business, one Twilio subaccount, one WABA. The database enforces it:
+  `twilio_subaccount_sid`, `voice_phone_number`, `whatsapp_sender` and
+  `waba_id` are each unique across businesses, because those are the columns
+  `tenant_resolution.py` matches an inbound webhook against.
+
+### Health and Failures
+
 - **Email delivery log** - `CommunicationLog` rows with `channel="EMAIL"`, which
   `app/email/service.py` already writes for every attempt.
 - **Resending a failure** goes through the same `app.email.send_email` the
@@ -255,7 +286,11 @@ into MRR needs prices, which live outside this system today.
 - **Communication failures** across every channel and tenant, grouped by
   channel, tenant and provider error code. `SKIPPED_NOT_CONFIGURED` is counted
   separately - it means "this tenant has not turned the channel on", not
-  "delivery broke".
+  "delivery broke". Each provider code is shown with what it *means* and the
+  recommended action, alongside - never instead of - the original code and
+  message. A business in the breakdown links straight to its Communications
+  setup: there is one communication log, so the failure list and the setup
+  page are two questions asked of the same rows.
 - **Job health** is inferred from evidence, not from a scheduler we don't
   control. Nothing records "the reminder job ran at 10:00"; what *is* recorded is
   the reminders it produced, the requests the expiry sweep should have retired,
@@ -337,6 +372,29 @@ Everything below requires a platform token. **Bold** entries require
 | **POST** | `/api/platform-admin/operations/emails/<id>/resend` | Resend a failure |
 | GET | `/api/platform-admin/operations/communication-failures` | Failures, every channel |
 | GET | `/api/platform-admin/operations/jobs` | Background job health |
+| GET | `/api/platform-admin/operations/communications-setup` | Every business's comms onboarding state |
+| GET | `/api/platform-admin/operations/communications-setup/error-codes` | Provider error catalogue |
+| GET | `/api/platform-admin/tenants/<id>/communications` | One business's Voice + WhatsApp setup |
+| GET | `/api/platform-admin/tenants/<id>/communications/errors` | That business's recent provider failures |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/subaccount` | Create its Twilio subaccount |
+| **PUT** | `/api/platform-admin/tenants/<id>/communications/subaccount` | Attach an existing subaccount |
+| **GET** | `/api/platform-admin/tenants/<id>/communications/voice/available-numbers` | Numbers it could buy |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/voice/number` | Buy or adopt a voice number |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/voice/configure` | (Re)point it at CoMaz's webhooks |
+| **PUT** | `/api/platform-admin/tenants/<id>/communications/voice/routing` | Escalation + fallback numbers |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/voice/test` | Place a test call |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/voice/online` | Confirm voice is live |
+| **PUT** | `/api/platform-admin/tenants/<id>/communications/whatsapp/number` | Record the business's number |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/whatsapp/migration` | Existing registration cleared |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/whatsapp/embedded-signup` | Start Meta Embedded Signup |
+| **POST** | `.../whatsapp/embedded-signup/complete` | Record the WABA Meta returned |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/whatsapp/sender` | Register the sender |
+| **PATCH** | `/api/platform-admin/tenants/<id>/communications/whatsapp/sender` | Re-point sender webhooks |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/whatsapp/verify` | Submit Meta's one-time code |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/whatsapp/status` | Refresh sender status |
+| **POST** | `/api/platform-admin/tenants/<id>/communications/whatsapp/test` | Send a test message |
+| **PUT** | `/api/platform-admin/tenants/<id>/communications/enabled` | Master communications switch |
+| **PUT** | `/api/platform-admin/tenants/<id>/communications/automation` | Conversation-engine switch |
 | GET | `/api/platform-admin/audit-logs` | Who changed what, when |
 
 Plus one unauthenticated garage-app endpoint, used only by the impersonation

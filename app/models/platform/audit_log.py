@@ -47,6 +47,19 @@ ACTION_FEATURE_FLAG_UPDATE = "tenant.feature_flag.update"
 ACTION_IMPERSONATION_START = "tenant.impersonation.start"
 ACTION_IMPERSONATION_REVOKE = "tenant.impersonation.revoke"
 ACTION_EMAIL_RESEND = "operations.email.resend"
+# Communications provisioning (app/platform_admin/routes/communications.py).
+# Each one spends money, creates a resource in a third-party account, or sends
+# something to a real person, so all of them are audited - and none of them
+# ever carries a credential in `details`.
+ACTION_COMMS_SUBACCOUNT_CREATE = "tenant.communications.subaccount"
+ACTION_COMMS_VOICE_NUMBER = "tenant.communications.voice.number"
+ACTION_COMMS_VOICE_CONFIGURE = "tenant.communications.voice.configure"
+ACTION_COMMS_WHATSAPP_NUMBER = "tenant.communications.whatsapp.number"
+ACTION_COMMS_META_SIGNUP = "tenant.communications.whatsapp.meta_signup"
+ACTION_COMMS_SENDER_REGISTER = "tenant.communications.whatsapp.sender"
+ACTION_COMMS_TEST = "tenant.communications.test"
+ACTION_COMMS_ENABLED_TOGGLE = "tenant.communications.enabled"
+ACTION_COMMS_AUTOMATION_TOGGLE = "tenant.communications.automation"
 
 
 class PlatformAuditLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]

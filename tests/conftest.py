@@ -562,6 +562,7 @@ _SECTION_BY_SUFFIX = [
     ("api/test_platform_admin_impersonation.py", "Platform Admin Impersonation"),
     ("api/test_platform_admin_stats.py", "Platform Admin Statistics"),
     ("api/test_platform_admin_operations.py", "Platform Admin Operations"),
+    ("api/test_platform_admin_communications.py", "Platform Admin Communications"),
     ("api/test_garage.py", "Garage API"),
     ("api/test_employees.py", "Employee API"),
     ("api/test_customers.py", "Customer API"),

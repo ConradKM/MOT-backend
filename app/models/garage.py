@@ -11,6 +11,9 @@ from .mixins import PrimaryKeyMixin, TimestampMixin
 if TYPE_CHECKING:
     from app.models.appointments.appointment import Appointment
     from app.models.appointments.appointment_type import GarageAppointmentType
+    from app.models.communications.comms_onboarding import (
+        GarageCommunicationsOnboarding,
+    )
     from app.models.communications.garage_communication_settings import (
         GarageCommunicationSettings,
     )
@@ -148,6 +151,12 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     )
     communication_settings: Mapped["GarageCommunicationSettings | None"] = relationship(
         "GarageCommunicationSettings",
+        back_populates="garage",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    communications_onboarding: Mapped["GarageCommunicationsOnboarding | None"] = relationship(
+        "GarageCommunicationsOnboarding",
         back_populates="garage",
         uselist=False,
         cascade="all, delete-orphan",
