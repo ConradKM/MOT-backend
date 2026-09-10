@@ -200,7 +200,7 @@ def communications_status(garage: Garage) -> dict:
 
 
 def _opening_hours(garage: Garage) -> list[GarageOpeningHours]:
-    return (
+    return list(
         db.session.execute(
             select(GarageOpeningHours)
             .where(GarageOpeningHours.garage_id == garage.id)
@@ -226,7 +226,7 @@ def _booking_settings(garage: Garage) -> GarageScheduleSettings:
 
 
 def _services(garage: Garage) -> list[GarageAppointmentType]:
-    return (
+    return list(
         db.session.execute(
             select(GarageAppointmentType)
             .where(GarageAppointmentType.garage_id == garage.id)
