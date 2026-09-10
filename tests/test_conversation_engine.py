@@ -42,10 +42,28 @@ def _next_open_weekday(start: datetime, min_days_ahead: int = 3):
 
 
 def _now():
-    # A fixed Monday 08:00 - safely inside every test's lead-time window
-    # regardless of which weekday actually runs the suite.
-    base = datetime(2026, 9, 7, 8, 0, tzinfo=UTC)  # a Monday
+    """A Monday 08:00 that is always in the *near future* of the real clock.
+
+    It has to be a fixed weekday so the "which day did you say?" assertions
+    don't change meaning with the day the suite runs on - but it must not be a
+    fixed *date*. The engine offers slots against the ``now`` injected here,
+    while the availability re-check at booking confirmation consults the real
+    clock; pin the date and the two eventually disagree. A hard-coded
+    2026-09-07 did exactly that: the tests book three days out, so from
+    2026-09-10 onwards they were offering slots that the real clock had
+    already passed, and the confirmation step answered "that time's no longer
+    available".
+
+    Anchoring to the next Monday keeps the offered slots genuinely in the
+    future for both clocks, on every day the suite is ever run.
+    """
+    today = datetime.now(UTC).date()
+    # 0 = Monday. `or 7` so "today is Monday" moves to *next* Monday rather
+    # than to today, keeping the whole booking window ahead of the real clock.
+    monday = today + timedelta(days=(7 - today.weekday()) % 7 or 7)
+    base = datetime(monday.year, monday.month, monday.day, 8, 0, tzinfo=UTC)
     assert base.weekday() == 0
+    assert base > datetime.now(UTC)
     return base
 
 
