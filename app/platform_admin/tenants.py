@@ -50,6 +50,7 @@ from app.models.vehicle import Vehicle
 
 from .audit import record_audit
 from .features import UnknownPlanError, validate_plan
+from .onboarding import STAGE_KEYS, onboarding_progress, onboarding_progress_bulk
 
 #: A tenant with no activity for this long is reported as dormant. A read-time
 #: threshold, not a stored state.
@@ -138,6 +139,7 @@ def list_tenants(
     status: str | None = None,
     plan: str | None = None,
     activity: str | None = None,
+    stage: str | None = None,
     sort: str = "created_at",
     descending: bool = True,
     page: int = 1,
@@ -148,7 +150,16 @@ def list_tenants(
     """One page of tenants with the headline numbers the list view shows.
 
     Filters: free-text ``search`` (name / slug / contact / owner email), exact
-    ``status`` and ``plan``, and derived ``activity`` ("active" | "dormant").
+    ``status`` and ``plan``, and the two derived ones, ``activity``
+    ("active" | "dormant") and ``stage`` (onboarding stage).
+
+    ``stage`` is the one filter that cannot be a WHERE clause: onboarding
+    progress is deliberately derived from a tenant's own data rather than
+    stored (see ``app/platform_admin/onboarding.py``), so there is no column to
+    filter on. Passing it therefore materialises the rows matching the *other*
+    filters and pages in Python. That is a deliberate trade - the alternative
+    is a stored progress column that can drift - and it costs a few grouped
+    queries over the operator's own tenant list, not a scan of tenant data.
     """
     now = now or _utcnow()
     per_page = max(1, min(per_page or DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE))
@@ -186,13 +197,21 @@ def list_tenants(
     if order_column is None:
         raise TenantError(f"Unknown sort {sort!r}. Expected one of {list(SORT_KEYS)}.")
 
-    total = db.session.scalar(select(func.count()).select_from(query.subquery())) or 0
+    if stage is not None and stage not in STAGE_KEYS:
+        raise TenantError(f"Unknown stage {stage!r}. Expected one of {list(STAGE_KEYS)}.")
 
-    rows = db.session.execute(
-        query.order_by(order_column.desc() if descending else order_column.asc(), Garage.id)
-        .limit(per_page)
-        .offset((page - 1) * per_page)
-    ).all()
+    ordered = query.order_by(order_column.desc() if descending else order_column.asc(), Garage.id)
+
+    if stage is None:
+        total = db.session.scalar(select(func.count()).select_from(query.subquery())) or 0
+        rows = db.session.execute(ordered.limit(per_page).offset((page - 1) * per_page)).all()
+        onboarding = onboarding_progress_bulk([row[0] for row in rows])
+    else:
+        candidates = db.session.execute(ordered).all()
+        onboarding = onboarding_progress_bulk([row[0] for row in candidates])
+        rows = [row for row in candidates if onboarding[row[0].id]["stage"] == stage]
+        total = len(rows)
+        rows = rows[(page - 1) * per_page : page * per_page]
 
     garages = [row[0] for row in rows]
     activity_by_id = {row[0].id: row[1] for row in rows}
@@ -209,9 +228,6 @@ def list_tenants(
         owners = {}
         customers = vehicles = appointments = pending = employees = {}
 
-    from .onboarding import onboarding_progress_bulk
-
-    onboarding = onboarding_progress_bulk(garages)
     cutoff = now - timedelta(days=dormant_days)
 
     items = []
@@ -255,8 +271,6 @@ def get_tenant(garage_id) -> Garage | None:
 
 def tenant_detail(garage: Garage, *, dormant_days: int = DEFAULT_DORMANT_DAYS) -> dict:
     """The single-tenant record behind the detail page header."""
-    from .onboarding import onboarding_progress
-
     last_seen = db.session.scalar(select(last_activity_expression()).where(Garage.id == garage.id))
     owner_emails = _owner_emails([garage.id])
 

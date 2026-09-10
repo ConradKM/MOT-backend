@@ -9,10 +9,14 @@ garage API by someone adding it to the wrong schema.
 
 from marshmallow import Schema, fields, validate
 
+from app.garages.business_onboarding import BOOKING_SETTING_FIELDS, ONBOARDING_STATUSES
+from app.garages.layouts import LAYOUT_VARIANTS
+from app.models.appointments.appointment_type import APPOINTMENT_TYPE_STATUSES
 from app.models.garage import GARAGE_STATUSES
 from app.models.platform.admin import PLATFORM_ADMIN_ROLES
 
 from .features import PLAN_KEYS
+from .onboarding import STAGE_KEYS
 from .tenants import MAX_PAGE_SIZE, SORT_KEYS
 
 
@@ -93,6 +97,10 @@ class OnboardingStepSchema(Schema):
 
 class OnboardingProgressSchema(Schema):
     steps = fields.List(fields.Nested(OnboardingStepSchema), dump_only=True)
+    #: Where the tenant is overall, derived from the same completed steps -
+    #: see app/platform_admin/onboarding.py::STAGES.
+    stage = fields.Str(dump_only=True, validate=validate.OneOf(STAGE_KEYS))
+    stage_label = fields.Str(dump_only=True)
     completed_required = fields.Int(dump_only=True)
     total_required = fields.Int(dump_only=True)
     percent_complete = fields.Int(dump_only=True)
@@ -129,6 +137,7 @@ class TenantListQuerySchema(Schema):
     activity = fields.Str(load_default=None, validate=validate.OneOf(("active", "dormant")))
     sort = fields.Str(load_default="created_at", validate=validate.OneOf(SORT_KEYS))
     order = fields.Str(load_default="desc", validate=validate.OneOf(("asc", "desc")))
+    stage = fields.Str(load_default=None, validate=validate.OneOf(STAGE_KEYS))
     page = fields.Int(load_default=1, validate=validate.Range(min=1))
     per_page = fields.Int(load_default=25, validate=validate.Range(min=1, max=MAX_PAGE_SIZE))
 
@@ -541,3 +550,221 @@ class AuditLogQuerySchema(Schema):
     search = fields.Str(load_default=None)
     page = fields.Int(load_default=1, validate=validate.Range(min=1))
     per_page = fields.Int(load_default=50, validate=validate.Range(min=1, max=200))
+
+
+# --------------------------------------------------------------------------
+# Onboarding a business (app/platform_admin/provisioning.py)
+#
+# The request shape mirrors `BusinessSpec` rather than the wizard's steps, so
+# the console can reorder or merge steps without an API change. Field-level
+# rules live here; the cross-field rules ("TRIAL needs a future end date",
+# "opens before closes", "no duplicate service names") live in
+# `validate_business_spec`, where the CLI gets them too.
+# --------------------------------------------------------------------------
+
+
+class ServiceInputSchema(Schema):
+    """One appointment type, as onboarding collects it."""
+
+    name = fields.Str(required=True, validate=validate.Length(min=1, max=100))
+    description = fields.Str(allow_none=True, validate=validate.Length(max=500))
+    # A decimal *string* on the wire: money must not make a round trip through
+    # a binary float on its way to a Numeric(10, 2) column.
+    base_price = fields.Decimal(
+        allow_none=True, as_string=True, places=2, validate=validate.Range(min=0)
+    )
+    default_duration_minutes = fields.Int(
+        allow_none=True, validate=validate.Range(min=1, max=24 * 60)
+    )
+    status = fields.Str(load_default="ACTIVE", validate=validate.OneOf(APPOINTMENT_TYPE_STATUSES))
+
+
+class ServiceUpdateSchema(Schema):
+    """A partial edit of one service. Every field optional; at least one required."""
+
+    name = fields.Str(validate=validate.Length(min=1, max=100))
+    description = fields.Str(allow_none=True, validate=validate.Length(max=500))
+    base_price = fields.Decimal(
+        allow_none=True, as_string=True, places=2, validate=validate.Range(min=0)
+    )
+    default_duration_minutes = fields.Int(
+        allow_none=True, validate=validate.Range(min=1, max=24 * 60)
+    )
+    status = fields.Str(validate=validate.OneOf(APPOINTMENT_TYPE_STATUSES))
+
+
+class ServiceSchema(Schema):
+    id = fields.UUID(dump_only=True)
+    name = fields.Str(dump_only=True)
+    description = fields.Str(dump_only=True, allow_none=True)
+    base_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    default_duration_minutes = fields.Int(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)
+    created_at = fields.DateTime(dump_only=True)
+
+
+class OpeningHoursDaySchema(Schema):
+    """One weekday. ``is_closed`` days keep whatever times they carry - the
+    availability engine ignores them - so the console can reopen a day without
+    the operator retyping its hours."""
+
+    weekday = fields.Int(required=True, validate=validate.Range(min=0, max=6))
+    opens_at = fields.Time(allow_none=True, load_default=None)
+    closes_at = fields.Time(allow_none=True, load_default=None)
+    is_closed = fields.Bool(load_default=False)
+
+
+class OpeningHoursOutSchema(Schema):
+    weekday = fields.Int(dump_only=True)
+    opens_at = fields.Time(dump_only=True)
+    closes_at = fields.Time(dump_only=True)
+    is_closed = fields.Bool(dump_only=True)
+
+
+class TenantOpeningHoursReplaceSchema(Schema):
+    opening_hours = fields.List(
+        fields.Nested(OpeningHoursDaySchema),
+        required=True,
+        validate=validate.Length(min=1, max=7),
+    )
+
+
+def _booking_setting_field(key: str):
+    kind, low, high = BOOKING_SETTING_FIELDS[key]
+    field_type = fields.Float if kind is float else fields.Int
+    # capacity_per_slot's null is meaningful: "fall back to the garage's
+    # active employee count".
+    return field_type(
+        allow_none=(key == "capacity_per_slot"),
+        validate=validate.Range(min=low, max=high),
+    )
+
+
+#: Built from BOOKING_SETTING_FIELDS so the API surface and the spec validator
+#: can never disagree about which settings exist or what range they take.
+BookingSettingsSchema = Schema.from_dict(
+    {key: _booking_setting_field(key) for key in BOOKING_SETTING_FIELDS},
+    name="BookingSettingsSchema",
+)
+
+
+class BookingSettingsOutSchema(Schema):
+    slot_interval_minutes = fields.Int(dump_only=True)
+    default_appointment_minutes = fields.Int(dump_only=True)
+    min_lead_time_hours = fields.Int(dump_only=True)
+    max_advance_days = fields.Int(dump_only=True)
+    capacity_per_slot = fields.Int(dump_only=True, allow_none=True)
+    limited_threshold_ratio = fields.Float(dump_only=True)
+
+
+class TenantBusinessInputSchema(Schema):
+    """Step 1 + step 3: identity and the platform-owned lifecycle.
+
+    The slug is absent by design - it is generated from the name
+    (``app/garages/slug.py``) and is immutable, so no client ever supplies one.
+    """
+
+    name = fields.Str(required=True, validate=validate.Length(min=1, max=200))
+    email = fields.Email(allow_none=True)
+    phone = fields.Str(allow_none=True, validate=validate.Length(max=40))
+    address = fields.Str(allow_none=True, validate=validate.Length(max=500))
+    postcode = fields.Str(allow_none=True, validate=validate.Length(max=20))
+    website = fields.Str(allow_none=True, validate=validate.Length(max=200))
+    layout_variant = fields.Str(
+        allow_none=True, load_default=None, validate=validate.OneOf(sorted(LAYOUT_VARIANTS))
+    )
+
+    plan = fields.Str(load_default=None, validate=validate.OneOf(PLAN_KEYS))
+    # SUSPENDED is not offerable here - suspending is its own audited operation.
+    status = fields.Str(load_default=None, validate=validate.OneOf(ONBOARDING_STATUSES))
+    trial_ends_at = fields.DateTime(allow_none=True, load_default=None)
+    internal_notes = fields.Str(allow_none=True, validate=validate.Length(max=5000))
+
+
+class TenantOwnerInputSchema(Schema):
+    """Step 2. No password field, on purpose: Platform Admin never chooses,
+    sees or stores an owner's password - the owner sets it from an invite."""
+
+    email = fields.Email(required=True)
+    first_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    last_name = fields.Str(allow_none=True, validate=validate.Length(max=100))
+
+
+class TenantProvisionSchema(Schema):
+    business = fields.Nested(TenantBusinessInputSchema, required=True)
+    owner = fields.Nested(TenantOwnerInputSchema, required=True)
+    services = fields.List(fields.Nested(ServiceInputSchema), load_default=list)
+    # Absent (or null) keeps the seeded Mon-Fri 09:00-17:00.
+    opening_hours = fields.List(
+        fields.Nested(OpeningHoursDaySchema),
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(min=1, max=7),
+    )
+    booking_settings = fields.Nested(BookingSettingsSchema, load_default=dict)
+
+
+class OwnerSchema(Schema):
+    id = fields.UUID(dump_only=True)
+    email = fields.Email(dump_only=True)
+    first_name = fields.Str(dump_only=True, allow_none=True)
+    last_name = fields.Str(dump_only=True, allow_none=True)
+    created_at = fields.DateTime(dump_only=True)
+
+
+class OwnerInviteSchema(Schema):
+    """Derived from the owner's password-reset token rows - never stored."""
+
+    state = fields.Str(
+        dump_only=True, validate=validate.OneOf(("none", "sent", "accepted", "expired"))
+    )
+    sent_at = fields.DateTime(dump_only=True, allow_none=True)
+    expires_at = fields.DateTime(dump_only=True, allow_none=True)
+    accepted_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
+class CommunicationsStatusSchema(Schema):
+    configured = fields.Bool(dump_only=True)
+    enabled = fields.Bool(dump_only=True)
+    voice_phone_number = fields.Str(dump_only=True, allow_none=True)
+    whatsapp_sender = fields.Str(dump_only=True, allow_none=True)
+    twilio_subaccount_sid = fields.Str(dump_only=True, allow_none=True)
+
+
+class NextTaskSchema(Schema):
+    key = fields.Str(dump_only=True)
+    label = fields.Str(dump_only=True)
+    description = fields.Str(dump_only=True)
+    complete = fields.Bool(dump_only=True)
+
+
+class TenantConfigurationSchema(Schema):
+    """Everything onboarding configured for one tenant."""
+
+    garage = fields.Nested(TenantSchema, dump_only=True)
+    owner = fields.Nested(OwnerSchema, dump_only=True, allow_none=True)
+    owner_invite = fields.Nested(OwnerInviteSchema, dump_only=True)
+    services = fields.List(fields.Nested(ServiceSchema), dump_only=True)
+    opening_hours = fields.List(fields.Nested(OpeningHoursOutSchema), dump_only=True)
+    booking_settings = fields.Nested(BookingSettingsOutSchema, dump_only=True)
+    communications = fields.Nested(CommunicationsStatusSchema, dump_only=True)
+    public_booking_url = fields.Str(dump_only=True)
+    onboarding = fields.Nested(OnboardingProgressSchema, dump_only=True)
+
+
+class TenantProvisionResultSchema(TenantConfigurationSchema):
+    created = fields.Bool(dump_only=True)
+    #: False when the business was created but its invite email failed to send
+    #: - the console then offers "resend invite" rather than reporting failure.
+    invite_sent = fields.Bool(dump_only=True)
+    next_tasks = fields.List(fields.Nested(NextTaskSchema), dump_only=True)
+
+
+class ServiceDeletedSchema(Schema):
+    message = fields.Str(dump_only=True)
+
+
+class OwnerInviteResultSchema(Schema):
+    invite_sent = fields.Bool(dump_only=True)
+    owner = fields.Nested(OwnerSchema, dump_only=True)
+    owner_invite = fields.Nested(OwnerInviteSchema, dump_only=True)

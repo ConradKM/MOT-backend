@@ -82,7 +82,12 @@ def _token_revoked(_jwt_header, jwt_payload) -> bool:
         return True
 
     valid_from = employee.tokens_valid_from
-    if valid_from is not None and jwt_payload.get("iat", 0) < valid_from.timestamp():
+    # `iat` is integer seconds (RFC 7519) while tokens_valid_from carries
+    # microseconds, so comparing them raw rejects a token minted in the very
+    # second of the invalidation - which is precisely the token a "set your
+    # password, then sign in" flow issues. Floor both to the second: anything
+    # issued before that second is still rejected.
+    if valid_from is not None and jwt_payload.get("iat", 0) < int(valid_from.timestamp()):
         return True
 
     if jwt_payload.get(IMPERSONATION_CLAIM) is not None:
