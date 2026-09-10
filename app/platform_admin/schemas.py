@@ -9,6 +9,11 @@ garage API by someone adding it to the wrong schema.
 
 from marshmallow import Schema, fields, validate
 
+from app.communications.provisioning.states import (
+    DISPLAY_STATUSES,
+    VOICE_STATUSES,
+    WHATSAPP_STATUSES,
+)
 from app.garages.business_onboarding import BOOKING_SETTING_FIELDS, ONBOARDING_STATUSES
 from app.garages.layouts import LAYOUT_VARIANTS
 from app.models.appointments.appointment_type import APPOINTMENT_TYPE_STATUSES
@@ -724,11 +729,25 @@ class OwnerInviteSchema(Schema):
 
 
 class CommunicationsStatusSchema(Schema):
+    """The Onboarding tab's summary of communications.
+
+    A read-only headline, not the workflow: the per-channel states, actions
+    and provider errors live on the Communications tab
+    (:class:`CommunicationsDetailSchema`). These fields exist so the
+    onboarding checklist can say "waiting for Meta" rather than "not done".
+    """
+
     configured = fields.Bool(dump_only=True)
     enabled = fields.Bool(dump_only=True)
     voice_phone_number = fields.Str(dump_only=True, allow_none=True)
     whatsapp_sender = fields.Str(dump_only=True, allow_none=True)
     twilio_subaccount_sid = fields.Str(dump_only=True, allow_none=True)
+    voice_status = fields.Str(dump_only=True)
+    voice_stage = fields.Str(dump_only=True)
+    voice_blocker = fields.Str(dump_only=True, allow_none=True)
+    whatsapp_status = fields.Str(dump_only=True)
+    whatsapp_stage = fields.Str(dump_only=True)
+    whatsapp_blocker = fields.Str(dump_only=True, allow_none=True)
 
 
 class NextTaskSchema(Schema):
@@ -768,3 +787,337 @@ class OwnerInviteResultSchema(Schema):
     invite_sent = fields.Bool(dump_only=True)
     owner = fields.Nested(OwnerSchema, dump_only=True)
     owner_invite = fields.Nested(OwnerInviteSchema, dump_only=True)
+
+
+# --------------------------------------------------------------------------
+# Communications setup (app/platform_admin/communications.py)
+#
+# Dump-only for everything the provider owns, and deliberately narrow on the
+# load side: the only secret this API ever *accepts* is a subaccount Auth
+# Token being attached (load_only, never echoed back), and the only secret it
+# ever handles in passing is Meta's one-time code, which goes straight to
+# Twilio and is never persisted. No schema here has a field for
+# TWILIO_AUTH_TOKEN, a Meta access token, or a stored OTP, because no
+# response is allowed to carry one.
+# --------------------------------------------------------------------------
+
+
+class ProviderErrorSchema(Schema):
+    """A provider failure, explained without losing the original."""
+
+    error_code = fields.Str(dump_only=True, allow_none=True)
+    error_message = fields.Str(dump_only=True, allow_none=True)
+    channel = fields.Str(dump_only=True, allow_none=True)
+    meaning = fields.Str(dump_only=True)
+    recommended_action = fields.Str(dump_only=True)
+    customer_must_act = fields.Bool(dump_only=True)
+    customer_explanation = fields.Str(dump_only=True, allow_none=True)
+    known = fields.Bool(dump_only=True)
+
+
+class ChannelErrorSchema(ProviderErrorSchema):
+    """One failed communication from ``communication_logs``, explained."""
+
+    id = fields.UUID(dump_only=True)
+    direction = fields.Str(dump_only=True)
+    status = fields.Str(dump_only=True)
+    to_address = fields.Str(dump_only=True, allow_none=True)
+    trigger_event = fields.Str(dump_only=True, allow_none=True)
+    created_at = fields.DateTime(dump_only=True)
+
+
+class SetupActionSchema(Schema):
+    key = fields.Str(dump_only=True)
+    label = fields.Str(dump_only=True)
+
+
+class PrerequisiteSchema(Schema):
+    key = fields.Str(dump_only=True)
+    label = fields.Str(dump_only=True)
+    satisfied = fields.Bool(dump_only=True)
+    how_to_fix = fields.Str(dump_only=True, allow_none=True)
+
+
+class WebhookUrlsSchema(Schema):
+    """The URLs provisioning writes onto Twilio resources - shown so an
+    operator can confirm them against the Twilio console by eye."""
+
+    voice_url = fields.Str(dump_only=True)
+    status_callback = fields.Str(dump_only=True)
+    callback_url = fields.Str(dump_only=True)
+    status_callback_url = fields.Str(dump_only=True)
+
+
+class PlatformReadinessSchema(Schema):
+    twilio_configured = fields.Bool(dump_only=True)
+    secrets_configured = fields.Bool(dump_only=True)
+    webhooks_reachable = fields.Bool(dump_only=True)
+    embedded_signup = fields.List(fields.Nested(PrerequisiteSchema), dump_only=True)
+    voice_webhooks = fields.Nested(WebhookUrlsSchema, dump_only=True)
+    whatsapp_webhooks = fields.Nested(WebhookUrlsSchema, dump_only=True)
+
+
+class VoiceSetupSchema(Schema):
+    status = fields.Str(dump_only=True, validate=validate.OneOf(VOICE_STATUSES))
+    status_label = fields.Str(dump_only=True)
+    display_status = fields.Str(dump_only=True, validate=validate.OneOf(DISPLAY_STATUSES))
+    display_label = fields.Str(dump_only=True)
+    blocker = fields.Str(dump_only=True, allow_none=True)
+    next_admin_action = fields.Str(dump_only=True, allow_none=True)
+    next_customer_action = fields.Str(dump_only=True, allow_none=True)
+
+    phone_number = fields.Str(dump_only=True, allow_none=True)
+    number_sid = fields.Str(dump_only=True, allow_none=True)
+    capabilities = fields.List(fields.Str(), dump_only=True)
+    webhooks_configured = fields.Bool(dump_only=True)
+    webhooks_configured_at = fields.DateTime(dump_only=True, allow_none=True)
+    escalation_number = fields.Str(dump_only=True, allow_none=True)
+    fallback_number = fields.Str(dump_only=True, allow_none=True)
+    last_test_call_sid = fields.Str(dump_only=True, allow_none=True)
+    last_test_status = fields.Str(dump_only=True, allow_none=True)
+    last_test_at = fields.DateTime(dump_only=True, allow_none=True)
+    online_at = fields.DateTime(dump_only=True, allow_none=True)
+    last_error = fields.Nested(ProviderErrorSchema, dump_only=True, allow_none=True)
+
+
+class ExistingRegistrationSchema(Schema):
+    """Instructions for a number already on WhatsApp. Instructions, not an
+    action - CoMaz never deletes a customer's WhatsApp account."""
+
+    phone_number = fields.Str(dump_only=True)
+    meaning = fields.Str(dump_only=True)
+    steps = fields.List(fields.Str(), dump_only=True)
+    comaz_will_not = fields.Str(dump_only=True)
+
+
+class WhatsAppSetupSchema(Schema):
+    status = fields.Str(dump_only=True, validate=validate.OneOf(WHATSAPP_STATUSES))
+    status_label = fields.Str(dump_only=True)
+    display_status = fields.Str(dump_only=True, validate=validate.OneOf(DISPLAY_STATUSES))
+    display_label = fields.Str(dump_only=True)
+    blocker = fields.Str(dump_only=True, allow_none=True)
+    next_admin_action = fields.Str(dump_only=True, allow_none=True)
+    next_customer_action = fields.Str(dump_only=True, allow_none=True)
+
+    phone_number = fields.Str(dump_only=True, allow_none=True)
+    sender_address = fields.Str(dump_only=True, allow_none=True)
+    number_already_in_use = fields.Bool(dump_only=True)
+    waba_id = fields.Str(dump_only=True, allow_none=True)
+    meta_business_id = fields.Str(dump_only=True, allow_none=True)
+    meta_phone_number_id = fields.Str(dump_only=True, allow_none=True)
+    meta_signup_started_at = fields.DateTime(dump_only=True, allow_none=True)
+    meta_signup_completed_at = fields.DateTime(dump_only=True, allow_none=True)
+    sender_sid = fields.Str(dump_only=True, allow_none=True)
+    sender_status = fields.Str(dump_only=True, allow_none=True)
+    display_name = fields.Str(dump_only=True, allow_none=True)
+    offline_reason = fields.Str(dump_only=True, allow_none=True)
+    last_status_check_at = fields.DateTime(dump_only=True, allow_none=True)
+    last_test_at = fields.DateTime(dump_only=True, allow_none=True)
+    last_test_status = fields.Str(dump_only=True, allow_none=True)
+    online_at = fields.DateTime(dump_only=True, allow_none=True)
+    last_error = fields.Nested(ProviderErrorSchema, dump_only=True, allow_none=True)
+    existing_registration = fields.Nested(
+        ExistingRegistrationSchema, dump_only=True, allow_none=True
+    )
+
+
+class CommunicationsSetupSummarySchema(Schema):
+    """One business's row in the Communications Setup list."""
+
+    garage_id = fields.UUID(dump_only=True)
+    garage_name = fields.Str(dump_only=True)
+    garage_slug = fields.Str(dump_only=True)
+    communications_enabled = fields.Bool(dump_only=True)
+    automation_enabled = fields.Bool(dump_only=True)
+    twilio_subaccount_sid = fields.Str(dump_only=True, allow_none=True)
+    subaccount_state = fields.Str(dump_only=True)
+    voice_phone_number = fields.Str(dump_only=True, allow_none=True)
+    voice_status = fields.Str(dump_only=True)
+    voice_display_status = fields.Str(dump_only=True)
+    whatsapp_number = fields.Str(dump_only=True, allow_none=True)
+    whatsapp_status = fields.Str(dump_only=True)
+    whatsapp_display_status = fields.Str(dump_only=True)
+    waba_id = fields.Str(dump_only=True, allow_none=True)
+    sender_status = fields.Str(dump_only=True, allow_none=True)
+    webhooks_configured = fields.Bool(dump_only=True)
+    display_status = fields.Str(dump_only=True, validate=validate.OneOf(DISPLAY_STATUSES))
+    display_label = fields.Str(dump_only=True)
+    setup_stage = fields.Str(dump_only=True)
+    blocker = fields.Str(dump_only=True, allow_none=True)
+    next_admin_action = fields.Str(dump_only=True, allow_none=True)
+    next_customer_action = fields.Str(dump_only=True, allow_none=True)
+    last_error = fields.Nested(ProviderErrorSchema, dump_only=True, allow_none=True)
+    recent_failures = fields.Int(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
+class CommunicationsOverviewSchema(Schema):
+    items = fields.List(fields.Nested(CommunicationsSetupSummarySchema), dump_only=True)
+    total = fields.Int(dump_only=True)
+    counts_by_status = fields.Dict(keys=fields.Str(), values=fields.Int(), dump_only=True)
+    platform = fields.Nested(PlatformReadinessSchema, dump_only=True)
+
+
+class CommunicationsOverviewQuerySchema(Schema):
+    search = fields.Str(load_default=None)
+    status = fields.Str(load_default=None, validate=validate.OneOf(DISPLAY_STATUSES))
+
+
+class CommunicationsDetailSchema(Schema):
+    garage_id = fields.UUID(dump_only=True)
+    garage_name = fields.Str(dump_only=True)
+    garage_slug = fields.Str(dump_only=True)
+    communications_enabled = fields.Bool(dump_only=True)
+    automation_enabled = fields.Bool(dump_only=True)
+    twilio_subaccount_sid = fields.Str(dump_only=True, allow_none=True)
+    subaccount_state = fields.Str(dump_only=True)
+    messaging_service_sid = fields.Str(dump_only=True, allow_none=True)
+    display_status = fields.Str(dump_only=True, validate=validate.OneOf(DISPLAY_STATUSES))
+    display_label = fields.Str(dump_only=True)
+    voice = fields.Nested(VoiceSetupSchema, dump_only=True)
+    whatsapp = fields.Nested(WhatsAppSetupSchema, dump_only=True)
+    voice_actions = fields.List(fields.Nested(SetupActionSchema), dump_only=True)
+    whatsapp_actions = fields.List(fields.Nested(SetupActionSchema), dump_only=True)
+    business_actions = fields.List(fields.Nested(SetupActionSchema), dump_only=True)
+    recent_errors = fields.List(fields.Nested(ChannelErrorSchema), dump_only=True)
+    notes = fields.Str(dump_only=True, allow_none=True)
+    platform = fields.Nested(PlatformReadinessSchema, dump_only=True)
+    updated_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
+class SubaccountAttachSchema(Schema):
+    """Attaching a subaccount created by hand in the Twilio console.
+
+    ``auth_token`` is ``load_only`` and is encrypted the moment it arrives
+    (``app/communications/secrets.py``). Nothing reads it back out to a
+    response, and the audit trail records only the SID.
+    """
+
+    subaccount_sid = fields.Str(required=True, validate=validate.Length(min=10, max=64))
+    auth_token = fields.Str(required=True, load_only=True, validate=validate.Length(min=10))
+
+
+class AvailableNumberQuerySchema(Schema):
+    country = fields.Str(load_default=None, validate=validate.Length(equal=2))
+    area_code = fields.Str(load_default=None, validate=validate.Length(max=6))
+    contains = fields.Str(load_default=None, validate=validate.Length(max=20))
+    limit = fields.Int(load_default=10, validate=validate.Range(min=1, max=30))
+
+
+class AvailableNumberSchema(Schema):
+    phone_number = fields.Str(dump_only=True)
+    friendly_name = fields.Str(dump_only=True, allow_none=True)
+    locality = fields.Str(dump_only=True, allow_none=True)
+    region = fields.Str(dump_only=True, allow_none=True)
+    iso_country = fields.Str(dump_only=True)
+    capabilities = fields.List(fields.Str(), dump_only=True)
+
+
+class AvailableNumberListSchema(Schema):
+    items = fields.List(fields.Nested(AvailableNumberSchema), dump_only=True)
+
+
+#: One E.164 rule for every provisioning endpoint, so they all reject the
+#: same shapes rather than each view inventing its own.
+_E164 = validate.Regexp(r"^\+[1-9]\d{6,15}$", error="Must be an E.164 number, e.g. +441234567890.")
+
+
+class VoiceNumberPurchaseSchema(Schema):
+    phone_number = fields.Str(required=True, validate=_E164)
+    #: True to adopt a number the subaccount already owns instead of buying a
+    #: new one - never a silent fallback, because one spends money and the
+    #: other does not.
+    already_owned = fields.Bool(load_default=False)
+
+
+class VoiceRoutingSchema(Schema):
+    escalation_number = fields.Str(load_default=None, allow_none=True, validate=_E164)
+    fallback_number = fields.Str(load_default=None, allow_none=True, validate=_E164)
+
+
+class TestCallSchema(Schema):
+    to_number = fields.Str(required=True, validate=_E164)
+
+
+class TestCallResultSchema(Schema):
+    call_sid = fields.Str(dump_only=True)
+    status = fields.Str(dump_only=True)
+    to = fields.Str(dump_only=True)
+    from_ = fields.Str(dump_only=True, data_key="from")
+
+
+class WhatsAppNumberSchema(Schema):
+    number_e164 = fields.Str(required=True, validate=_E164)
+    #: The business told us this number is already on WhatsApp or the WhatsApp
+    #: Business App. Routes onboarding to EXISTING_WHATSAPP_MIGRATION_REQUIRED
+    #: rather than to signup - CoMaz never clears that registration itself.
+    already_on_whatsapp = fields.Bool(load_default=False)
+
+
+class EmbeddedSignupConfigSchema(Schema):
+    """Public Meta identifiers the browser needs to open Embedded Signup.
+
+    Everything here is rendered into Meta's own popup URL by the JS SDK. No
+    app secret and no access token appears, and none is needed: the WABA is
+    associated server-side through Twilio afterwards.
+    """
+
+    ready = fields.Bool(dump_only=True)
+    prerequisites = fields.List(fields.Nested(PrerequisiteSchema), dump_only=True)
+    app_id = fields.Str(dump_only=True, allow_none=True)
+    config_id = fields.Str(dump_only=True, allow_none=True)
+    solution_id = fields.Str(dump_only=True, allow_none=True)
+    graph_version = fields.Str(dump_only=True)
+    state = fields.Str(dump_only=True)
+
+
+class EmbeddedSignupResultSchema(Schema):
+    """What the Meta popup handed back. ``state`` must match the nonce this
+    business's launch minted, so one business's result cannot be applied to
+    another."""
+
+    state = fields.Str(required=True, validate=validate.Length(min=10, max=64))
+    waba_id = fields.Str(required=True, validate=validate.Length(min=3, max=64))
+    phone_number_id = fields.Str(
+        load_default=None, allow_none=True, validate=validate.Length(max=64)
+    )
+    business_id = fields.Str(load_default=None, allow_none=True, validate=validate.Length(max=64))
+
+
+class SenderRegistrationSchema(Schema):
+    display_name = fields.Str(required=True, validate=validate.Length(min=2, max=200))
+    #: How Meta should deliver the one-time code when the number needs
+    #: verifying. Twilio accepts "sms" or "voice".
+    verification_method = fields.Str(
+        load_default=None, allow_none=True, validate=validate.OneOf(["sms", "voice"])
+    )
+
+
+class VerificationCodeSchema(Schema):
+    """Meta's one-time code, passed straight to Twilio.
+
+    ``load_only`` and never persisted: it is a short-lived credential for the
+    customer's own number, so there is no state in which CoMaz should be able
+    to read one back.
+    """
+
+    code = fields.Str(required=True, load_only=True, validate=validate.Length(min=3, max=12))
+
+
+class TestMessageSchema(Schema):
+    to_number = fields.Str(required=True, validate=_E164)
+
+
+class TestMessageResultSchema(Schema):
+    communication_log_id = fields.Str(dump_only=True)
+    status = fields.Str(dump_only=True)
+    error_code = fields.Str(dump_only=True, allow_none=True)
+    error_message = fields.Str(dump_only=True, allow_none=True)
+
+
+class ToggleSchema(Schema):
+    enabled = fields.Bool(required=True)
+
+
+class ErrorCatalogueSchema(Schema):
+    items = fields.List(fields.Nested(ProviderErrorSchema), dump_only=True)

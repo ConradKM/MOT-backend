@@ -2,7 +2,11 @@
 
 The foundation for CoMaz OS's phone-call and WhatsApp features: multi-tenant
 config, webhook endpoints, and a service layer. **No AI voice agent or IVR is
-built** - see [What's not built yet](#whats-not-built-yet). A rule-based (not
+built** - see [What's not built yet](#whats-not-built-yet). Provisioning a
+business's subaccount, voice number and WhatsApp sender from Platform Admin
+is documented separately in
+[`COMMUNICATIONS_ONBOARDING.md`](COMMUNICATIONS_ONBOARDING.md), including the
+Meta/Twilio Tech Provider approvals it depends on. A rule-based (not
 AI) WhatsApp conversational booking engine *is* built and fully usable
 without a live Twilio account - see
 [`CONVERSATION_ENGINE.md`](CONVERSATION_ENGINE.md). This document explains
@@ -184,16 +188,37 @@ verification turns it back on for that test).
 
 ---
 
-## Subaccounts (not yet provisioned)
+## Subaccounts
 
-`GarageCommunicationSettings.twilio_subaccount_sid` exists so a garage's
-number/sender ownership, usage, and logs can eventually be fully isolated at
-the Twilio-account level, not just in CoMaz OS's own database. Creating a
-subaccount and storing/using its own Auth Token is deliberately **not**
-implemented - `get_twilio_client_for_garage()` always returns the master
-client today, with a docstring pointing at this as the one place that
-changes when subaccounts are real. Automating subaccount creation and number
-purchasing is out of scope for this foundation (see below).
+Every business gets its **own Twilio subaccount**. Twilio's Tech Provider
+programme requires it (each customer WABA must map to a single Twilio account
+or subaccount), and it is what keeps one business's numbers, senders, logs and
+spend separate from another's.
+
+Provisioning lives in `app/communications/provisioning/subaccounts.py` and is
+driven from Platform Admin > a business > Communications. Three things are
+worth knowing:
+
+* **Two clients, deliberately distinct.** For the classic 2010-04-01 resources
+  (phone numbers, calls, messages) the *master* credentials act on the
+  subaccount's own resource path - `Client(sid, token, subaccount_sid)` - so
+  the common send path never decrypts a stored credential. Messaging **Senders
+  v2** has no parent-acting path, so registering a WhatsApp sender genuinely
+  needs the subaccount's own Auth Token.
+* **That token is encrypted at rest.** It lives in
+  `twilio_subaccount_credentials`, Fernet-encrypted with `COMMS_SECRET_KEY`
+  (`app/communications/secrets.py`), in its own table so no marshmallow schema
+  can reach it. With `COMMS_SECRET_KEY` unset, subaccount provisioning refuses
+  to run and Platform Admin says so - it never falls back to plaintext.
+* **The database enforces the tenancy rule.** `twilio_subaccount_sid`,
+  `voice_phone_number` and `whatsapp_sender` are each unique across businesses,
+  as is `waba_id` on the onboarding table. These are exactly the columns
+  `tenant_resolution.py` matches an inbound webhook against, where a duplicate
+  would silently route one business's calls to another.
+
+`get_twilio_client_for_garage()` now scopes to a garage's subaccount when it
+has one, and still returns the master client for a garage onboarded before
+subaccounts existed.
 
 ---
 
@@ -203,10 +228,14 @@ By design, so the foundation lands without also committing to unreviewed
 product decisions:
 
 * AI voice assistant / speech-to-text / LLM-driven booking conversations
-* IVR menus beyond the single static greeting
-* Automated Twilio subaccount provisioning or phone-number purchasing
-* Production WhatsApp message templates
+  (beyond the existing ConversationRelay wiring)
+* IVR menus beyond the single static greeting and the human-escalation
+  forward
+* Production WhatsApp message templates (and template submission/approval)
 * Twilio usage/billing integration
+* Releasing or transferring a number when a business leaves - Platform Admin
+  can disable communications, which stops every send, but deliberately
+  releases nothing at Twilio
 
 ---
 

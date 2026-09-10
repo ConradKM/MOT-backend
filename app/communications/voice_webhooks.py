@@ -72,8 +72,9 @@ def incoming_call():
     )
 
     # The automated assistant, when it's switched on for this deployment. Any
-    # failure building the TwiML falls through to the static greeting below -
-    # a broken ConversationRelay config must never drop the call.
+    # failure building the TwiML falls through to the escalation/static
+    # greeting below - a broken ConversationRelay config must never drop the
+    # call.
     if conversationrelay_enabled():
         try:
             twiml = build_incoming_call_twiml(garage)
@@ -97,11 +98,33 @@ def incoming_call():
         garage.id,
         conversationrelay_enabled(),
     )
+    escalation = _escalation_number(garage)
+    if escalation:
+        # A business that has nominated a human destination should never hear
+        # "being configured" - forward the caller instead. Set from Platform
+        # Admin > Communications; see app/communications/provisioning.
+        reply.say(f"Thank you for calling {garage.name}. Connecting you now.")
+        reply.dial(escalation)
+        return Response(str(reply), mimetype="text/xml")
+
     reply.say(
         f"Thank you for calling {garage.name}. "
         "Our automated booking service is currently being configured."
     )
     return Response(str(reply), mimetype="text/xml")
+
+
+def _escalation_number(garage) -> str | None:
+    """This business's human escalation destination, if it has set one.
+
+    Platform-controlled configuration (Platform Admin > Communications), not
+    something a garage user can write - the same boundary every other column
+    on ``GarageCommunicationSettings`` sits behind.
+    """
+    settings = garage.communication_settings
+    if settings is None:
+        return None
+    return settings.voice_escalation_number or settings.voice_fallback_number or None
 
 
 @twilio_voice_blp.route("/status", methods=["POST"])

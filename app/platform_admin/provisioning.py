@@ -189,13 +189,28 @@ def communications_status(garage: Garage) -> dict:
     ``app/communications/cli.py``'s job, and onboarding only needs to report
     what is left to do.
     """
+    from app.communications.provisioning import states
+
     settings = garage.communication_settings
+    row = garage.communications_onboarding
+    voice = states.voice_meaning(row.voice_status if row else None)
+    whatsapp = states.whatsapp_meaning(row.whatsapp_status if row else None)
+
     return {
         "configured": bool(settings and (settings.voice_phone_number or settings.whatsapp_sender)),
         "enabled": bool(settings and settings.communications_enabled),
         "voice_phone_number": settings.voice_phone_number if settings else None,
         "whatsapp_sender": settings.whatsapp_sender if settings else None,
         "twilio_subaccount_sid": settings.twilio_subaccount_sid if settings else None,
+        # Where setup has actually got to, so the Onboarding tab can say
+        # "waiting for Meta" instead of a bare "not done" - the full workflow
+        # lives on the Communications tab (app/platform_admin/communications.py).
+        "voice_status": voice.display,
+        "voice_stage": voice.label,
+        "voice_blocker": voice.blocker,
+        "whatsapp_status": whatsapp.display,
+        "whatsapp_stage": whatsapp.label,
+        "whatsapp_blocker": whatsapp.blocker,
     }
 
 
@@ -480,13 +495,18 @@ def next_tasks(garage: Garage) -> list[dict]:
         {
             "key": NEXT_TASK_WHATSAPP,
             "label": "Configure WhatsApp / Twilio",
-            "description": "Allocate a Twilio subaccount and WhatsApp sender for this business.",
+            # The current blocker where there is one, so an operator reading
+            # this list learns *why* it is outstanding rather than only that
+            # it is. Falls back to the generic description once it is done.
+            "description": comms["whatsapp_blocker"]
+            or "Allocate a Twilio subaccount and WhatsApp sender for this business.",
             "complete": bool(comms["whatsapp_sender"]),
         },
         {
             "key": NEXT_TASK_PHONE,
             "label": "Configure phone number / forwarding",
-            "description": "Point a voice number at this business and set call forwarding.",
+            "description": comms["voice_blocker"]
+            or "Point a voice number at this business and set call forwarding.",
             "complete": bool(comms["voice_phone_number"]),
         },
         {

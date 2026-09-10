@@ -1,3 +1,4 @@
+import base64
 import os
 from datetime import timedelta
 
@@ -201,6 +202,43 @@ class Config:
     # whichever number or WhatsApp sender you provision.
     PUBLIC_API_BASE_URL = os.getenv("PUBLIC_API_BASE_URL", "http://localhost:5001")
 
+    # --- Communications provisioning (app/communications/provisioning) -----
+    # Encrypts the Twilio *subaccount* Auth Tokens Platform Admin has to keep:
+    # the Messaging Senders v2 API authenticates as the account whose
+    # credentials sign the request, with no parent-acting path, so registering
+    # a customer's WhatsApp sender needs that customer's own subaccount
+    # credentials. A Fernet key - generate with
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Unset is a supported state: subaccount provisioning refuses to run and
+    # says so in Platform Admin, rather than storing a live credential in
+    # plaintext. Never commit a real value; never log it.
+    COMMS_SECRET_KEY = os.getenv("COMMS_SECRET_KEY", "")
+    # Default ISO country for the voice-number search in Platform Admin. UK,
+    # matching BOOKING_BASE_URL and the en-GB assistant - an operator can
+    # still search another country per request.
+    TWILIO_VOICE_COUNTRY = os.getenv("TWILIO_VOICE_COUNTRY", "GB")
+
+    # --- WhatsApp Tech Provider / Meta Embedded Signup --------------------
+    # All three are *public* identifiers rendered into Meta's own popup URL -
+    # not secrets - but all three come from approvals that happen outside this
+    # codebase, so unset simply means "Embedded Signup is not available yet"
+    # and Platform Admin reports exactly which one is missing.
+    #
+    # META_APP_ID                      - the Live Meta app approved for
+    #                                    whatsapp_business_messaging and
+    #                                    whatsapp_business_management.
+    # META_EMBEDDED_SIGNUP_CONFIG_ID   - the ES configuration created in that
+    #                                    app's dashboard.
+    # TWILIO_PARTNER_SOLUTION_ID       - the Partner Solution Twilio creates
+    #                                    for your Meta app once the Tech
+    #                                    Provider ticket is accepted.
+    META_APP_ID = os.getenv("META_APP_ID", "")
+    META_EMBEDDED_SIGNUP_CONFIG_ID = os.getenv("META_EMBEDDED_SIGNUP_CONFIG_ID", "")
+    TWILIO_PARTNER_SOLUTION_ID = os.getenv("TWILIO_PARTNER_SOLUTION_ID", "")
+    # Pinned, not floating: Meta changes the Embedded Signup payload shape
+    # between Graph versions, so an upgrade is a deliberate change here.
+    META_GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v21.0")
+
     # --- ConversationRelay voice assistant (app/communications/voice_relay.py,
     #     app/ws/twilio_voice.py) ---------------------------------------------
     # Off by default: an inbound call gets the existing static <Say> greeting
@@ -275,3 +313,13 @@ class TestConfig(Config):
     # specifically exercise validation flip this back on for the duration of
     # the test (see tests/api/test_twilio_webhooks.py).
     TWILIO_WEBHOOK_VALIDATE = False
+
+    # A fixed Fernet key so the encryption path in
+    # app/communications/secrets.py is exercised for real by the test suite
+    # rather than stubbed. It protects nothing: no test database holds a live
+    # Twilio credential, and this value must never appear in a deployment.
+    #
+    # Derived from a readable phrase rather than written out as base64, so the
+    # repository's secret scanner sees a 32-byte string that says what it is
+    # instead of a high-entropy literal indistinguishable from a real key.
+    COMMS_SECRET_KEY = base64.urlsafe_b64encode(b"comaz-test-key-not-a-real-secret").decode()

@@ -36,6 +36,19 @@ class GarageCommunicationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  #
     __tablename__ = "garage_communication_settings"
     __table_args__ = (
         UniqueConstraint("garage_id", name="uq_garage_communication_settings_garage_id"),
+        # Tenancy guards, enforced by the database rather than by every call
+        # site remembering to check. Two businesses sharing a subaccount, a
+        # voice number or a WhatsApp sender would cross-route real customer
+        # traffic - app/communications/tenant_resolution.py resolves an
+        # inbound webhook by exactly these columns, and `.first()` on a
+        # duplicate would silently pick a tenant at random. Postgres allows
+        # any number of NULLs in a unique column, so "not set up yet" (every
+        # row today) is unaffected.
+        UniqueConstraint(
+            "twilio_subaccount_sid", name="uq_garage_communication_settings_subaccount_sid"
+        ),
+        UniqueConstraint("voice_phone_number", name="uq_garage_communication_settings_voice"),
+        UniqueConstraint("whatsapp_sender", name="uq_garage_communication_settings_whatsapp"),
     )
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -65,5 +78,19 @@ class GarageCommunicationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  #
     # Optional: a Messaging Service SID, if this garage's outbound messages are
     # routed through one (sender pools / templates) rather than a fixed number.
     messaging_service_sid: Mapped[str | None] = mapped_column(String(64))
+    # Twilio's own SID ("PN…") for the voice number above. Set when Platform
+    # Admin buys or assigns the number, so reconfiguring its webhooks later
+    # addresses the resource directly instead of searching by number string.
+    voice_number_sid: Mapped[str | None] = mapped_column(String(64))
+
+    # Where a caller goes when the automated assistant cannot help, or when
+    # the assistant is off. E.164. NULL = no human escalation configured, and
+    # the inbound webhook falls back to its existing spoken message rather
+    # than dialling anything (see app/communications/voice_webhooks.py).
+    voice_escalation_number: Mapped[str | None] = mapped_column(String(20))
+    # Where Twilio should send the call if this deployment's own webhook is
+    # unreachable or errors - the last line of defence, so an outage rings a
+    # real phone instead of dropping the call. E.164, NULL = none.
+    voice_fallback_number: Mapped[str | None] = mapped_column(String(20))
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="communication_settings")
