@@ -30,6 +30,7 @@ from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.garage_schedule import GarageScheduleSettings
 from app.models.mot_record import MOTRecord
+from app.models.platform.admin import ROLE_SUPERADMIN, ROLE_SUPPORT, PlatformAdmin
 from app.models.role import Role
 from app.models.vehicle import Vehicle
 
@@ -374,6 +375,69 @@ def booking_request(session, garage):
 
 
 # --------------------------------------------------------------------------
+# Platform Admin fixtures (app/platform_admin)
+#
+# Deliberately built with their own table and their own token claim - never by
+# adding a role to `user`. A test that wants to prove a garage credential
+# can't reach /api/platform-admin uses `authenticated_client` against those
+# routes; there is no fixture that blurs the two.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def platform_admin(session):
+    admin = PlatformAdmin(
+        email="ops@comaz.example",
+        password_hash=generate_password_hash(DEFAULT_PASSWORD),
+        first_name="Ada",
+        last_name="Ops",
+        role=ROLE_SUPERADMIN,
+    )
+    session.add(admin)
+    session.commit()
+    return admin
+
+
+@pytest.fixture()
+def support_admin(session):
+    """A SUPPORT admin: reads everything and may impersonate, but must not be
+    able to change a tenant."""
+    admin = PlatformAdmin(
+        email="support@comaz.example",
+        password_hash=generate_password_hash(DEFAULT_PASSWORD),
+        first_name="Sam",
+        last_name="Support",
+        role=ROLE_SUPPORT,
+    )
+    session.add(admin)
+    session.commit()
+    return admin
+
+
+def _platform_token(admin, refresh=False):
+    claims = {"account_type": "platform_admin", "role": admin.role}
+    factory = create_refresh_token if refresh else create_access_token
+    return factory(identity=str(admin.id), additional_claims=claims)
+
+
+@pytest.fixture()
+def platform_access_token(app, platform_admin):
+    return _platform_token(platform_admin)
+
+
+@pytest.fixture()
+def platform_client(client, platform_access_token):
+    """Test client carrying a SUPERADMIN platform token."""
+    return AuthenticatedClient(client, platform_access_token)
+
+
+@pytest.fixture()
+def support_client(client, support_admin):
+    """Test client carrying a SUPPORT platform token."""
+    return AuthenticatedClient(client, _platform_token(support_admin))
+
+
+# --------------------------------------------------------------------------
 # Domain fixtures - Garage B / Employee B (the "other" tenant, for isolation tests)
 # --------------------------------------------------------------------------
 
@@ -493,6 +557,11 @@ _SECTION_BY_SUFFIX = [
     ("api/test_customer_portal.py", "Customer Portal"),
     ("api/test_public_booking.py", "Public Booking"),
     ("api/test_booking_requests.py", "Booking Requests"),
+    ("api/test_platform_admin_auth.py", "Platform Admin Auth"),
+    ("api/test_platform_admin_tenants.py", "Platform Admin Tenants"),
+    ("api/test_platform_admin_impersonation.py", "Platform Admin Impersonation"),
+    ("api/test_platform_admin_stats.py", "Platform Admin Statistics"),
+    ("api/test_platform_admin_operations.py", "Platform Admin Operations"),
     ("api/test_garage.py", "Garage API"),
     ("api/test_employees.py", "Employee API"),
     ("api/test_customers.py", "Customer API"),

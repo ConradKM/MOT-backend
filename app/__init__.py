@@ -8,6 +8,8 @@ from flask_cors import CORS
 
 from .config import Config
 from .extensions import api, db, jwt, limiter, migrate, sock
+from .platform_admin.impersonation import CLAIM_SESSION_ID as IMPERSONATION_CLAIM
+from .platform_admin.security import ACCOUNT_TYPE_PLATFORM_ADMIN
 
 
 def _configure_logging(app: Flask) -> None:
@@ -30,18 +32,49 @@ def _configure_logging(app: Flask) -> None:
 
 
 @jwt.token_in_blocklist_loader
-def _employee_token_revoked(_jwt_header, jwt_payload) -> bool:
-    """Reject an employee JWT whose account is deactivated or was issued
-    before the user's last password reset. Customer-portal tokens
-    (account_type == "customer") are left to app/customer_auth."""
-    if jwt_payload.get("account_type") == "customer":
+def _token_revoked(_jwt_header, jwt_payload) -> bool:
+    """Decide whether a decoded JWT is still usable, for every account type.
+
+    Runs on every authenticated request, which is what makes the checks below
+    take effect *immediately* rather than at token expiry:
+
+    * customer-portal tokens (``account_type == "customer"``) are left to
+      app/customer_auth, exactly as before;
+    * platform-admin tokens are re-resolved against ``platform_admins``
+      (app/platform_admin/security.py) - a deactivated admin's open tab stops
+      working on its next click;
+    * an employee token is rejected if the account is gone, deactivated, or
+      predates the user's last password reset;
+    * an employee token carrying impersonation claims additionally dies the
+      moment its :class:`ImpersonationSession` is revoked or expires; and
+    * an ordinary employee token is rejected while its tenant is suspended.
+
+    Impersonation is deliberately exempt from the suspension check: entering a
+    suspended tenant to fix whatever caused the suspension is the whole point
+    of support access, and that path is short-lived and audited.
+    """
+    account_type = jwt_payload.get("account_type")
+
+    if account_type == "customer":
         return False
 
+    if account_type == ACCOUNT_TYPE_PLATFORM_ADMIN:
+        from .platform_admin.security import platform_admin_token_revoked
+
+        return platform_admin_token_revoked(jwt_payload)
+
+    from sqlalchemy.orm import joinedload
+
     from .models.employee import Employee
+    from .models.garage import GARAGE_STATUS_SUSPENDED
 
     identity = jwt_payload.get("sub")
     try:
-        employee = db.session.get(Employee, uuid.UUID(identity))
+        # The garage is eager-loaded because the suspension check below needs
+        # it - one query per request, the same as before this check existed.
+        employee = db.session.get(
+            Employee, uuid.UUID(identity), options=[joinedload(Employee.garage)]
+        )
     except (TypeError, ValueError):
         return True
 
@@ -49,7 +82,15 @@ def _employee_token_revoked(_jwt_header, jwt_payload) -> bool:
         return True
 
     valid_from = employee.tokens_valid_from
-    return valid_from is not None and jwt_payload.get("iat", 0) < valid_from.timestamp()
+    if valid_from is not None and jwt_payload.get("iat", 0) < valid_from.timestamp():
+        return True
+
+    if jwt_payload.get(IMPERSONATION_CLAIM) is not None:
+        from .platform_admin.impersonation import impersonation_token_revoked
+
+        return impersonation_token_revoked(jwt_payload)
+
+    return employee.garage is not None and employee.garage.status == GARAGE_STATUS_SUSPENDED
 
 
 def create_app(config_class=Config):
@@ -88,7 +129,13 @@ def create_app(config_class=Config):
     )
     from .dev.cli import dev_info_command, seed_dev_command
     from .garages.cli import onboard_garage_command, update_garage_details_command
+    from .platform_admin.cli import (
+        create_platform_admin_command,
+        list_platform_admins_command,
+    )
 
+    app.cli.add_command(create_platform_admin_command)
+    app.cli.add_command(list_platform_admins_command)
     app.cli.add_command(onboard_garage_command)
     app.cli.add_command(update_garage_details_command)
     app.cli.add_command(configure_garage_communications_command)
@@ -118,6 +165,7 @@ def create_app(config_class=Config):
     from .health.routes import health_blp
     from .mot_records.routes import mot_records_blp
     from .mot_reminders.routes import mot_reminders_blp
+    from .platform_admin.routes import PLATFORM_ADMIN_BLUEPRINTS
     from .public_booking.routes import public_booking_blp
     from .roles.routes import roles_blp
     from .vehicles.routes import vehicles_blp
@@ -147,6 +195,12 @@ def create_app(config_class=Config):
     api.register_blueprint(appointments_blp)
     api.register_blueprint(appointment_checklists_blp)
     api.register_blueprint(checklist_item_media_blp)
+
+    # The internal operator console (app/platform_admin). A separate namespace
+    # (/api/platform-admin/*) behind a separate account table - no garage or
+    # customer credential reaches any of it.
+    for platform_blp in PLATFORM_ADMIN_BLUEPRINTS:
+        api.register_blueprint(platform_blp)
 
     # Importing app.ws registers its @sock.route handlers on the sock instance
     # init'd above (served only under a WebSocket-capable server - gunicorn's
@@ -185,6 +239,12 @@ def create_app(config_class=Config):
         message_template,
     )
     from .models.conversation import callback_request, conversation_session  # noqa: F401
+    from .models.platform import (  # noqa: F401
+        admin,
+        audit_log,
+        feature_flag,
+        impersonation,
+    )
 
     register_default_handlers()
     register_email_handlers()
