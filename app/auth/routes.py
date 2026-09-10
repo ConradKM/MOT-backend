@@ -10,6 +10,7 @@ from flask_smorest import Blueprint, abort
 from werkzeug.security import check_password_hash
 
 from app.auth.utils import get_current_employee
+from app.branding import PLATFORM_NAME
 from app.employees.schemas import EmployeeSchema
 from app.employees.service import validate_password
 from app.extensions import db, limiter
@@ -21,6 +22,8 @@ from app.garages.onboarding import (
     onboard_garage,
 )
 from app.models.employee import Employee
+from app.models.garage import GARAGE_STATUS_SUSPENDED
+from app.platform_admin.impersonation import ImpersonationError, exchange_handoff_code
 
 from .reset import (
     consume_token_and_set_password,
@@ -30,6 +33,8 @@ from .reset import (
 )
 from .schemas import (
     ForgotPasswordSchema,
+    ImpersonationExchangeSchema,
+    ImpersonationTokenSchema,
     LoginSchema,
     MessageSchema,
     RefreshTokenSchema,
@@ -112,6 +117,19 @@ class Login(MethodView):
         ):
             abort(401, message="Invalid email or password.")
 
+        # A tenant suspended by Platform Admin keeps all of its data, but its
+        # staff cannot get in. Checked only *after* the credentials pass, so
+        # this can't be used to discover which businesses are suspended. Live
+        # tokens are cut off separately, by the JWT blocklist loader in
+        # app/__init__.py.
+        if employee.garage is not None and employee.garage.status == GARAGE_STATUS_SUSPENDED:
+            abort(
+                403,
+                message=(
+                    f"This business account is suspended. Please contact {PLATFORM_NAME} support."
+                ),
+            )
+
         return {
             "access_token": create_access_token(identity=str(employee.id)),
             "refresh_token": create_refresh_token(identity=str(employee.id)),
@@ -191,3 +209,35 @@ class ResetPassword(MethodView):
         db.session.commit()
 
         return {"message": "Your password has been reset successfully. You can now log in."}
+
+
+@auth_blp.route("/impersonation/exchange")
+class ImpersonationExchange(MethodView):
+    """Redeem a Platform Admin support-impersonation handoff code.
+
+    Unauthenticated on purpose: the single-use code *is* the credential, and
+    the garage frontend that redeems it has no other token yet. What comes
+    back is an ordinary employee access token with two extra claims
+    (``impersonation_id`` / ``impersonated_by``), a hard expiry of a few
+    minutes and no refresh token - see app/platform_admin/impersonation.py.
+
+    Every failure mode returns the same message, so the endpoint can't be used
+    to probe which codes exist.
+    """
+
+    @limiter.limit(lambda: current_app.config["AUTH_LOGIN_RATELIMIT"])
+    @auth_blp.arguments(ImpersonationExchangeSchema)
+    @auth_blp.response(200, ImpersonationTokenSchema)
+    def post(self, data):
+        try:
+            result = exchange_handoff_code(data["code"])
+        except ImpersonationError as exc:
+            abort(400, message=str(exc))
+
+        return {
+            "access_token": result["access_token"],
+            "expires_at": result["expires_at"],
+            "garage": result["garage"],
+            "employee": result["employee"],
+            "impersonated_by_email": result["session"].admin_email,
+        }

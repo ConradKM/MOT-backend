@@ -203,6 +203,25 @@ starts normally, booking is unaffected, sends are recorded as
 unverifiable requests. Full architecture, setup checklist and required
 environment variables: [`docs/TWILIO_SETUP.md`](docs/TWILIO_SETUP.md).
 
+## Platform Admin
+
+The internal CoMaz/MazTrad operator console (`app/platform_admin`), served
+under `/api/platform-admin/*` and consumed by the separate `comaz-admin`
+frontend at `admin.comaz.co.uk`. Tenant management, per-business and
+platform-wide statistics, support impersonation, delivery/job health, feature
+flags and an audit trail.
+
+Its accounts live in their own table with their own JWT claim - a garage or
+customer credential cannot reach a single endpoint in that namespace - and are
+created only from the shell:
+
+```bash
+flask create-platform-admin --email you@comaz.co.uk --role SUPERADMIN
+```
+
+Boundary, impersonation design, statistics rules and the full endpoint list:
+[`docs/PLATFORM_ADMIN.md`](docs/PLATFORM_ADMIN.md).
+
 ## Project structure
 
 ```text
@@ -211,6 +230,7 @@ app/
 ├── config.py
 ├── extensions.py
 ├── storage/            # pluggable object storage (S3 / R2 / MinIO / none)
+├── platform_admin/     # internal operator console (/api/platform-admin/*)
 ├── models/
 ├── auth/
 ├── customer_auth/      # email + registration login for the customer portal

@@ -110,6 +110,11 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     from_address: Mapped[str | None] = mapped_column(String(320))
     to_address: Mapped[str | None] = mapped_column(String(320))
 
+    # The rendered subject line, for channels that have one (EMAIL). Null for
+    # voice/WhatsApp/SMS, and for email rows written before this column
+    # existed - Platform Admin's delivery log falls back to the trigger event.
+    subject: Mapped[str | None] = mapped_column(String(300))
+
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     # Which app/communications/events.py constant (if any) produced this row -
     # e.g. "BOOKING_REQUEST_APPROVED". Null for a row created directly (an
@@ -130,7 +135,18 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     # inbound message/call is ever "unread".
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Set on a row created by Platform Admin resending a failed message
+    # (app/platform_admin/operations.py): it points at the original failure,
+    # which is left untouched. Null on every ordinary row. Self-referential
+    # and SET NULL, so pruning old logs can never orphan a retry.
+    retry_of_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("communication_logs.id", ondelete="SET NULL"), index=True
+    )
+
     garage: Mapped["Garage"] = relationship("Garage")
+    retry_of: Mapped["CommunicationLog | None"] = relationship(
+        "CommunicationLog", remote_side="CommunicationLog.id"
+    )
     customer: Mapped["Customer | None"] = relationship("Customer")
     appointment: Mapped["Appointment | None"] = relationship("Appointment")
     booking_request: Mapped["BookingRequest | None"] = relationship("BookingRequest")

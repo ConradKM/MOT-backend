@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String
+from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -22,8 +23,22 @@ if TYPE_CHECKING:
     )
     from app.models.mot_record import MOTRecord
     from app.models.mot_reminder_settings import MOTReminderSettings
+    from app.models.platform.feature_flag import GarageFeatureFlag
     from app.models.role import Role
     from app.models.vehicle import Vehicle
+
+
+# Tenant lifecycle, owned by Platform Admin (app/platform_admin) and by
+# nothing else - no garage-facing route reads or writes it. ACTIVE is a paying
+# / fully live tenant; TRIAL is the same access with an end date attached
+# (`trial_ends_at`); SUSPENDED cuts staff off - see app/auth/routes.py::Login
+# and the JWT blocklist loader in app/__init__.py. "Dormant" is deliberately
+# *not* a status: it is derived from activity at read time
+# (app/platform_admin/stats.py), so a tenant can never get stuck in it.
+GARAGE_STATUS_ACTIVE = "ACTIVE"
+GARAGE_STATUS_TRIAL = "TRIAL"
+GARAGE_STATUS_SUSPENDED = "SUSPENDED"
+GARAGE_STATUSES = (GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, GARAGE_STATUS_SUSPENDED)
 
 
 class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
@@ -62,6 +77,31 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     address: Mapped[str | None] = mapped_column(String(500))
     postcode: Mapped[str | None] = mapped_column(String(20))
     website: Mapped[str | None] = mapped_column(String(200))
+
+    # --- platform-owned tenant lifecycle (Platform Admin only) --------------
+    # Not in GarageSchema / GarageDetailsUpdateSchema: a garage user can
+    # neither read nor write any of these through /api/garage.
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=GARAGE_STATUS_ACTIVE,
+        server_default=GARAGE_STATUS_ACTIVE,
+    )
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Why the tenant was suspended - shown to the admin who reactivates it,
+    # never to the tenant.
+    suspension_reason: Mapped[str | None] = mapped_column(Text)
+    # Only meaningful while status == TRIAL. Nothing enforces it yet; the
+    # column is what a future billing job would read.
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Subscription plan key (app/platform_admin/features.py::PLANS). Drives
+    # the tenant's default feature set, and is the hook a future
+    # subscription/revenue metric would price off.
+    plan: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="STANDARD", server_default="STANDARD"
+    )
+    # Free-text support notes, internal to the platform team.
+    internal_notes: Mapped[str | None] = mapped_column(Text)
 
     employees: Mapped[list["Employee"]] = relationship(
         "Employee", back_populates="garage", cascade="all, delete-orphan"
@@ -110,5 +150,10 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
         "GarageCommunicationSettings",
         back_populates="garage",
         uselist=False,
+        cascade="all, delete-orphan",
+    )
+    feature_flags: Mapped[list["GarageFeatureFlag"]] = relationship(
+        "GarageFeatureFlag",
+        back_populates="garage",
         cascade="all, delete-orphan",
     )

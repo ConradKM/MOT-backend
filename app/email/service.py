@@ -161,6 +161,10 @@ def _send(
         "external_provider": provider,
         "from_address": reply_to,
         "to_address": to,
+        # Stored so a failed send can be retried verbatim from Platform
+        # Admin's delivery log (app/platform_admin/operations.py) and so that
+        # log can show what was actually sent, not just its trigger.
+        "subject": subject,
         "trigger_event": trigger_event,
         "body": text_body,
         "customer_id": customer_id,

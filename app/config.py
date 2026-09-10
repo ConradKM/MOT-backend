@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 
 from app.branding import PLATFORM_NAME
 
@@ -45,7 +46,10 @@ class Config:
         for origin in os.getenv(
             "CORS_ORIGINS",
             "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,"
-            "https://app.comaz.co.uk,https://comaz.co.uk",
+            "https://app.comaz.co.uk,https://comaz.co.uk,"
+            # Platform Admin (comaz-admin) - its own origin, dev and deployed.
+            "http://localhost:5174,http://127.0.0.1:5174,http://localhost:4174,"
+            "https://admin.comaz.co.uk",
         ).split(",")
         if origin.strip()
     )
@@ -82,6 +86,39 @@ class Config:
     # POST /api/auth/register calls the same onboarding service; set this to
     # "false" to make onboarding CLI-only (the HTTP endpoint then 404s).
     ONBOARDING_HTTP_ENABLED = os.getenv("ONBOARDING_HTTP_ENABLED", "true").lower() != "false"
+
+    # --- Platform Admin (see app/platform_admin) -------------------------
+    # The internal operator console at admin.comaz.co.uk. Its accounts live in
+    # their own table and are created only by `flask create-platform-admin` -
+    # there is no HTTP registration path, so nothing here enables or disables
+    # the feature; these are just its knobs.
+    #
+    # Admin sessions are deliberately shorter than a garage user's: the
+    # console can read every tenant, so a forgotten open tab should cost less.
+    PLATFORM_ADMIN_ACCESS_TOKEN_EXPIRES = timedelta(
+        minutes=int(os.getenv("PLATFORM_ADMIN_ACCESS_TOKEN_MINUTES", "30"))
+    )
+    PLATFORM_ADMIN_REFRESH_TOKEN_EXPIRES = timedelta(
+        hours=int(os.getenv("PLATFORM_ADMIN_REFRESH_TOKEN_HOURS", "12"))
+    )
+    PLATFORM_ADMIN_LOGIN_RATELIMIT = os.getenv(
+        "PLATFORM_ADMIN_LOGIN_RATELIMIT", "5 per minute;50 per hour"
+    )
+    # How long a support impersonation lasts. There is no refresh token for
+    # one, so this is the hard ceiling on a single grant.
+    PLATFORM_ADMIN_IMPERSONATION_MINUTES = int(
+        os.getenv("PLATFORM_ADMIN_IMPERSONATION_MINUTES", "15")
+    )
+    # How long the single-use handoff code that carries an impersonation from
+    # the admin console to the garage app stays redeemable. Seconds, not
+    # minutes: it only has to survive one redirect.
+    PLATFORM_ADMIN_IMPERSONATION_HANDOFF_SECONDS = int(
+        os.getenv("PLATFORM_ADMIN_IMPERSONATION_HANDOFF_SECONDS", "90")
+    )
+    # Read-only here: the operations dashboard reports whether a broker is
+    # configured for the reminder worker (app/tasks/celery_app.py reads the
+    # same env var directly, since Celery starts outside the Flask app).
+    CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "")
 
     # --- Checklist evidence storage (see app/storage) --------------------
     # "s3" for any S3-compatible bucket (AWS / Cloudflare R2 / MinIO), "none"
@@ -210,6 +247,7 @@ class TestConfig(Config):
         "http://localhost:5173",
         "https://app.comaz.co.uk",
         "https://comaz.co.uk",
+        "https://admin.comaz.co.uk",
     )
 
     # Deterministic regardless of the developer's shell - the dev-only helper
