@@ -12,7 +12,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.conversation import automation, engine, session_service
+from app.conversation import actions, automation, engine, session_service
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
@@ -109,6 +109,27 @@ def test_full_booking_flow_creates_pending_request(
     assert booking_request.vehicle_registration == "AB12CDE"
     assert booking_request.appointment_type_id == appointment_type.id
     assert booking_request.preferred_date == target_day
+
+
+def test_booking_creation_revalidates_against_the_conversation_timestamp(
+    garage, garage_schedule, appointment_type
+):
+    now = _now()
+    booking_request, reason = actions.create_booking_request(
+        garage,
+        first_name="Jane",
+        last_name="Doe",
+        phone_e164=PHONE_RAW,
+        email=None,
+        vehicle_registration="AB12CDE",
+        appointment_type=appointment_type,
+        preferred_date=_next_open_weekday(now),
+        preferred_time=time(9, 0),
+        now=now,
+    )
+
+    assert reason is None
+    assert booking_request is not None
 
 
 def test_booking_conversation_is_logged_for_staff_visibility(
