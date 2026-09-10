@@ -284,8 +284,64 @@ def test_send_whatsapp_records_twilio_failure(app, comms_settings, garage, monke
 
     assert log.status == "FAILED"
     assert log.error_code == "21211"
-    assert log.error_message == "Invalid number"
+    # The stored message is the business-facing explanation for a recognised
+    # Twilio code, not Twilio's terse developer string.
+    assert log.error_message == "Not delivered — the phone number is not valid."
     assert log.external_id is None
+
+
+def test_send_whatsapp_failure_with_unknown_code_still_stores_a_readable_message(
+    app, comms_settings, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    exc = TwilioRestException(status=500, uri="/Messages", msg="", code=64999)
+    monkeypatch.setattr(
+        "app.communications.service.get_twilio_client_for_garage",
+        lambda garage: SimpleNamespace(messages=_FakeMessages(exc=exc)),
+    )
+
+    log = send_whatsapp_message(garage=garage, to="07123456789", body="Hi")
+
+    assert log.status == "FAILED"
+    assert log.error_code == "64999"
+    assert log.error_message  # never blank - a caller/UI always has something to show
+
+
+def test_send_whatsapp_adds_status_callback_when_deployment_has_a_public_https_origin(
+    app, comms_settings, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    monkeypatch.setitem(app.config, "PUBLIC_API_BASE_URL", "https://api.comaz.example")
+    fake_client = SimpleNamespace(
+        messages=_FakeMessages(result=SimpleNamespace(sid="SM900", status="queued"))
+    )
+    monkeypatch.setattr(
+        "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
+    )
+
+    send_whatsapp_message(garage=garage, to="07123456789", body="Hi")
+
+    assert (
+        fake_client.messages.calls[0]["status_callback"]
+        == "https://api.comaz.example/api/webhooks/twilio/whatsapp/status"
+    )
+
+
+def test_send_whatsapp_omits_status_callback_on_a_local_origin(
+    app, comms_settings, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    monkeypatch.setitem(app.config, "PUBLIC_API_BASE_URL", "http://localhost:5001")
+    fake_client = SimpleNamespace(
+        messages=_FakeMessages(result=SimpleNamespace(sid="SM901", status="queued"))
+    )
+    monkeypatch.setattr(
+        "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
+    )
+
+    send_whatsapp_message(garage=garage, to="07123456789", body="Hi")
+
+    assert "status_callback" not in fake_client.messages.calls[0]
 
 
 # --------------------------------------------------------------------------

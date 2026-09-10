@@ -392,6 +392,114 @@ def test_reschedule_flow_moves_appointment_with_real_availability(
     assert appt.status == "BOOKED"
 
 
+def _existing_appt(session, garage, user, customer, appointment_type, *, day):
+    start = datetime.combine(day, datetime.min.time(), tzinfo=UTC) + timedelta(hours=10)
+    appt = Appointment(
+        garage_id=garage.id,
+        employee_id=user.id,
+        customer_id=customer.id,
+        appointment_type_id=appointment_type.id,
+        start_time=start,
+        end_time=start + timedelta(minutes=60),
+        status="BOOKED",
+    )
+    session.add(appt)
+    session.commit()
+    return appt
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "I need to cancel",
+        "I want to cancel please",
+        "have to cancel my visit",
+        "I no longer need the appointment",
+    ],
+)
+def test_natural_cancel_phrasings_route_to_the_cancel_flow_not_a_fallback(
+    session, garage, garage_schedule, appointment_type, user, customer, phrase
+):
+    customer.phone = PHONE_RAW
+    session.commit()
+    now = _now()
+    _existing_appt(session, garage, user, customer, appointment_type, day=_next_open_weekday(now))
+
+    r = _send(garage, PHONE_RAW, phrase, now=now)
+    assert r.intent == "CANCEL_APPOINTMENT"
+    assert r.workflow_step == "AWAITING_CANCEL_CONFIRMATION"
+    assert r.needs_human is False
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "I can't make tomorrow",
+        "I can't make it",
+        "need to move my appointment",
+        "change my booking",
+        "can we rearrange my appointment",
+    ],
+)
+def test_natural_reschedule_phrasings_route_to_the_reschedule_flow(
+    session, garage, garage_schedule, appointment_type, user, customer, phrase
+):
+    customer.phone = PHONE_RAW
+    session.commit()
+    now = _now()
+    _existing_appt(session, garage, user, customer, appointment_type, day=_next_open_weekday(now))
+
+    r = _send(garage, PHONE_RAW, phrase, now=now)
+    assert r.intent == "RESCHEDULE_APPOINTMENT"
+    assert r.needs_human is False
+    # Into the reschedule flow proper - which step depends on whether the
+    # phrase also named a day ("...tomorrow") and how many appointments exist.
+    assert r.workflow_step and r.workflow_step.startswith("AWAITING_RESCHEDULE")
+
+
+def test_multiple_appointments_are_disambiguated_before_a_cancel(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    customer.phone = PHONE_RAW
+    session.commit()
+    now = _now()
+    _existing_appt(session, garage, user, customer, appointment_type, day=_next_open_weekday(now))
+    _existing_appt(
+        session,
+        garage,
+        user,
+        customer,
+        appointment_type,
+        day=_next_open_weekday(now, min_days_ahead=6),
+    )
+
+    r1 = _send(garage, PHONE_RAW, "I need to cancel my appointment", now=now)
+    assert r1.workflow_step == "AWAITING_CANCEL_CHOICE"
+    assert "1." in r1.response_text and "2." in r1.response_text
+
+    r2 = _send(garage, PHONE_RAW, "1", now=now)
+    assert r2.workflow_step == "AWAITING_CANCEL_CONFIRMATION"  # still confirms, never blind-cancels
+
+
+def test_cancel_interrupts_an_in_progress_booking(
+    session, garage, garage_schedule, appointment_type, user, customer
+):
+    customer.phone = PHONE_RAW
+    session.commit()
+    now = _now()
+    _existing_appt(session, garage, user, customer, appointment_type, day=_next_open_weekday(now))
+
+    # Part-way through booking a *new* appointment...
+    _send(garage, PHONE_RAW, "I need an MOT", now=now)
+    _send(garage, PHONE_RAW, "Jane Doe", now=now)
+    assert _session(garage).workflow_step == "AWAITING_DATE"
+
+    # ...the customer pivots to cancelling their existing one.
+    r = _send(garage, PHONE_RAW, "actually I need to cancel my appointment", now=now)
+    assert r.intent == "CANCEL_APPOINTMENT"
+    assert r.workflow_step == "AWAITING_CANCEL_CONFIRMATION"
+
+
 # --------------------------------------------------------------------------
 # Human handoff / callback
 # --------------------------------------------------------------------------

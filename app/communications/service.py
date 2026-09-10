@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from flask import current_app
 from twilio.base.exceptions import TwilioRestException
 
 from app.extensions import db
@@ -28,6 +29,7 @@ from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
 
 from .client import get_twilio_client_for_garage
 from .config import garage_communications_enabled, is_twilio_configured
+from .delivery_status import describe_delivery_failure
 
 if TYPE_CHECKING:
     from app.models.customer import Customer
@@ -42,6 +44,19 @@ def _create_log(**fields) -> CommunicationLog:
     return log
 
 
+def _whatsapp_status_callback_url() -> str | None:
+    """Absolute URL Twilio should POST delivery updates to, so an
+    ``undelivered``/``failed`` that only surfaces asynchronously (the 24-hour
+    window, recipient not on WhatsApp, …) is written back to the log row
+    instead of it sitting on ``queued`` forever. ``None`` when this
+    deployment has no real public origin configured (local dev), where
+    handing Twilio a localhost URL would be worse than not asking."""
+    base = (current_app.config.get("PUBLIC_API_BASE_URL") or "").rstrip("/")
+    if not base.startswith("https://"):
+        return None
+    return f"{base}/api/webhooks/twilio/whatsapp/status"
+
+
 def _related_ids(customer=None, appointment=None, booking_request=None) -> dict:
     return {
         "customer_id": customer.id if customer is not None else None,
@@ -52,9 +67,16 @@ def _related_ids(customer=None, appointment=None, booking_request=None) -> dict:
 
 def _failure_fields(exc: Exception) -> tuple[str | None, str]:
     """Normalize a Twilio (or any other) send-time exception into the
-    (error_code, error_message) pair stored on the log row."""
+    (error_code, error_message) pair stored on the log row.
+
+    When Twilio gives a code we recognise, the stored message is the
+    business-facing explanation (why it won't reach this person, what to do)
+    rather than Twilio's terse developer string - so staff never see only
+    "undelivered"."""
     if isinstance(exc, TwilioRestException):
-        return (str(exc.code) if exc.code is not None else None, exc.msg)
+        code = str(exc.code) if exc.code is not None else None
+        explained = describe_delivery_failure(code)
+        return code, (explained or exc.msg or "The messaging provider rejected the message.")
     return None, str(exc)
 
 
@@ -180,6 +202,10 @@ def send_whatsapp_message(
         send_kwargs["messaging_service_sid"] = settings.messaging_service_sid
     else:
         send_kwargs["from_"] = settings.whatsapp_sender
+
+    callback_url = _whatsapp_status_callback_url()
+    if callback_url:
+        send_kwargs["status_callback"] = callback_url
 
     try:
         message = client.messages.create(**send_kwargs)

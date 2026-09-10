@@ -326,6 +326,77 @@ def test_conversations_unread_count(session, garage, authenticated_client):
     assert convo["unread_count"] == 2
 
 
+def test_failed_outbound_message_exposes_a_business_facing_status_detail(
+    session, garage, authenticated_client
+):
+    addr = "whatsapp:+447123400071"
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="OUTBOUND",
+        from_address=WHATSAPP_SENDER,
+        to_address=addr,
+        body="Your MOT is due",
+        status="undelivered",
+        error_code="63016",
+    )
+
+    convo = authenticated_client.get("/api/communications/conversations").get_json()["items"][0]
+    last = convo["last_message"]
+    assert last["status"] == "undelivered"  # raw provider status still there
+    assert last["status_detail"].startswith("Not delivered —")
+    assert "24 hours" in last["status_detail"]
+    assert last["template_required"] is True
+
+
+def test_renaming_a_customer_updates_their_name_everywhere_it_is_shown(
+    session, garage, authenticated_client, customer
+):
+    """The Customer record is canonical - a corrected name must show on the
+    call list and the WhatsApp inbox without touching historical message
+    content or creating a second customer."""
+    customer.phone = "+447123400072"
+    session.commit()
+    _log(
+        session,
+        garage,
+        channel="VOICE",
+        direction="INBOUND",
+        from_address="+447123400072",
+        customer_id=customer.id,
+    )
+    _log(
+        session,
+        garage,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        from_address="whatsapp:+447123400072",
+        to_address=WHATSAPP_SENDER,
+        body="hello",
+        customer_id=customer.id,
+    )
+
+    resp = authenticated_client.patch(
+        f"/api/customers/{customer.id}", json={"first_name": "Jonathan", "last_name": "Reid"}
+    )
+    assert resp.status_code == 200
+
+    call = authenticated_client.get("/api/communications/calls").get_json()["items"][0]
+    assert (call["customer"]["first_name"], call["customer"]["last_name"]) == ("Jonathan", "Reid")
+
+    convo = authenticated_client.get("/api/communications/conversations").get_json()["items"][0]
+    assert (convo["customer"]["first_name"], convo["customer"]["last_name"]) == ("Jonathan", "Reid")
+    # Message content itself is unchanged.
+    assert convo["last_message"]["body"] == "hello"
+
+    # A rename is an update to the same row, never a new customer.
+    from app.models.customer import Customer
+
+    assert Customer.query.filter_by(garage_id=garage.id, phone="+447123400072").count() == 1
+    assert Customer.query.filter_by(id=customer.id).count() == 1
+
+
 def test_conversation_messages_are_chronological(session, garage, authenticated_client):
     addr = "whatsapp:+447123400004"
     now = datetime.now(UTC)

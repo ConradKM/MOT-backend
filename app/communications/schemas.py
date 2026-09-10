@@ -1,5 +1,8 @@
 from marshmallow import Schema, ValidationError, fields, validate, validates_schema
 
+from .delivery_status import delivery_status_label
+from .delivery_status import template_required as _needs_template
+
 
 class CommunicationCustomerSchema(Schema):
     id = fields.UUID(dump_only=True)
@@ -44,6 +47,16 @@ class CommunicationLogSchema(Schema):
     from_address = fields.Str(dump_only=True, allow_none=True)
     to_address = fields.Str(dump_only=True, allow_none=True)
     status = fields.Str(dump_only=True)
+    # A short business-facing version of `status` (+ `error_code`): the
+    # specific reason a WhatsApp message did not arrive where we know it
+    # ("Not delivered — …"), a tidy label otherwise. The UI shows this
+    # instead of the raw provider string.
+    status_detail = fields.Function(
+        lambda obj: delivery_status_label(obj.status, obj.error_code), dump_only=True
+    )
+    # True when the failure means only an approved WhatsApp template can
+    # reach this recipient right now (24h window elapsed / template rejected).
+    template_required = fields.Function(lambda obj: _needs_template(obj.error_code), dump_only=True)
     trigger_event = fields.Str(dump_only=True, allow_none=True)
     body = fields.Str(dump_only=True, allow_none=True)
     call_duration_seconds = fields.Int(dump_only=True, allow_none=True)
