@@ -192,10 +192,25 @@ def test_reset_is_per_user(client, session, garage, user, monkeypatch):
     )
 
 
-def test_reset_ends_existing_sessions(client, session, user, access_token, monkeypatch):
+def test_reset_ends_existing_sessions(client, session, user, monkeypatch):
+    """A session that predates the reset is over.
+
+    The old token is minted with an `iat` a minute in the past rather than
+    "now": a JWT's `iat` is whole seconds, so a token issued in the very second
+    of the reset is indistinguishable from one issued a moment after it and is
+    deliberately kept (see #105). Everything issued before that second - which
+    is every real session - is rejected, and that is what this asserts.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from flask_jwt_extended import create_access_token
+
+    earlier = int((datetime.now(UTC) - timedelta(minutes=1)).timestamp())
+    old_token = create_access_token(identity=str(user.id), additional_claims={"iat": earlier})
+
     # A live token works before the reset...
     assert (
-        client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"}).status_code
+        client.get("/api/auth/me", headers={"Authorization": f"Bearer {old_token}"}).status_code
         == 200
     )
 
@@ -208,7 +223,7 @@ def test_reset_ends_existing_sessions(client, session, user, access_token, monke
 
     # ...and is rejected afterwards (issued before tokens_valid_from).
     assert client.get(
-        "/api/auth/me", headers={"Authorization": f"Bearer {access_token}"}
+        "/api/auth/me", headers={"Authorization": f"Bearer {old_token}"}
     ).status_code in (401, 422)
 
 
@@ -219,3 +234,31 @@ def test_short_password_is_rejected(client, user, monkeypatch):
         "/api/auth/reset-password", json={"token": box["token"], "password": "short"}
     )
     assert resp.status_code == 422
+
+
+def test_signing_in_immediately_after_a_reset_gives_a_working_token(
+    client, session, user, monkeypatch
+):
+    """Regression for #105.
+
+    A JWT's `iat` is integer seconds while `tokens_valid_from` carries
+    microseconds, so comparing them raw rejected a token minted in the same
+    second as the reset that invalidated the old ones - the exact token a
+    "set your password, then sign in" flow issues, and the one an owner
+    activating an onboarding invite gets.
+    """
+    box = _capture_token(monkeypatch)
+    client.post("/api/auth/forgot-password", json={"email": user.email})
+    client.post(
+        "/api/auth/reset-password",
+        json={"token": box["token"], "password": "AfterReset123!"},
+    )
+
+    # No sleep: the login lands in the same second as the reset.
+    login = client.post("/api/auth/login", json={"email": user.email, "password": "AfterReset123!"})
+    assert login.status_code == 200, login.get_json()
+
+    fresh = login.get_json()["access_token"]
+    assert (
+        client.get("/api/auth/me", headers={"Authorization": f"Bearer {fresh}"}).status_code == 200
+    )

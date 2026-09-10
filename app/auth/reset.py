@@ -23,16 +23,22 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def issue_reset_token(employee: Employee) -> str:
+def issue_reset_token(employee: Employee, *, minutes: int | None = None) -> str:
     """New reset token for ``employee``; voids any it already has. Returns the
-    raw token - it only ever goes into the emailed link."""
+    raw token - it only ever goes into the emailed link.
+
+    ``minutes`` overrides the default reset TTL. The one caller that does is
+    Platform Admin onboarding (``app/platform_admin/provisioning.py``): an
+    owner's *first* set-password link is handed over out of band and needs days,
+    not the thirty minutes that suit a self-service "I forgot my password".
+    """
     now = datetime.now(UTC)
     PasswordResetToken.query.filter_by(employee_id=employee.id, used_at=None).update(
         {"used_at": now}
     )
 
     raw = secrets.token_urlsafe(32)
-    minutes = current_app.config.get("PASSWORD_RESET_TOKEN_MINUTES", 30)
+    minutes = minutes or current_app.config.get("PASSWORD_RESET_TOKEN_MINUTES", 30)
     db.session.add(
         PasswordResetToken(
             employee_id=employee.id,

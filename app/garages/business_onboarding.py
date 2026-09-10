@@ -4,16 +4,24 @@ Wraps :func:`app.garages.onboarding.onboard_garage` (which stays the atomic
 core - business row, statuses, schedule, MOT-reminder settings, OWNER/STAFF
 roles, first OWNER login) and adds the two things a real demo needs on top:
 
-* the business's **services** (``garage_appointment_types``), and
-* its **opening hours** when they differ from the seeded Mon-Fri 09:00-17:00.
+* the business's **services** (``garage_appointment_types``),
+* its **opening hours** when they differ from the seeded Mon-Fri 09:00-17:00,
+* its **booking settings** (the seeded ``garage_schedule_settings`` row), and
+* the platform-owned lifecycle fields a new tenant is sold on - plan, ACTIVE
+  vs TRIAL, trial expiry, and the internal notes the platform team keeps.
+
+Everything lands in the one transaction ``onboard_garage`` opens, so a
+half-configured tenant is never left behind: either the business exists with
+its services, hours, booking window and plan, or nothing was written.
 
 Idempotency key: the **owner email** (globally unique on ``employees``). If an
 account already exists for it, this is treated as "already onboarded" and
 nothing is written - rerunning the same spec is a safe no-op.
 
-No password lives in a spec. The caller (``scripts/onboard_business.py``)
-generates a strong temporary one, passes it in here, and prints it once; the
-owner must change it on first login.
+No password lives in a spec. The caller passes a strong generated one in:
+``scripts/onboard_business.py`` prints it once for the operator to hand over,
+while Platform Admin (``app/platform_admin/provisioning.py``) discards it
+unread and emails the owner a set-password invite instead.
 
 Spec parsing/validation (:func:`parse_business_spec` / :func:`validate_business_spec`)
 is pure - no app context, no database - so it can run fully offline.
@@ -28,16 +36,38 @@ from typing import Any
 
 from app.employees.service import email_format_error, password_policy_error
 from app.extensions import db
+from app.garages.layouts import validate_layout_variant
 from app.garages.onboarding import GarageSpec, OnboardingError, OwnerSpec, onboard_garage
 from app.models.appointments.appointment_type import (
     APPOINTMENT_TYPE_STATUSES,
     GarageAppointmentType,
 )
 from app.models.employee import Employee
-from app.models.garage import Garage
-from app.models.garage_schedule import GarageOpeningHours
+from app.models.garage import (
+    GARAGE_STATUS_ACTIVE,
+    GARAGE_STATUS_TRIAL,
+    Garage,
+)
+from app.models.garage_schedule import GarageOpeningHours, GarageScheduleSettings
 
 _WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+#: The statuses a business may be *onboarded* in. SUSPENDED is deliberately
+#: absent - suspending is its own audited operation, never an initial state.
+ONBOARDING_STATUSES = (GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL)
+
+#: Booking settings a spec may set, mapped to (kind, minimum, maximum). The
+#: names and ranges are exactly ``GarageScheduleSettings`` and the owner-facing
+#: ``ScheduleSettingsSchema`` - this is the same row Settings > Availability
+#: edits, seeded at onboarding rather than a second copy of it.
+BOOKING_SETTING_FIELDS: dict[str, tuple[type, float, float]] = {
+    "slot_interval_minutes": (int, 5, 240),
+    "default_appointment_minutes": (int, 5, 480),
+    "min_lead_time_hours": (int, 0, 24 * 90),
+    "max_advance_days": (int, 1, 365),
+    "capacity_per_slot": (int, 1, 100),
+    "limited_threshold_ratio": (float, 0, 1),
+}
 
 
 class BusinessSpecError(OnboardingError):
@@ -64,10 +94,24 @@ class BusinessSpec:
     address: str | None = None
     postcode: str | None = None
     website: str | None = None
+    # Platform-chosen presentation variant (app/garages/layouts.py). None =
+    # the shared default layout.
+    layout_variant: str | None = None
     services: list[ServiceSpec] = field(default_factory=list)
     # weekday index 0-6 -> ("HH:MM", "HH:MM") open range, or None = closed.
     # `None` for the whole mapping = keep the seeded default hours.
     opening_hours: dict[int, tuple[str, str] | None] | None = None
+    # Overrides for the seeded GarageScheduleSettings row - see
+    # BOOKING_SETTING_FIELDS. `None` = keep the seeded defaults.
+    booking_settings: dict[str, Any] | None = None
+    # --- platform-owned lifecycle -----------------------------------------
+    # Applied to the Garage in the same transaction, so a tenant is never live
+    # for a moment on the wrong plan. `None` keeps the model default.
+    plan: str | None = None
+    status: str | None = None
+    trial_ends_at: datetime | None = None
+    #: Internal platform-team notes -> ``Garage.internal_notes``. Never shown
+    #: to the tenant.
     notes: str | None = None
 
 
@@ -131,6 +175,58 @@ def _parse_opening_hours(raw: Any) -> dict[int, tuple[str, str] | None] | None:
             )
         out[idx] = (opens, closes)
     return out
+
+
+def _parse_booking_settings(raw: Any) -> dict[str, Any] | None:
+    """Validate a mapping of :data:`BOOKING_SETTING_FIELDS` overrides.
+
+    ``capacity_per_slot: null`` is meaningful - it is how a spec says "fall
+    back to the garage's active employee count" - so it is kept, while an
+    omitted key simply leaves the seeded default alone.
+    """
+    if raw in (None, {}):
+        return None
+    if not isinstance(raw, dict):
+        raise BusinessSpecError("booking_settings must be an object.")
+
+    unknown = set(raw) - set(BOOKING_SETTING_FIELDS)
+    if unknown:
+        raise BusinessSpecError(
+            f"booking_settings: unknown {sorted(unknown)}. "
+            f"Allowed: {sorted(BOOKING_SETTING_FIELDS)}."
+        )
+
+    out: dict[str, Any] = {}
+    for key, value in raw.items():
+        kind, low, high = BOOKING_SETTING_FIELDS[key]
+        if value is None:
+            if key != "capacity_per_slot":
+                raise BusinessSpecError(f"booking_settings.{key}: must not be null.")
+            out[key] = None
+            continue
+        # bool is an int subclass, and "3" is not a number here - be explicit.
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise BusinessSpecError(f"booking_settings.{key}: expected a number, got {value!r}.")
+        if kind is int and not float(value).is_integer():
+            raise BusinessSpecError(f"booking_settings.{key}: must be a whole number.")
+        number = kind(value)
+        if not low <= number <= high:
+            raise BusinessSpecError(f"booking_settings.{key}: must be between {low} and {high}.")
+        out[key] = number
+    return out
+
+
+def _parse_datetime(value: Any, ctx: str) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError as exc:
+            raise BusinessSpecError(f"{ctx}: {value!r} is not an ISO-8601 date/time.") from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _parse_service(raw: Any, i: int) -> ServiceSpec:
@@ -200,8 +296,13 @@ def parse_business_spec(raw: Any) -> BusinessSpec:
         address=_str_or_none(business.get("address")),
         postcode=_str_or_none(business.get("postcode")),
         website=_str_or_none(business.get("website")),
+        layout_variant=_str_or_none(business.get("layout_variant")),
         services=[_parse_service(s, i) for i, s in enumerate(raw.get("services", []) or [])],
         opening_hours=_parse_opening_hours(raw.get("opening_hours")),
+        booking_settings=_parse_booking_settings(raw.get("booking_settings")),
+        plan=(_str_or_none(business.get("plan")) or "").upper() or None,
+        status=(_str_or_none(business.get("status")) or "").upper() or None,
+        trial_ends_at=_parse_datetime(business.get("trial_ends_at"), "business.trial_ends_at"),
         notes=_str_or_none(raw.get("notes")),
     )
     validate_business_spec(spec)
@@ -216,12 +317,61 @@ def validate_business_spec(spec: BusinessSpec) -> None:
     if spec.email and email_format_error(spec.email):
         raise BusinessSpecError("business.email: enter a valid email address, or omit it.")
 
+    # Range-checked here rather than only in `_parse_opening_hours`, because a
+    # spec built in code (Platform Admin) never passes through the parser and
+    # a backwards range would otherwise reach the availability engine as a day
+    # that is open for a negative length of time.
+    for weekday, value in (spec.opening_hours or {}).items():
+        if weekday not in range(7):
+            raise BusinessSpecError(f"opening_hours: weekday must be 0-6, got {weekday!r}.")
+        if value is None:
+            continue
+        day = _WEEKDAYS[weekday]
+        opens = _parse_hhmm(str(value[0]), f"opening_hours.{day} open")
+        closes = _parse_hhmm(str(value[1]), f"opening_hours.{day} close")
+        if opens >= closes:
+            raise BusinessSpecError(
+                f"opening_hours.{day}: open {opens} is not before close {closes}."
+            )
+
     seen: set[str] = set()
     for service in spec.services:
         key = service.name.casefold()
         if key in seen:
             raise BusinessSpecError(f"Duplicate service name in the spec: {service.name!r}.")
         seen.add(key)
+
+    try:
+        validate_layout_variant(spec.layout_variant)
+    except ValueError as exc:
+        raise BusinessSpecError(str(exc)) from exc
+
+    if spec.plan is not None:
+        # Imported here: app.platform_admin owns the plan matrix, and importing
+        # it at module scope would make the onboarding CLI depend on the whole
+        # Platform Admin package to validate one string.
+        from app.platform_admin.features import PLANS
+
+        if spec.plan not in PLANS:
+            raise BusinessSpecError(
+                f"business.plan: unknown plan {spec.plan!r}. Expected one of {list(PLANS)}."
+            )
+
+    if spec.status is not None and spec.status not in ONBOARDING_STATUSES:
+        raise BusinessSpecError(
+            f"business.status: expected one of {list(ONBOARDING_STATUSES)}, got {spec.status!r}."
+        )
+
+    # A trial with no end date is indistinguishable from one that never
+    # expires, and an end date on a non-trial is a value nothing will ever
+    # read - both are almost certainly an operator mistake, so refuse them.
+    if spec.status == GARAGE_STATUS_TRIAL:
+        if spec.trial_ends_at is None:
+            raise BusinessSpecError("business.trial_ends_at is required when status is TRIAL.")
+        if spec.trial_ends_at <= datetime.now(UTC):
+            raise BusinessSpecError("business.trial_ends_at must be in the future.")
+    elif spec.trial_ends_at is not None:
+        raise BusinessSpecError("business.trial_ends_at is only valid when status is TRIAL.")
 
 
 # --------------------------------------------------------------------------
@@ -284,6 +434,35 @@ def _apply_opening_hours(garage: Garage, hours: dict[int, tuple[str, str] | None
     session.flush()
 
 
+def _apply_booking_settings(garage: Garage, values: dict[str, Any], session) -> None:
+    """Overwrite fields on the garage's seeded ``GarageScheduleSettings`` row.
+
+    The row always exists by this point - ``onboard_garage`` seeds it through
+    ``seed_default_schedule`` - but a garage onboarded before that seed existed
+    would not have one, so this creates it rather than failing.
+    """
+    row = session.query(GarageScheduleSettings).filter_by(garage_id=garage.id).first()
+    if row is None:
+        row = GarageScheduleSettings(garage_id=garage.id)
+        session.add(row)
+    for key, value in values.items():
+        setattr(row, key, value)
+    session.flush()
+
+
+def _apply_lifecycle(garage: Garage, spec: BusinessSpec) -> None:
+    """Plan, status, trial expiry and internal notes - the platform-owned
+    fields, set here so a tenant is never briefly live on the wrong plan."""
+    if spec.plan is not None:
+        garage.plan = spec.plan
+    if spec.status is not None:
+        garage.status = spec.status
+        garage.status_changed_at = datetime.now(UTC)
+    garage.trial_ends_at = spec.trial_ends_at
+    if spec.notes is not None:
+        garage.internal_notes = spec.notes
+
+
 def onboard_business(
     spec: BusinessSpec,
     *,
@@ -317,6 +496,11 @@ def onboard_business(
     if err:
         raise BusinessSpecError(f"temp_password: {err}")
 
+    # A spec built in code (Platform Admin) never passed through
+    # `parse_business_spec`, so validate here too rather than trusting the
+    # caller to have done it.
+    validate_business_spec(spec)
+
     result = onboard_garage(
         garage=GarageSpec(
             name=spec.name,
@@ -325,6 +509,7 @@ def onboard_business(
             address=spec.address,
             postcode=spec.postcode,
             website=spec.website,
+            layout_variant=spec.layout_variant,
         ),
         owner=OwnerSpec(
             email=spec.owner_email,
@@ -340,6 +525,9 @@ def onboard_business(
     used_default_hours = spec.opening_hours is None
     if spec.opening_hours is not None:
         _apply_opening_hours(result.garage, spec.opening_hours, session)
+    if spec.booking_settings:
+        _apply_booking_settings(result.garage, spec.booking_settings, session)
+    _apply_lifecycle(result.garage, spec)
 
     if commit:
         session.commit()

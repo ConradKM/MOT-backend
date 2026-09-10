@@ -29,7 +29,21 @@ from app.platform_admin.impersonation import (
     start_impersonation,
 )
 from app.platform_admin.onboarding import onboarding_progress
+from app.platform_admin.provisioning import (
+    DuplicateOwnerError,
+    ProvisioningError,
+    create_service,
+    delete_service,
+    get_service,
+    provision_tenant,
+    resend_owner_invite,
+    tenant_configuration,
+    update_booking_settings,
+    update_opening_hours,
+    update_service,
+)
 from app.platform_admin.schemas import (
+    BookingSettingsSchema,
     FeatureFlagListSchema,
     FeatureFlagUpdateSchema,
     ImpersonationGrantSchema,
@@ -37,10 +51,19 @@ from app.platform_admin.schemas import (
     ImpersonationSessionSchema,
     ImpersonationStartSchema,
     OnboardingProgressSchema,
+    OwnerInviteResultSchema,
     PeriodQuerySchema,
+    ServiceDeletedSchema,
+    ServiceInputSchema,
+    ServiceSchema,
+    ServiceUpdateSchema,
+    TenantConfigurationSchema,
     TenantDetailSchema,
     TenantListQuerySchema,
     TenantListSchema,
+    TenantOpeningHoursReplaceSchema,
+    TenantProvisionResultSchema,
+    TenantProvisionSchema,
     TenantReactivateSchema,
     TenantStatsSchema,
     TenantSuspendSchema,
@@ -77,6 +100,15 @@ def _require_tenant(garage_id: uuid.UUID):
     return garage
 
 
+def _require_service(garage, service_id: uuid.UUID):
+    """A service belonging to *this* tenant. A valid id from another business
+    is a 404 here, not somebody else's row."""
+    service = get_service(garage, service_id)
+    if service is None:
+        abort(404, message="Service not found for this business.")
+    return service
+
+
 @platform_tenants_blp.route("/tenants")
 class TenantList(MethodView):
     @jwt_required()
@@ -96,12 +128,39 @@ class TenantList(MethodView):
                 status=args.get("status"),
                 plan=args.get("plan"),
                 activity=args.get("activity"),
+                stage=args.get("stage"),
                 sort=args.get("sort") or "created_at",
                 descending=(args.get("order") or "desc") == "desc",
                 page=args.get("page") or 1,
                 per_page=args.get("per_page") or 25,
             )
         except TenantError as exc:
+            abort(422, message=str(exc))
+
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(TenantProvisionSchema)
+    @platform_tenants_blp.response(201, TenantProvisionResultSchema)
+    def post(self, data):
+        """Onboard a business: the whole tenant, in one transaction.
+
+        Creates the business (with a generated, immutable slug), its default
+        appointment statuses, schedule, MOT reminder settings, OWNER/STAFF
+        roles and first OWNER login, then its services, opening hours, booking
+        settings and plan/status - all through the same
+        ``app/garages/business_onboarding.py`` the CLI uses. A failure anywhere
+        leaves no tenant at all.
+
+        No password is accepted or returned: the owner receives a single-use
+        set-password invite by email. A second submission of the same owner
+        email is a 409 - the unique constraint on ``employees.email`` is what
+        makes concurrent double-submits safe, not a client-side guard.
+        """
+        try:
+            return provision_tenant(admin=get_current_platform_admin(), data=data), 201
+        except DuplicateOwnerError as exc:
+            abort(409, message=str(exc))
+        except ProvisioningError as exc:
             abort(422, message=str(exc))
 
 
@@ -182,6 +241,145 @@ class TenantOnboarding(MethodView):
         """How far this business has got with setting itself up - derived from
         its own data, never from a stored progress flag."""
         return onboarding_progress(_require_tenant(garage_id))
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/configuration")
+class TenantConfiguration(MethodView):
+    @jwt_required()
+    @platform_admin_required
+    @platform_tenants_blp.response(200, TenantConfigurationSchema)
+    def get(self, garage_id):
+        """Everything onboarding configured for this business.
+
+        Identity, owner and the state of their set-password invite, plan and
+        status, services, opening hours, booking settings, communications
+        setup, the public booking URL, and the derived onboarding checklist -
+        the read behind the console's Onboarding tab.
+        """
+        return tenant_configuration(_require_tenant(garage_id))
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/services")
+class TenantServices(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(ServiceInputSchema)
+    @platform_tenants_blp.response(201, ServiceSchema)
+    def post(self, data, garage_id):
+        """Add a service to this business.
+
+        The same ``garage_appointment_types`` row the business creates for
+        itself in Settings - there is no onboarding-only service model - so it
+        is immediately bookable on the public page.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            return create_service(admin=get_current_platform_admin(), garage=garage, data=data)
+        except ProvisioningError as exc:
+            abort(422, message=str(exc))
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/services/<uuid:service_id>")
+class TenantService(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(ServiceUpdateSchema)
+    @platform_tenants_blp.response(200, ServiceSchema)
+    def patch(self, data, garage_id, service_id):
+        """Correct one of this business's services."""
+        garage = _require_tenant(garage_id)
+        service = _require_service(garage, service_id)
+        try:
+            return update_service(
+                admin=get_current_platform_admin(),
+                garage=garage,
+                service=service,
+                changes=data,
+            )
+        except ProvisioningError as exc:
+            abort(422, message=str(exc))
+
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.response(200, ServiceDeletedSchema)
+    def delete(self, garage_id, service_id):
+        """Remove a service added by mistake.
+
+        Refused once appointments reference it - retire it (``DEPRECATED``)
+        instead, so booked history keeps its type.
+        """
+        garage = _require_tenant(garage_id)
+        service = _require_service(garage, service_id)
+        try:
+            delete_service(admin=get_current_platform_admin(), garage=garage, service=service)
+        except ProvisioningError as exc:
+            abort(422, message=str(exc))
+        return {"message": "Service removed."}
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/opening-hours")
+class TenantOpeningHours(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(TenantOpeningHoursReplaceSchema)
+    @platform_tenants_blp.response(200, TenantConfigurationSchema)
+    def put(self, data, garage_id):
+        """Set this business's weekday opening hours.
+
+        Writes the same ``garage_opening_hours`` rows Settings > Availability
+        writes, so the change is immediately real to the public booking
+        calendar, the availability API and the WhatsApp assistant.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            update_opening_hours(
+                admin=get_current_platform_admin(),
+                garage=garage,
+                entries=data["opening_hours"],
+            )
+        except ProvisioningError as exc:
+            abort(422, message=str(exc))
+        return tenant_configuration(garage)
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/booking-settings")
+class TenantBookingSettings(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(BookingSettingsSchema)
+    @platform_tenants_blp.response(200, TenantConfigurationSchema)
+    def put(self, data, garage_id):
+        """Set the booking window and capacity rules for this business.
+
+        Minimum notice, how far ahead customers may book, slot granularity,
+        default appointment length and per-slot capacity - the same
+        ``garage_schedule_settings`` row the owner edits.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            update_booking_settings(admin=get_current_platform_admin(), garage=garage, changes=data)
+        except ProvisioningError as exc:
+            abort(422, message=str(exc))
+        return tenant_configuration(garage)
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/owner-invite")
+class TenantOwnerInvite(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.response(200, OwnerInviteResultSchema)
+    def post(self, garage_id):
+        """Send the owner a fresh set-password link.
+
+        For an invite that expired, never arrived, or went to the wrong
+        address. Issuing one voids any outstanding link. Platform Admin never
+        sees the resulting password.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            return resend_owner_invite(admin=get_current_platform_admin(), garage=garage)
+        except ProvisioningError as exc:
+            abort(422, message=str(exc))
 
 
 @platform_tenants_blp.route("/tenants/<uuid:garage_id>/stats")

@@ -6,6 +6,10 @@ services?", "has it taken a booking?"), so progress can never drift out of
 sync with reality, and a tenant that did the work before Platform Admin
 existed already shows as complete.
 
+Alongside the per-step breakdown there is a single derived **stage** - the
+one-word answer the Businesses list shows per row (:data:`STAGES`). It reads
+the same completed-step map, so it can no more drift than the steps can.
+
 Two entry points, same definitions:
 
 * :func:`onboarding_progress` - the full per-step breakdown for one tenant's
@@ -25,7 +29,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 
 from app.extensions import db
 from app.garages.schedule.defaults import DEFAULT_OPENING_HOURS
@@ -96,6 +100,39 @@ STEPS: tuple[Step, ...] = (
 
 REQUIRED_STEP_COUNT = sum(1 for step in STEPS if step.required)
 
+#: The steps that make a business *usable* - it can be found, something can be
+#: booked, and the availability engine knows when it is open. Everything else
+#: in STEPS is evidence of a tenant working, not of it being set up.
+CORE_STEP_KEYS = ("business_details", "services", "opening_hours")
+
+STAGE_NOT_STARTED = "not_started"
+STAGE_IN_PROGRESS = "in_progress"
+STAGE_CORE_COMPLETE = "core_setup_complete"
+STAGE_COMMUNICATIONS_PENDING = "communications_pending"
+STAGE_READY_FOR_LAUNCH = "ready_for_launch"
+
+#: stage key -> the label Platform Admin renders. Ordered as a tenant moves
+#: through them, so the list view can sort or group on the index.
+STAGES: dict[str, str] = {
+    STAGE_NOT_STARTED: "Not started",
+    STAGE_IN_PROGRESS: "In progress",
+    STAGE_CORE_COMPLETE: "Core setup complete",
+    STAGE_COMMUNICATIONS_PENDING: "Communications pending",
+    STAGE_READY_FOR_LAUNCH: "Ready for launch",
+}
+
+STAGE_KEYS = tuple(STAGES)
+
+#: Communications columns that mean "somebody has started wiring Twilio up".
+#: Distinct from the `communications` step, which asks the stricter question
+#: "can this tenant actually send and receive?".
+_COMMS_STARTED_FIELDS = (
+    "twilio_subaccount_sid",
+    "voice_phone_number",
+    "whatsapp_sender",
+    "messaging_service_sid",
+)
+
 
 def _details_complete(garage: Garage) -> bool:
     return bool(garage.email and garage.phone and garage.address)
@@ -113,7 +150,34 @@ def _hours_customised(rows: list[GarageOpeningHours]) -> bool:
     return False
 
 
-def _summarise(completed: dict[str, bool]) -> dict:
+def _comms_started(settings) -> bool:
+    """True once any Twilio wiring exists for this tenant, live or not."""
+    if settings is None:
+        return False
+    return bool(settings.communications_enabled) or any(
+        getattr(settings, field, None) for field in _COMMS_STARTED_FIELDS
+    )
+
+
+def _stage(completed: dict[str, bool], *, comms_started: bool) -> str:
+    """Where this tenant is, from the same answers the steps are built from.
+
+    "Ready for launch" is deliberately the *communications* line rather than a
+    button an admin presses: a tenant whose WhatsApp and phone number are live
+    is ready whether or not anyone remembered to tick something, and one whose
+    aren't is not ready however many times they do.
+    """
+    core_done = sum(1 for key in CORE_STEP_KEYS if completed.get(key))
+    if core_done == 0:
+        return STAGE_NOT_STARTED
+    if core_done < len(CORE_STEP_KEYS):
+        return STAGE_IN_PROGRESS
+    if completed.get("communications"):
+        return STAGE_READY_FOR_LAUNCH
+    return STAGE_COMMUNICATIONS_PENDING if comms_started else STAGE_CORE_COMPLETE
+
+
+def _summarise(completed: dict[str, bool], *, comms_started: bool = False) -> dict:
     steps = [
         {
             "key": step.key,
@@ -125,8 +189,11 @@ def _summarise(completed: dict[str, bool]) -> dict:
         for step in STEPS
     ]
     done = sum(1 for step in STEPS if step.required and completed.get(step.key))
+    stage = _stage(completed, comms_started=comms_started)
     return {
         "steps": steps,
+        "stage": stage,
+        "stage_label": STAGES[stage],
         "completed_required": done,
         "total_required": REQUIRED_STEP_COUNT,
         "percent_complete": round(100 * done / REQUIRED_STEP_COUNT) if REQUIRED_STEP_COUNT else 100,
@@ -156,7 +223,7 @@ def onboarding_progress(garage: Garage) -> dict:
             settings and (settings.voice_phone_number or settings.whatsapp_sender)
         ),
     }
-    return _summarise(completed)
+    return _summarise(completed, comms_started=_comms_started(settings))
 
 
 def _count(*where) -> int:
@@ -194,17 +261,20 @@ def onboarding_progress_bulk(garages: list[Garage]) -> dict[uuid.UUID, dict]:
     for row in GarageOpeningHours.query.filter(GarageOpeningHours.garage_id.in_(garage_ids)).all():
         hours_rows.setdefault(row.garage_id, []).append(row)
 
+    comms_settings = {
+        row.garage_id: row
+        for row in db.session.execute(
+            select(GarageCommunicationSettings).where(
+                GarageCommunicationSettings.garage_id.in_(garage_ids)
+            )
+        )
+        .scalars()
+        .all()
+    }
     configured_comms = {
         garage_id
-        for (garage_id,) in db.session.execute(
-            select(GarageCommunicationSettings.garage_id).where(
-                GarageCommunicationSettings.garage_id.in_(garage_ids),
-                or_(
-                    GarageCommunicationSettings.voice_phone_number.isnot(None),
-                    GarageCommunicationSettings.whatsapp_sender.isnot(None),
-                ),
-            )
-        ).all()
+        for garage_id, row in comms_settings.items()
+        if row.voice_phone_number or row.whatsapp_sender
     }
 
     return {
@@ -218,7 +288,8 @@ def onboarding_progress_bulk(garages: list[Garage]) -> dict[uuid.UUID, dict]:
                 "booking_requests": booking_requests.get(garage.id, 0) > 0,
                 "team": employees.get(garage.id, 0) > 1,
                 "communications": garage.id in configured_comms,
-            }
+            },
+            comms_started=_comms_started(comms_settings.get(garage.id)),
         )
         for garage in garages
     }

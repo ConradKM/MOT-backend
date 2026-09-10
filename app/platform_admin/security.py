@@ -102,7 +102,9 @@ def platform_admin_token_revoked(jwt_payload: dict) -> bool:
         return True
 
     valid_from = admin.tokens_valid_from
-    return valid_from is not None and jwt_payload.get("iat", 0) < valid_from.timestamp()
+    # Floored to the second for the same reason as the employee blocklist in
+    # app/__init__.py: `iat` is integer seconds, tokens_valid_from is not.
+    return valid_from is not None and jwt_payload.get("iat", 0) < int(valid_from.timestamp())
 
 
 def get_current_platform_admin() -> PlatformAdmin | None:

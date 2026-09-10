@@ -108,6 +108,89 @@ blocked.
 
 ---
 
+## Onboarding a business
+
+The normal way a business comes onto the platform. `+ Onboard business` in the
+console opens a seven-step wizard — details, owner, plan/status, services,
+opening hours, booking settings, review — and submits it as **one** request:
+
+```
+POST /api/platform-admin/tenants          (SUPERADMIN, audited)
+```
+
+Nothing about onboarding is re-implemented here.
+[`app/platform_admin/provisioning.py`](../app/platform_admin/provisioning.py)
+builds a `BusinessSpec` and hands it to
+[`app/garages/business_onboarding.py`](../app/garages/business_onboarding.py),
+which wraps `onboard_garage()` — still the single atomic definition of how a
+tenant is created. `scripts/onboard_business.py` runs the same code from a
+shell and remains available for a bulk or scripted import; it is no longer
+needed for onboarding one business.
+
+One transaction covers the tenant, its immutable generated slug, default
+appointment statuses, schedule, MOT reminder settings, `OWNER`/`STAFF` roles,
+the first OWNER login, the services, the opening hours, the booking settings
+and the plan/status. A failure anywhere leaves **no** tenant — never a
+half-built one.
+
+### The owner's password is nobody's to know
+
+Platform Admin never chooses, sees or stores an owner's password, and the API
+has no field to supply one. Onboarding generates a random secret purely because
+an `Employee` row needs a hash, discards it unread, and emails the owner a
+single-use **set-password invite** — the existing `PasswordResetToken`, on
+`OWNER_INVITE_TOKEN_HOURS` (default 7 days) rather than the 30 minutes that
+suit a self-service reset.
+
+Invite state is derived from those token rows, never stored: `sent` (a live
+link is outstanding), `accepted` (it was used, so the owner can sign in),
+`expired`, or `none`. `POST /tenants/<id>/owner-invite` issues a fresh link and
+voids the previous one.
+
+### Duplicate submission
+
+Handled by the database, not a nonce. Owner email is globally unique on
+`employees`, so a second concurrent submit loses the unique constraint inside
+its own transaction and returns 409 having written nothing.
+
+### Onboarding stage
+
+Alongside the per-step progress, each tenant carries a derived **stage** — the
+one-word answer the Businesses list shows, and a filter (`?stage=`):
+
+| Stage | Meaning |
+|---|---|
+| `not_started` | None of contact details, services or opening hours done |
+| `in_progress` | Some of them done |
+| `core_setup_complete` | All three done; no Twilio wiring exists yet |
+| `communications_pending` | Core done; Twilio partly configured |
+| `ready_for_launch` | Core done; a voice number or WhatsApp sender is live |
+
+Derived from the same completed-step map as the percentage, so it cannot drift.
+"Ready for launch" is deliberately the communications line rather than a button
+an admin presses: a tenant whose phone and WhatsApp are live is ready whether or
+not anyone remembered to tick something.
+
+Because progress is derived rather than stored, `?stage=` cannot be a `WHERE`
+clause — it materialises the rows matching the other filters and pages in
+Python. That is the cost of never having a progress column that can go stale.
+
+### Correcting it afterwards
+
+A mistake caught after creation does not send an operator back to the CLI.
+Services, opening hours, booking settings and the owner invite each have their
+own superadmin-only, audited endpoint, writing the same rows the tenant's own
+Settings screens write — so hours set here are immediately real to public
+booking, the availability API and the WhatsApp assistant. It is not a general
+database editor: only the fields onboarding collects are reachable, and
+`slug`, `id` and `status` remain unreachable from anywhere.
+
+Communications setup (Twilio subaccount, numbers, WhatsApp sender) stays a
+follow-up in `app/communications/cli.py`. The console reports what is left as
+**next setup tasks**; none of them block onboarding being complete.
+
+---
+
 ## Tenant lifecycle
 
 `Garage.status` is platform-owned - no garage-facing route reads or writes it,
@@ -228,7 +311,15 @@ Everything below requires a platform token. **Bold** entries require
 | POST | `/api/platform-admin/auth/refresh` | New access token |
 | GET | `/api/platform-admin/auth/me` | The signed-in administrator |
 | GET | `/api/platform-admin/tenants` | Search / filter / sort every business |
+| **POST** | `/api/platform-admin/tenants` | Onboard a business (one transaction) |
 | GET | `/api/platform-admin/tenants/<id>` | One business |
+| GET | `/api/platform-admin/tenants/<id>/configuration` | Full onboarding configuration |
+| **POST** | `/api/platform-admin/tenants/<id>/services` | Add a service |
+| **PATCH** | `/api/platform-admin/tenants/<id>/services/<sid>` | Correct a service |
+| **DELETE** | `/api/platform-admin/tenants/<id>/services/<sid>` | Remove a service |
+| **PUT** | `/api/platform-admin/tenants/<id>/opening-hours` | Set weekday opening hours |
+| **PUT** | `/api/platform-admin/tenants/<id>/booking-settings` | Set the booking window |
+| **POST** | `/api/platform-admin/tenants/<id>/owner-invite` | Resend the owner's set-password link |
 | **PATCH** | `/api/platform-admin/tenants/<id>` | Edit configuration |
 | **POST** | `/api/platform-admin/tenants/<id>/suspend` | Suspend (reason required) |
 | **POST** | `/api/platform-admin/tenants/<id>/reactivate` | Lift a suspension |
@@ -259,6 +350,7 @@ handoff: `POST /api/auth/impersonation/exchange`.
 |---|---|
 | `tests/api/test_platform_admin_auth.py` | The permission boundary, from every direction |
 | `tests/api/test_platform_admin_tenants.py` | Listing, configuration, suspension, flags, onboarding |
+| `tests/api/test_platform_admin_provisioning.py` | Onboarding a business end to end, and correcting it |
 | `tests/api/test_platform_admin_impersonation.py` | The full impersonation lifecycle |
 | `tests/api/test_platform_admin_stats.py` | Statistics, and empty-denominator rates |
 | `tests/api/test_platform_admin_operations.py` | Delivery log, resends, job health, audit trail |

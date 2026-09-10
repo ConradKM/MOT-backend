@@ -1,5 +1,16 @@
 # Business onboarding
 
+> **Start in Platform Admin.** `+ Onboard business` at
+> [admin.comaz.co.uk](https://admin.comaz.co.uk) does everything this document
+> describes, from a browser, with no shell and no JSON — see
+> [`PLATFORM_ADMIN.md` → Onboarding a business](PLATFORM_ADMIN.md#onboarding-a-business).
+> It runs the same code as the CLI below, and it emails the owner a
+> set-password invite instead of handing you a temporary password to pass on.
+>
+> This document remains the reference for the **CLI**, which is still the right
+> tool for a bulk or scripted import, for preparing a spec **offline** at a
+> customer's premises, and for reading what a spec actually contains.
+
 How you (no developer needed) add a real business to CoMaz OS — including
 preparing one **offline** at their premises and creating it later against
 production from **Render Shell**.
@@ -35,9 +46,15 @@ also seeds the business's **services** and **opening hours** from one JSON file.
     "wed": ["08:00", "17:00"], "thu": ["08:00", "17:00"],
     "fri": ["08:00", "17:00"], "sat": null, "sun": null
   },
-  "notes": "free text — printed on every run"
+  "booking_settings": { "min_lead_time_hours": 4, "max_advance_days": 45 },
+  "notes": "internal platform-team note — saved to the tenant's internal notes"
 }
 ```
+
+`business` also accepts `layout_variant`, and the platform-owned lifecycle
+fields `plan` (a key of `PLANS`), `status` (`ACTIVE` or `TRIAL` — never
+`SUSPENDED`, which is its own audited operation) and `trial_ends_at`. A `TRIAL`
+requires a future `trial_ends_at`; any other status must not carry one.
 
 - `opening_hours` **omitted or `null`** → the seeded default **Mon–Fri
   09:00–17:00** is kept. A day set to `null` means closed. Only the days you
@@ -45,6 +62,11 @@ also seeds the business's **services** and **opening hours** from one JSON file.
 - `services` may be `[]`. Each needs a `name`; `base_price` (a decimal string
   like `"54.85"`) and `default_duration_minutes` are optional. Give a service a
   duration if you want the booking calendar to offer sensibly-sized slots.
+- `booking_settings` **omitted** → the seeded defaults are kept. It overrides
+  the same `garage_schedule_settings` row Settings > Availability edits:
+  `slot_interval_minutes`, `default_appointment_minutes`, `min_lead_time_hours`,
+  `max_advance_days`, `capacity_per_slot` (`null` = fall back to the active
+  employee count) and `limited_threshold_ratio`.
 - A spec that contains `slug`, `id`, `garage_id` or `password` is **rejected** —
   the slug is generated, ids are the platform's, passwords are never stored.
 

@@ -142,6 +142,15 @@ class Config:
     EMAIL_API_KEY = os.getenv("EMAIL_API_KEY", "")
     # Reset tokens live ~30 minutes.
     PASSWORD_RESET_TOKEN_MINUTES = int(os.getenv("PASSWORD_RESET_TOKEN_MINUTES", "30"))
+    # An owner's onboarding invite is the same single-use token, with a TTL
+    # that suits being handed over out of band rather than clicked immediately:
+    # a business owner may not read the email until the next working day.
+    OWNER_INVITE_TOKEN_HOURS = int(os.getenv("OWNER_INVITE_TOKEN_HOURS", "168"))
+
+    # Origin of the customer-facing booking app, for the public booking URL
+    # Platform Admin reports after onboarding. The frontend route is
+    # /book/<garage id> (see the console's and garage app's bookingUrl helper).
+    BOOKING_BASE_URL = os.getenv("BOOKING_BASE_URL", "https://app.comaz.co.uk")
 
     # Resend-specific credentials for EMAIL_PROVIDER=resend (see app/email).
     # Both fall back to the generic EMAIL_API_KEY/EMAIL_FROM above so a
