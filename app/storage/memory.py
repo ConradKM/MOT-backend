@@ -30,6 +30,9 @@ class MemoryStorage:
     def read_head(self, key: str, max_bytes: int) -> bytes:
         return self._uploaded.get(key, b"")[:max_bytes]
 
+    def content_length(self, key: str) -> int:
+        return len(self._uploaded.get(key, b""))
+
     # --- test helper -------------------------------------------------------
     def mark_uploaded(self, key: str, data: bytes = b"") -> None:
         """Simulate a client having PUT `data` (default: empty) to `key`."""

@@ -150,6 +150,29 @@ def test_finalize_rejects_non_image_content(platform_client, garage, session):
     assert garage.logo_storage_key is None
 
 
+def test_finalize_rejects_an_object_larger_than_declared(platform_client, garage, session, app):
+    """The declared size_bytes at ticket time is only ever a client's claim -
+    a presigned PUT goes straight to the bucket, so nothing server-side stops
+    it uploading more than it declared. finalize must check the real size."""
+    max_bytes = app.config["LOGO_MAX_BYTES"]
+    ticket = platform_client.post(
+        f"/api/platform-admin/tenants/{garage.id}/logo",
+        json={"content_type": "image/png", "size_bytes": 10},  # declared: tiny
+    ).json
+    oversized = PNG_BYTES + b"\x00" * max_bytes  # actually uploaded: over the limit
+    get_storage().mark_uploaded(ticket["storage_key"], oversized)
+
+    resp = platform_client.post(
+        f"/api/platform-admin/tenants/{garage.id}/logo/finalize",
+        json={"storage_key": ticket["storage_key"]},
+    )
+
+    assert resp.status_code == 422
+    session.refresh(garage)
+    assert garage.logo_storage_key is None
+    assert not get_storage().object_exists(ticket["storage_key"])
+
+
 def test_finalize_before_upload_is_409(platform_client, garage):
     ticket = platform_client.post(
         f"/api/platform-admin/tenants/{garage.id}/logo",

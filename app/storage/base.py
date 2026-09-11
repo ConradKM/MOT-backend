@@ -29,3 +29,11 @@ class ObjectStorage(Protocol):
         real content type (magic bytes) without downloading the whole file.
         Callers must have already confirmed the object exists."""
         ...
+
+    def content_length(self, key: str) -> int:
+        """The actual size, in bytes, of the object at `key` - a HEAD, not a
+        download. Callers must have already confirmed the object exists. A
+        declared `size_bytes` at ticket time is never enough on its own: a
+        presigned PUT goes straight to the bucket, so nothing server-side
+        stops a client uploading more than it declared."""
+        ...

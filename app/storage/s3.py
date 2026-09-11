@@ -67,3 +67,7 @@ class S3Storage:
             Bucket=self._bucket, Key=key, Range=f"bytes=0-{max_bytes - 1}"
         )
         return bytes(response["Body"].read())
+
+    def content_length(self, key: str) -> int:
+        response = self._client.head_object(Bucket=self._bucket, Key=key)
+        return int(response["ContentLength"])

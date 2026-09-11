@@ -120,6 +120,15 @@ def finalize_logo_upload(
     if not storage.object_exists(storage_key):
         raise LogoNotUploadedError("No uploaded object found for this logo yet.")
 
+    # The declared size_bytes at ticket time (request_logo_upload) is only
+    # ever a client's claim - a presigned PUT goes straight to the bucket, so
+    # nothing stops it uploading more than it declared. This is the real
+    # check, against what actually landed.
+    max_bytes = current_app.config["LOGO_MAX_BYTES"]
+    if storage.content_length(storage_key) > max_bytes:
+        storage.delete(storage_key)
+        raise LogoError(f"Logo exceeds the {max_bytes}-byte limit.")
+
     head = storage.read_head(storage_key, _HEAD_SNIFF_BYTES)
     sniffed_content_type = _sniff_image_content_type(head)
     if sniffed_content_type is None:
