@@ -3,7 +3,7 @@ import os
 import sys
 import uuid
 
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
 
 from .config import Config
@@ -29,6 +29,37 @@ def _configure_logging(app: Flask) -> None:
         root.addHandler(handler)
     root.setLevel(level)
     app.logger.setLevel(level)
+
+
+def _log_validation_errors(app: Flask) -> None:
+    """Log the field-by-field reason behind every 4xx that carries
+    flask-smorest's own ``errors`` body (a raw marshmallow/webargs schema
+    validation failure - an unknown field, an out-of-range value, a bad
+    enum), so a request like ``POST /tenants`` failing with a 422 leaves more
+    in the platform log stream than a bare access-log line with no body.
+
+    Deliberately safe to log broadly: ``errors`` is marshmallow's own
+    {field: [message, ...]} structure - field *names* and canned validation
+    *messages* only, never the submitted values (so nothing a client typed,
+    and therefore nothing secret, ever reaches this log line) and never an
+    application-level ``abort(422, message=...)`` body (those carry
+    `message`, not `errors`, and are a deliberate business decision already
+    visible in the response - not a mystery to diagnose).
+    """
+
+    @app.after_request
+    def _log(response):
+        if 400 <= response.status_code < 500 and response.is_json:
+            body = response.get_json(silent=True)
+            if isinstance(body, dict) and body.get("errors"):
+                app.logger.warning(
+                    "[validation] %s %s -> %s errors=%s",
+                    request.method,
+                    request.path,
+                    response.status_code,
+                    body["errors"],
+                )
+        return response
 
 
 @jwt.token_in_blocklist_loader
@@ -103,6 +134,7 @@ def create_app(config_class=Config):
     app.config.from_object(config_class)
 
     _configure_logging(app)
+    _log_validation_errors(app)
 
     db.init_app(app)
     migrate.init_app(app, db)
