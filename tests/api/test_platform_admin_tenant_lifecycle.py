@@ -205,8 +205,11 @@ def test_deleting_an_archived_tenant_with_an_outstanding_reminder_does_not_fk_er
     still ON DELETE NO ACTION (every sibling table is CASCADE) - a tenant
     with any Reminder row would have failed to delete with an
     IntegrityError."""
+    garage_id = garage.id
+    garage_name = garage.name
+
     reminder = Reminder(
-        garage_id=garage.id,
+        garage_id=garage_id,
         customer_id=customer.id,
         vehicle_id=vehicle.id,
         type="MOT_EXPIRY",
@@ -216,24 +219,24 @@ def test_deleting_an_archived_tenant_with_an_outstanding_reminder_does_not_fk_er
     )
     session.add(reminder)
     session.commit()
+    # Captured before anything expires: the DB's own ON DELETE CASCADE (not
+    # this session's ORM delete tracking) is what removes this row, so
+    # accessing reminder.id afterwards - once its row is truly gone - raises
+    # ObjectDeletedError rather than returning the id.
+    reminder_id = reminder.id
 
     platform_client.post(
-        f"/api/platform-admin/tenants/{garage.id}/archive", json={"reason": "Churned."}
+        f"/api/platform-admin/tenants/{garage_id}/archive", json={"reason": "Churned."}
     )
 
     response = platform_client.delete(
-        f"/api/platform-admin/tenants/{garage.id}", json={"confirm": garage.name}
+        f"/api/platform-admin/tenants/{garage_id}", json={"confirm": garage_name}
     )
 
     assert response.status_code == 200
     session.expire_all()
-    assert session.get(Garage, garage.id) is None
-    # Not session.get(): the reminder was removed by the DB's own ON DELETE
-    # CASCADE, never through this session's ORM delete tracking, so it's
-    # still in the identity map as "expected to exist" - session.get() would
-    # raise ObjectDeletedError on the missing row rather than return None. A
-    # fresh query has no such expectation and just finds nothing.
-    assert Reminder.query.filter_by(id=reminder.id).first() is None
+    assert session.get(Garage, garage_id) is None
+    assert Reminder.query.filter_by(id=reminder_id).first() is None
 
 
 def test_deleting_a_tenant_does_not_affect_another_tenant(
