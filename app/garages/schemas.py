@@ -61,7 +61,14 @@ class PublicGarageSchema(Schema):
     id = fields.UUID(dump_only=True)
     name = fields.Str(dump_only=True)
     slug = fields.Str(dump_only=True)
+    # A fresh presigned url each request, or null with no logo - mirrors
+    # PublicGarageDetailSchema (app/public_booking/schemas.py). This lookup
+    # had been missing it since the logo work only touched the by-slug route.
+    logo_url = fields.Method("_get_logo_url", dump_only=True)
     appointment_types = fields.Method("_get_appointment_types", dump_only=True)
+
+    def _get_logo_url(self, obj):
+        return logo_public_url(obj)
 
     def _get_appointment_types(self, garage):
         active = [t for t in garage.appointment_types if t.status == "ACTIVE"]
