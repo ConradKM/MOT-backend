@@ -293,7 +293,9 @@ def send_booking_request_rejected_email(booking_request) -> CommunicationLog | N
     Deliberately excludes ``booking_request.staff_notes``: that field is
     staff-internal (it appears only in app/booking_requests/schemas.py, never
     in app/customer_portal/schemas.py) and may say anything at all, so it must
-    never reach the customer.
+    never reach the customer. ``customer_rejection_reason`` is the opposite by
+    design - explicitly customer-facing (see app/models/booking_request.py) -
+    and is included whenever the rejecting staff member supplied one.
     """
     garage = booking_request.garage
     appointment_type = booking_request.appointment_type
@@ -313,6 +315,7 @@ def send_booking_request_rejected_email(booking_request) -> CommunicationLog | N
             "preferred_date": booking_request.preferred_date,
             "preferred_time": booking_request.preferred_time,
             "vehicle_label": _booking_request_vehicle_label(booking_request),
+            "rejection_reason": booking_request.customer_rejection_reason,
         },
         trigger_event=BOOKING_REQUEST_REJECTED,
         customer=booking_request.customer,

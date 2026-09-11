@@ -14,7 +14,19 @@ from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 
 from app.extensions import db
-from app.models.platform.audit_log import ACTION_FEATURE_FLAG_UPDATE
+from app.garages.logo import (
+    LogoError,
+    LogoNotUploadedError,
+    delete_logo,
+    finalize_logo_upload,
+    logo_metadata,
+    request_logo_upload,
+)
+from app.models.platform.audit_log import (
+    ACTION_FEATURE_FLAG_UPDATE,
+    ACTION_TENANT_LOGO_DELETE,
+    ACTION_TENANT_LOGO_UPLOAD,
+)
 from app.models.platform.impersonation import ImpersonationSession
 from app.platform_admin.audit import record_audit
 from app.platform_admin.features import (
@@ -50,6 +62,10 @@ from app.platform_admin.schemas import (
     ImpersonationSessionQuerySchema,
     ImpersonationSessionSchema,
     ImpersonationStartSchema,
+    LogoFinalizeSchema,
+    LogoResponseSchema,
+    LogoUploadRequestSchema,
+    LogoUploadTicketSchema,
     OnboardingProgressSchema,
     OwnerInviteResultSchema,
     PeriodQuerySchema,
@@ -230,6 +246,102 @@ class TenantReactivate(MethodView):
         except TenantError as exc:
             abort(422, message=str(exc))
         return tenant_detail(garage)
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/logo")
+class TenantLogo(MethodView):
+    """Business branding, kept entirely separate from tenant provisioning -
+    see app/garages/logo.py's module docstring for why. A logo upload/replace/
+    delete is always its own request against an already-created tenant, never
+    part of the ``POST /tenants`` body."""
+
+    @jwt_required()
+    @platform_admin_required
+    @platform_tenants_blp.response(200, LogoResponseSchema)
+    def get(self, garage_id):
+        """Current logo metadata + a short-lived download url, or `logo: null`
+        if this business has none yet."""
+        garage = _require_tenant(garage_id)
+        return {"logo": logo_metadata(garage)}
+
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(LogoUploadRequestSchema)
+    @platform_tenants_blp.response(201, LogoUploadTicketSchema)
+    def post(self, data, garage_id):
+        """Issue a presigned upload ticket for a new logo (or a replacement).
+
+        Nothing changes on the business yet - the ticket's `storage_key` only
+        becomes the live logo once confirmed via `PUT .../logo/finalize`. A
+        client that requests a ticket and never uploads leaves the business
+        exactly as it was.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            return (
+                request_logo_upload(
+                    garage, content_type=data["content_type"], size_bytes=data.get("size_bytes")
+                ),
+                201,
+            )
+        except LogoError as exc:
+            abort(422, message=str(exc))
+
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.response(200, ServiceDeletedSchema)
+    def delete(self, garage_id):
+        """Remove this business's logo. A no-op (still 200) if it has none."""
+        garage = _require_tenant(garage_id)
+        had_logo = bool(garage.logo_storage_key)
+        delete_logo(garage)
+        if had_logo:
+            record_audit(
+                admin=get_current_platform_admin(),
+                action=ACTION_TENANT_LOGO_DELETE,
+                garage=garage,
+                summary=f"Removed {garage.name}'s logo",
+                commit=True,
+            )
+        return {"message": "Logo removed."}
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/logo/finalize")
+class TenantLogoFinalize(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(LogoFinalizeSchema)
+    @platform_tenants_blp.response(200, LogoResponseSchema)
+    def post(self, data, garage_id):
+        """Confirm an uploaded object is really an image and make it live.
+
+        Verifies the object actually landed at `storage_key` (409 if not),
+        sniffs its real content type from its own bytes rather than trusting
+        what was declared when the ticket was issued, and only then persists
+        it as this business's logo - deleting the previous one, if any, once
+        the new one is confirmed live.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            finalize_logo_upload(
+                garage,
+                storage_key=data["storage_key"],
+                original_filename=data.get("original_filename"),
+            )
+        except LogoNotUploadedError as exc:
+            abort(409, message=str(exc))
+        except LogoError as exc:
+            abort(422, message=str(exc))
+
+        record_audit(
+            admin=get_current_platform_admin(),
+            action=ACTION_TENANT_LOGO_UPLOAD,
+            garage=garage,
+            summary=f"Uploaded a logo for {garage.name}",
+            details={"content_type": garage.logo_content_type},
+            commit=True,
+        )
+        return {"logo": logo_metadata(garage)}
 
 
 @platform_tenants_blp.route("/tenants/<uuid:garage_id>/onboarding")

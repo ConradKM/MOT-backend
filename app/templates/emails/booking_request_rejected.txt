@@ -1,7 +1,9 @@
 Hi {{ first_name or "there" }},
 
 We're sorry - {{ business_name }} isn't able to take your booking request {% if service_name %}for {{ service_name }} {% endif %}on {{ preferred_date.strftime("%d %B %Y") }}{% if preferred_time %} at {{ preferred_time.strftime("%H:%M") }}{% endif %}. Nothing has been booked.
-
+{% if rejection_reason %}
+{{ rejection_reason }}
+{% endif %}
 Please get in touch and we'll find you another time.
 {% if business_phone %}
 Call us on {{ business_phone }}

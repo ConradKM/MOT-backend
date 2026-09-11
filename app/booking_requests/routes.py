@@ -11,10 +11,12 @@ from app.communications.events import (
     BOOKING_REQUEST_REJECTED,
     emit_event,
 )
+from app.email.service import STATUS_SENT
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
+from app.models.communications.communication_log import CHANNEL_EMAIL, CommunicationLog
 from app.models.employee import Employee
 from app.public_booking.availability import slot_capacity_usage
 
@@ -116,6 +118,44 @@ def _assert_capacity_available(garage, booking_request, start_time, end_time):
             message="This time is no longer available - capacity has already "
             "been taken by another appointment or request.",
         )
+
+
+#: What the operator is told happened to the customer notification - not
+#: stored, computed fresh after every reject from whether the request even
+#: has an email on file and, if so, what app/email/service.py's own
+#: CommunicationLog row for the send says. See BookingRequestSchema
+#: .notification_result.
+NOTIFICATION_SENT = "SENT"
+NOTIFICATION_FAILED = "FAILED"
+NOTIFICATION_NO_EMAIL = "NO_EMAIL"
+
+
+def _reject_notification_result(booking_request: BookingRequest) -> str:
+    if not booking_request.customer_email:
+        return NOTIFICATION_NO_EMAIL
+
+    # channel=EMAIL matters: the WhatsApp automation handler
+    # (app/conversation/automation.py) is registered for the same
+    # BOOKING_REQUEST_REJECTED event and logs its own CommunicationLog row for
+    # this same booking_request_id - without this filter the "most recent"
+    # row could just as easily be its WhatsApp attempt, not the email's.
+    log = (
+        CommunicationLog.query.filter_by(
+            booking_request_id=booking_request.id,
+            trigger_event=BOOKING_REQUEST_REJECTED,
+            channel=CHANNEL_EMAIL,
+        )
+        .order_by(CommunicationLog.created_at.desc())
+        .first()
+    )
+    if log is None:
+        # A customer_email is on file but nothing was logged - only reachable
+        # if a duplicate send was skipped (app/email/service.py::_send's own
+        # dedupe), which can't happen on a fresh PENDING -> REJECTED
+        # transition (the 409 above already refuses a second rejection).
+        # Reported as sent rather than implying a failure nothing recorded.
+        return NOTIFICATION_SENT
+    return NOTIFICATION_SENT if log.status == STATUS_SENT else NOTIFICATION_FAILED
 
 
 @booking_requests_blp.route("/")
@@ -288,12 +328,21 @@ class BookingRequestReject(MethodView):
         booking_request.reviewed_by_employee_id = employee.id
         booking_request.reviewed_at = datetime.now(UTC)
         booking_request.staff_notes = data.get("staff_notes")
+        booking_request.customer_rejection_reason = data.get("customer_rejection_reason")
 
         db.session.commit()
 
+        # Never rolled back on a failed send - app/email/service.py's own
+        # _send never raises (a failure becomes a FAILED CommunicationLog
+        # row), so this always runs after the REJECTED status is already
+        # committed. The result below is read back from that same row.
         emit_event(
             BOOKING_REQUEST_REJECTED, garage=booking_request.garage, booking_request=booking_request
         )
 
+        # attach_review_context resets _notification_result to None on every
+        # call (see service.py) - set the real value *after* it, or this
+        # call's own reset would immediately overwrite it.
         attach_review_context([booking_request])
+        booking_request._notification_result = _reject_notification_result(booking_request)
         return booking_request

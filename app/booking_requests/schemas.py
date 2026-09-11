@@ -80,7 +80,20 @@ class BookingRequestSchema(Schema):
     reviewed_by_employee_id = fields.UUID(dump_only=True, allow_none=True)
     reviewed_by_name = fields.Str(dump_only=True, allow_none=True, attribute="_reviewed_by_name")
     reviewed_at = fields.DateTime(dump_only=True, allow_none=True)
+    # Staff-internal - never sent to the customer. See
+    # app/models/booking_request.py for why this stays separate from
+    # customer_rejection_reason below.
     staff_notes = fields.Str(dump_only=True, allow_none=True)
+    # Set only on REJECTED, only when supplied - what the customer actually
+    # sees in the rejection email.
+    customer_rejection_reason = fields.Str(dump_only=True, allow_none=True)
+    # Only meaningful right after a reject - "SENT" / "FAILED" / "NO_EMAIL" -
+    # transient, like duration_minutes/slot_check above, set by the reject
+    # route itself (see app/booking_requests/routes.py) and absent (None) on
+    # a plain read.
+    notification_result = fields.Str(
+        dump_only=True, allow_none=True, attribute="_notification_result"
+    )
 
     customer_id = fields.UUID(dump_only=True, allow_none=True)
     vehicle_id = fields.UUID(dump_only=True, allow_none=True)
@@ -108,7 +121,14 @@ class BookingRequestApproveSchema(Schema):
 
 
 class BookingRequestRejectSchema(Schema):
+    #: Internal, never shown to the customer.
     staff_notes = fields.Str(allow_none=True, load_default=None)
+    #: Optional, shown to the customer verbatim in the rejection email when
+    #: present. Kept as a separate field from staff_notes on purpose - see
+    #: app/models/booking_request.py.
+    customer_rejection_reason = fields.Str(
+        allow_none=True, load_default=None, validate=validate.Length(max=2000)
+    )
 
 
 class BookingRequestQueryArgsSchema(Schema):

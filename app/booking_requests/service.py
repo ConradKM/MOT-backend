@@ -238,3 +238,13 @@ def attach_review_context(requests: list[BookingRequest], now: datetime | None =
         r._duration_minutes = _duration_minutes_for(r)
         r._reviewed_by_name = names.get(r.reviewed_by_employee_id)
         r._slot_check = slot_check_for_request(r, now)
+        # Only ever meaningful on the response to a reject that just
+        # happened - reset unconditionally on every call, not just when
+        # unset. SQLAlchemy's identity map means the *same* Python object can
+        # be handed back across requests within one session (as it is in the
+        # test suite, and can be within one worker process), so a stale
+        # `_notification_result` set by an earlier reject would otherwise
+        # leak into a later, unrelated GET/list read of the same request. The
+        # reject route sets the real value on the object *after* calling this
+        # (see routes.py), overwriting the None set here.
+        r._notification_result = None

@@ -62,6 +62,10 @@ class PublicGarageDetailSchema(Schema):
     id = fields.UUID(dump_only=True)
     name = fields.Str(dump_only=True)
     slug = fields.Str(dump_only=True)
+    # A fresh presigned url each request, or null when the business has no
+    # logo - see app/garages/logo.py::logo_public_url. The frontend renders
+    # its own fallback on null; never a broken-image icon.
+    logo_url = fields.Str(dump_only=True, allow_none=True)
     appointment_types = fields.List(fields.Nested(PublicAppointmentTypeSchema), dump_only=True)
 
 

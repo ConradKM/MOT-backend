@@ -88,6 +88,11 @@ class Config:
     # "false" to make onboarding CLI-only (the HTTP endpoint then 404s).
     ONBOARDING_HTTP_ENABLED = os.getenv("ONBOARDING_HTTP_ENABLED", "true").lower() != "false"
 
+    # Business logo (see app/garages/logo.py): deliberately far below
+    # MEDIA_MAX_BYTES - a business logo is a small brand asset shown on a
+    # public page, not checklist evidence.
+    LOGO_MAX_BYTES = int(os.getenv("LOGO_MAX_BYTES", str(2 * 1024 * 1024)))
+
     # --- Platform Admin (see app/platform_admin) -------------------------
     # The internal operator console at admin.comaz.co.uk. Its accounts live in
     # their own table and are created only by `flask create-platform-admin` -

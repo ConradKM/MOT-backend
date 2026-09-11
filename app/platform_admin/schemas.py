@@ -88,8 +88,55 @@ class TenantSchema(Schema):
     trial_ends_at = fields.DateTime(dump_only=True, allow_none=True)
     internal_notes = fields.Str(dump_only=True, allow_none=True)
 
+    # Whether a logo has actually finished uploading - not the image itself
+    # (that's GET .../tenants/<id>/logo, on demand, since a presigned GET url
+    # would otherwise be generated - and wasted - for every row of a tenant
+    # list nobody is about to look at).
+    has_logo = fields.Method("_get_has_logo", dump_only=True)
+
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
+
+    def _get_has_logo(self, obj):
+        return bool(obj.logo_storage_key)
+
+
+class LogoUploadRequestSchema(Schema):
+    """What the console declares before it has actually uploaded anything -
+    validated against LOGO_MAX_BYTES / the allowed types, but never trusted
+    as the truth about what lands in the bucket (see finalize)."""
+
+    content_type = fields.Str(required=True, validate=validate.Length(min=1, max=100))
+    size_bytes = fields.Int(allow_none=True, load_default=None, validate=validate.Range(min=1))
+
+
+class LogoUploadTicketSchema(Schema):
+    storage_key = fields.Str(dump_only=True)
+    upload_url = fields.Str(dump_only=True)
+    expires_in = fields.Int(dump_only=True)
+
+
+class LogoFinalizeSchema(Schema):
+    storage_key = fields.Str(required=True, validate=validate.Length(min=1, max=500))
+    original_filename = fields.Str(
+        allow_none=True, load_default=None, validate=validate.Length(max=255)
+    )
+
+
+class LogoSchema(Schema):
+    """Current logo metadata + a short-lived download url - null fields
+    throughout when the business has no logo (the resource itself is still a
+    200 with `logo: null`, not a 404 - "no logo" is a normal state)."""
+
+    content_type = fields.Str(dump_only=True, allow_none=True)
+    original_filename = fields.Str(dump_only=True, allow_none=True)
+    uploaded_at = fields.DateTime(dump_only=True, allow_none=True)
+    url = fields.Str(dump_only=True, allow_none=True)
+    expires_in = fields.Int(dump_only=True, allow_none=True)
+
+
+class LogoResponseSchema(Schema):
+    logo = fields.Nested(LogoSchema, dump_only=True, allow_none=True)
 
 
 class OnboardingStepSchema(Schema):

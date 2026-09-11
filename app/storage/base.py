@@ -23,3 +23,17 @@ class ObjectStorage(Protocol):
     def delete(self, key: str) -> None:
         """Remove the object at `key` (no error if it's already gone)."""
         ...
+
+    def read_head(self, key: str, max_bytes: int) -> bytes:
+        """The first `max_bytes` of the object at `key` - enough to sniff its
+        real content type (magic bytes) without downloading the whole file.
+        Callers must have already confirmed the object exists."""
+        ...
+
+    def content_length(self, key: str) -> int:
+        """The actual size, in bytes, of the object at `key` - a HEAD, not a
+        download. Callers must have already confirmed the object exists. A
+        declared `size_bytes` at ticket time is never enough on its own: a
+        presigned PUT goes straight to the bucket, so nothing server-side
+        stops a client uploading more than it declared."""
+        ...

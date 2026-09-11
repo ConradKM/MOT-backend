@@ -396,6 +396,91 @@ def test_reject_after_approve_conflicts(authenticated_user, session, garage, boo
     assert resp.status_code == 409
 
 
+def test_reject_persists_a_customer_facing_reason_separately_from_staff_notes(
+    authenticated_user, booking_request
+):
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/reject",
+        json={
+            "staff_notes": "Blacklisted - never rebook this one.",
+            "customer_rejection_reason": "We don't have a technician free that day.",
+        },
+    )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["staff_notes"] == "Blacklisted - never rebook this one."
+    assert body["customer_rejection_reason"] == "We don't have a technician free that day."
+
+
+def test_reject_email_includes_the_customer_facing_reason(
+    authenticated_user, booking_request, monkeypatch
+):
+    sent = []
+    monkeypatch.setattr("app.email.service.send_email", lambda **kwargs: sent.append(kwargs))
+
+    authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/reject",
+        json={"customer_rejection_reason": "We don't have a technician free that day."},
+    )
+
+    assert "We don't have a technician free that day." in sent[0]["body"]
+
+
+def test_reject_reports_the_customer_was_notified(authenticated_user, booking_request, monkeypatch):
+    monkeypatch.setattr("app.email.service.send_email", lambda **kwargs: None)
+
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/reject", json={}
+    )
+
+    assert resp.get_json()["notification_result"] == "SENT"
+
+
+def test_reject_reports_no_email_on_file(authenticated_user, session, booking_request):
+    booking_request.customer_email = None
+    session.commit()
+
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/reject", json={}
+    )
+
+    assert resp.get_json()["notification_result"] == "NO_EMAIL"
+
+
+def test_reject_reports_a_failed_notification_without_reverting_the_rejection(
+    authenticated_user, session, booking_request, monkeypatch
+):
+    def _boom(**kwargs):
+        raise RuntimeError("Resend API returned 500")
+
+    monkeypatch.setattr("app.email.service.send_email", _boom)
+
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/reject", json={}
+    )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "REJECTED"
+    assert body["notification_result"] == "FAILED"
+    session.refresh(booking_request)
+    assert booking_request.status == "REJECTED"
+
+
+def test_get_after_reject_does_not_report_a_stale_notification_result(
+    authenticated_user, booking_request
+):
+    """notification_result is only ever meaningful on the reject response
+    itself - a later plain GET must not echo it back as if it were still
+    current."""
+    authenticated_user.client.post(f"/api/booking-requests/{booking_request.id}/reject", json={})
+
+    resp = authenticated_user.client.get(f"/api/booking-requests/{booking_request.id}")
+
+    assert resp.get_json()["notification_result"] is None
+
+
 # --------------------------------------------------------------------------
 # Review-screen enrichment (customer/vehicle/service/duration/price, slot check)
 # --------------------------------------------------------------------------
