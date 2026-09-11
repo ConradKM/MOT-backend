@@ -19,6 +19,27 @@ def test_garage_payload_includes_business_detail_fields(authenticated_user):
         assert field in body
 
 
+def test_garage_payload_reports_no_logo_by_default(authenticated_user):
+    """The garage app's own header (see MOT-frontend) reads this to show a
+    persisted logo - or its own fallback when there is none."""
+    body = authenticated_user.client.get("/api/garage").get_json()
+    assert body["logo_url"] is None
+
+
+def test_garage_payload_includes_the_persisted_logo_url(authenticated_user, session):
+    from datetime import UTC, datetime
+
+    authenticated_user.garage.logo_storage_key = "garages/g1/branding/logo.png"
+    authenticated_user.garage.logo_content_type = "image/png"
+    authenticated_user.garage.logo_uploaded_at = datetime.now(UTC)
+    session.commit()
+
+    body = authenticated_user.client.get("/api/garage").get_json()
+
+    assert body["logo_url"] is not None
+    assert body["logo_url"].startswith("https://")
+
+
 def test_unauthenticated_user_receives_auth_error(client):
     resp = client.get("/api/garage")
     assert resp.status_code == 401
