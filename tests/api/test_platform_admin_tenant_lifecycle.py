@@ -228,7 +228,12 @@ def test_deleting_an_archived_tenant_with_an_outstanding_reminder_does_not_fk_er
     assert response.status_code == 200
     session.expire_all()
     assert session.get(Garage, garage.id) is None
-    assert session.get(Reminder, reminder.id) is None
+    # Not session.get(): the reminder was removed by the DB's own ON DELETE
+    # CASCADE, never through this session's ORM delete tracking, so it's
+    # still in the identity map as "expected to exist" - session.get() would
+    # raise ObjectDeletedError on the missing row rather than return None. A
+    # fresh query has no such expectation and just finds nothing.
+    assert Reminder.query.filter_by(id=reminder.id).first() is None
 
 
 def test_deleting_a_tenant_does_not_affect_another_tenant(
