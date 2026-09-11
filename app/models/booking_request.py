@@ -108,7 +108,17 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
         Uuid, ForeignKey("employees.id", ondelete="SET NULL")
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Staff-internal - never rendered to the customer (see
+    # app/email/service.py::send_booking_request_rejected_email). May say
+    # anything at all, which is exactly why it must stay separate from
+    # customer_rejection_reason below.
     staff_notes: Mapped[str | None] = mapped_column(Text)
+    # Set only on REJECTED, and only when the rejecting staff member chose to
+    # give one. Explicitly customer-facing - included in the rejection email
+    # verbatim when present. Distinct from staff_notes on purpose: existing
+    # staff notes were written under the assumption they are private, and
+    # must never become customer-visible by a later change to this column.
+    customer_rejection_reason: Mapped[str | None] = mapped_column(Text)
 
     # Records created when the request was approved (nullable, SET NULL so
     # deleting one of them doesn't delete the request's history).

@@ -10,7 +10,10 @@ class MemoryStorage:
     _HOST = "https://storage.local.test"
 
     def __init__(self) -> None:
-        self._uploaded: set[str] = set()
+        # key -> the bytes a test says were "uploaded" there (empty by
+        # default - most tests only care that the key exists, not its
+        # content; a few pass real bytes to exercise content sniffing).
+        self._uploaded: dict[str, bytes] = {}
 
     def presigned_put_url(self, key: str, content_type: str, expires_in: int) -> str:
         return f"{self._HOST}/{key}?method=PUT&content_type={content_type}&expires_in={expires_in}"
@@ -22,9 +25,12 @@ class MemoryStorage:
         return key in self._uploaded
 
     def delete(self, key: str) -> None:
-        self._uploaded.discard(key)
+        self._uploaded.pop(key, None)
+
+    def read_head(self, key: str, max_bytes: int) -> bytes:
+        return self._uploaded.get(key, b"")[:max_bytes]
 
     # --- test helper -------------------------------------------------------
-    def mark_uploaded(self, key: str) -> None:
-        """Simulate a client having PUT the object to `key`."""
-        self._uploaded.add(key)
+    def mark_uploaded(self, key: str, data: bytes = b"") -> None:
+        """Simulate a client having PUT `data` (default: empty) to `key`."""
+        self._uploaded[key] = data

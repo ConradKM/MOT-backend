@@ -81,6 +81,18 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     postcode: Mapped[str | None] = mapped_column(String(20))
     website: Mapped[str | None] = mapped_column(String(200))
 
+    # --- business logo (see app/garages/logo.py) -----------------------------
+    # The bytes live in object storage; this row holds only the reference -
+    # same "row is a pointer, not a blob" shape as ChecklistItemMedia.
+    # `logo_storage_key` is only set once `finalize_logo_upload` has confirmed
+    # the object exists *and* sniffed its real content type - never at ticket
+    # time, so a business is never reported as having a logo it hasn't
+    # actually finished uploading.
+    logo_storage_key: Mapped[str | None] = mapped_column(String(500))
+    logo_content_type: Mapped[str | None] = mapped_column(String(100))
+    logo_original_filename: Mapped[str | None] = mapped_column(String(255))
+    logo_uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     # --- platform-owned tenant lifecycle (Platform Admin only) --------------
     # Not in GarageSchema / GarageDetailsUpdateSchema: a garage user can
     # neither read nor write any of these through /api/garage.

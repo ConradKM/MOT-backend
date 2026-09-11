@@ -23,3 +23,9 @@ class ObjectStorage(Protocol):
     def delete(self, key: str) -> None:
         """Remove the object at `key` (no error if it's already gone)."""
         ...
+
+    def read_head(self, key: str, max_bytes: int) -> bytes:
+        """The first `max_bytes` of the object at `key` - enough to sniff its
+        real content type (magic bytes) without downloading the whole file.
+        Callers must have already confirmed the object exists."""
+        ...

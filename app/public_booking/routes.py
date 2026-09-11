@@ -8,6 +8,7 @@ from app.booking_requests.reference import unique_booking_reference
 from app.booking_requests.service import resolve_customer_and_vehicle
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
+from app.garages.logo import logo_public_url
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.garage import Garage
@@ -64,6 +65,7 @@ class PublicGarageBySlug(MethodView):
             "id": garage.id,
             "name": garage.name,
             "slug": garage.slug,
+            "logo_url": logo_public_url(garage),
             "appointment_types": [t for t in garage.appointment_types if t.status == "ACTIVE"],
         }
 

@@ -238,3 +238,9 @@ def attach_review_context(requests: list[BookingRequest], now: datetime | None =
         r._duration_minutes = _duration_minutes_for(r)
         r._reviewed_by_name = names.get(r.reviewed_by_employee_id)
         r._slot_check = slot_check_for_request(r, now)
+        # Only ever meaningful for the request a reject just acted on - the
+        # reject route sets this *before* calling attach_review_context, so
+        # default it here for every other read path (list, get, approve) so
+        # the schema's getattr never raises on a plain instance.
+        if not hasattr(r, "_notification_result"):
+            r._notification_result = None

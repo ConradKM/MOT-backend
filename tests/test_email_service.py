@@ -248,6 +248,30 @@ def test_rejected_and_received_emails_dedupe_independently(app, fake_send, booki
     assert len(fake_send.calls) == 2
 
 
+def test_booking_request_rejected_email_includes_the_customer_reason(
+    app, session, fake_send, booking_request
+):
+    booking_request.customer_rejection_reason = "We don't have a technician free that day."
+    session.commit()
+
+    email_service.send_booking_request_rejected_email(booking_request)
+
+    body = fake_send.calls[0]["body"]
+    assert "We don't have a technician free that day." in body
+    assert "We don't have a technician free that day." in fake_send.calls[0]["html_body"]
+
+
+def test_booking_request_rejected_email_omits_reason_when_blank(app, fake_send, booking_request):
+    """booking_request fixture has no customer_rejection_reason set - the
+    template must render cleanly with nothing to show, not a stray blank
+    line or an "{{ rejection_reason }}" literal."""
+    email_service.send_booking_request_rejected_email(booking_request)
+
+    body = fake_send.calls[0]["body"]
+    assert "rejection_reason" not in body
+    assert "None" not in body
+
+
 def test_appointment_confirmation_includes_appointment_details(
     app, fake_send, make_appointment, vehicle
 ):

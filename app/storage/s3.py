@@ -59,3 +59,11 @@ class S3Storage:
 
     def delete(self, key: str) -> None:
         self._client.delete_object(Bucket=self._bucket, Key=key)
+
+    def read_head(self, key: str, max_bytes: int) -> bytes:
+        # A ranged GET, not a full download - a logo/media file's magic bytes
+        # live in its first few dozen bytes.
+        response = self._client.get_object(
+            Bucket=self._bucket, Key=key, Range=f"bytes=0-{max_bytes - 1}"
+        )
+        return bytes(response["Body"].read())
