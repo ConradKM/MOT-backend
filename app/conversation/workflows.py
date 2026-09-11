@@ -849,6 +849,7 @@ def handle_awaiting_booking_confirmation(ctx: ConversationContext, text: str) ->
         appointment_type=appointment_type,
         preferred_date=day,
         preferred_time=slot_time,
+        now=ctx.now,
     )
 
     if booking_request is None:

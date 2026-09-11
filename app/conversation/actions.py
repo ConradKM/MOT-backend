@@ -173,6 +173,7 @@ def create_booking_request(
     preferred_date: date,
     preferred_time: time | None,
     notes: str | None = None,
+    now: datetime | None = None,
 ) -> tuple[BookingRequest | None, str | None]:
     """Create the exact same kind of PENDING booking request the public web
     form creates (app/public_booking/routes.py) - the conversation engine
@@ -185,7 +186,11 @@ def create_booking_request(
     """
     if preferred_time is not None:
         reason = revalidate_slot(
-            garage, preferred_date, preferred_time, appointment_type=appointment_type
+            garage,
+            preferred_date,
+            preferred_time,
+            appointment_type=appointment_type,
+            now=now,
         )
         if reason is not None:
             return None, reason
