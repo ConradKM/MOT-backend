@@ -256,9 +256,16 @@ def test_booking_request_rejected_email_includes_the_customer_reason(
 
     email_service.send_booking_request_rejected_email(booking_request)
 
+    # The plain-text body is never escaped; the HTML body is, correctly, so
+    # the apostrophe becomes an entity there - assert against what Jinja's
+    # autoescape actually produces rather than the raw string.
+    from markupsafe import escape
+
     body = fake_send.calls[0]["body"]
     assert "We don't have a technician free that day." in body
-    assert "We don't have a technician free that day." in fake_send.calls[0]["html_body"]
+    assert (
+        str(escape("We don't have a technician free that day.")) in fake_send.calls[0]["html_body"]
+    )
 
 
 def test_booking_request_rejected_email_omits_reason_when_blank(app, fake_send, booking_request):

@@ -102,7 +102,9 @@ def test_support_admin_cannot_request_an_upload(support_client, garage):
 
 
 def test_finalize_persists_png(platform_client, garage, session):
-    _, resp = _upload_and_finalize(platform_client, garage, content_type="image/png", data=PNG_BYTES)
+    _, resp = _upload_and_finalize(
+        platform_client, garage, content_type="image/png", data=PNG_BYTES
+    )
 
     assert resp.status_code == 200
     assert resp.json["logo"]["content_type"] == "image/png"
@@ -161,9 +163,7 @@ def test_finalize_before_upload_is_409(platform_client, garage):
     assert resp.status_code == 409
 
 
-def test_finalize_rejects_a_key_from_another_business(
-    platform_client, garage, second_garage
-):
+def test_finalize_rejects_a_key_from_another_business(platform_client, garage, second_garage):
     ticket = platform_client.post(
         f"/api/platform-admin/tenants/{second_garage.id}/logo",
         json={"content_type": "image/png"},

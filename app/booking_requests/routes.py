@@ -340,6 +340,9 @@ class BookingRequestReject(MethodView):
             BOOKING_REQUEST_REJECTED, garage=booking_request.garage, booking_request=booking_request
         )
 
-        booking_request._notification_result = _reject_notification_result(booking_request)
+        # attach_review_context resets _notification_result to None on every
+        # call (see service.py) - set the real value *after* it, or this
+        # call's own reset would immediately overwrite it.
         attach_review_context([booking_request])
+        booking_request._notification_result = _reject_notification_result(booking_request)
         return booking_request
