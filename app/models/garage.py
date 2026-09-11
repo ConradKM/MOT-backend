@@ -41,7 +41,16 @@ if TYPE_CHECKING:
 GARAGE_STATUS_ACTIVE = "ACTIVE"
 GARAGE_STATUS_TRIAL = "TRIAL"
 GARAGE_STATUS_SUSPENDED = "SUSPENDED"
-GARAGE_STATUSES = (GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, GARAGE_STATUS_SUSPENDED)
+# Reversible, like SUSPENDED, but meant to be long-lived rather than chased -
+# where a churned business goes. Also blocks staff login (see
+# app/auth/routes.py, the JWT blocklist loader in app/__init__.py).
+GARAGE_STATUS_ARCHIVED = "ARCHIVED"
+GARAGE_STATUSES = (
+    GARAGE_STATUS_ACTIVE,
+    GARAGE_STATUS_TRIAL,
+    GARAGE_STATUS_SUSPENDED,
+    GARAGE_STATUS_ARCHIVED,
+)
 
 
 class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
@@ -106,6 +115,10 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     # Why the tenant was suspended - shown to the admin who reactivates it,
     # never to the tenant.
     suspension_reason: Mapped[str | None] = mapped_column(Text)
+    # Why the tenant was archived - separate from suspension_reason so a
+    # tenant suspended and later archived doesn't lose either reason, and
+    # unarchiving doesn't have to guess which one to clear.
+    archive_reason: Mapped[str | None] = mapped_column(Text)
     # Only meaningful while status == TRIAL. Nothing enforces it yet; the
     # column is what a future billing job would read.
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

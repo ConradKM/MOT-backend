@@ -66,6 +66,7 @@ from app.platform_admin.schemas import (
     LogoResponseSchema,
     LogoUploadRequestSchema,
     LogoUploadTicketSchema,
+    MessageSchema,
     OnboardingProgressSchema,
     OwnerInviteResultSchema,
     PeriodQuerySchema,
@@ -73,7 +74,9 @@ from app.platform_admin.schemas import (
     ServiceInputSchema,
     ServiceSchema,
     ServiceUpdateSchema,
+    TenantArchiveSchema,
     TenantConfigurationSchema,
+    TenantDeleteSchema,
     TenantDetailSchema,
     TenantListQuerySchema,
     TenantListSchema,
@@ -83,6 +86,7 @@ from app.platform_admin.schemas import (
     TenantReactivateSchema,
     TenantStatsSchema,
     TenantSuspendSchema,
+    TenantUnarchiveSchema,
     TenantUpdateSchema,
 )
 from app.platform_admin.security import (
@@ -93,11 +97,14 @@ from app.platform_admin.security import (
 from app.platform_admin.stats import tenant_stats
 from app.platform_admin.tenants import (
     TenantError,
+    archive_tenant,
+    delete_tenant,
     get_tenant,
     list_tenants,
     reactivate_tenant,
     suspend_tenant,
     tenant_detail,
+    unarchive_tenant,
     update_tenant,
 )
 
@@ -208,6 +215,26 @@ class TenantResource(MethodView):
             abort(422, message=str(exc))
         return tenant_detail(garage)
 
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(TenantDeleteSchema)
+    @platform_tenants_blp.response(200, MessageSchema)
+    def delete(self, data, garage_id):
+        """Permanently delete a business and everything it owns.
+
+        Irreversible - there is no undo and no trash. Only reachable once the
+        business is already SUSPENDED or ARCHIVED, and only with `confirm`
+        matching its exact current name.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            delete_tenant(
+                admin=get_current_platform_admin(), garage=garage, confirm=data["confirm"]
+            )
+        except TenantError as exc:
+            abort(422, message=str(exc))
+        return {"message": "Business permanently deleted."}
+
 
 @platform_tenants_blp.route("/tenants/<uuid:garage_id>/suspend")
 class TenantSuspend(MethodView):
@@ -239,6 +266,45 @@ class TenantReactivate(MethodView):
         garage = _require_tenant(garage_id)
         try:
             reactivate_tenant(
+                admin=get_current_platform_admin(),
+                garage=garage,
+                status=data.get("status") or "ACTIVE",
+            )
+        except TenantError as exc:
+            abort(422, message=str(exc))
+        return tenant_detail(garage)
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/archive")
+class TenantArchive(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(TenantArchiveSchema)
+    @platform_tenants_blp.response(200, TenantDetailSchema)
+    def post(self, data, garage_id):
+        """Archive a business: out of active use, staff lose access, nothing
+        is deleted. Reversible with unarchive. A reason is required and is
+        recorded in the audit trail.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            archive_tenant(admin=get_current_platform_admin(), garage=garage, reason=data["reason"])
+        except TenantError as exc:
+            abort(422, message=str(exc))
+        return tenant_detail(garage)
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/unarchive")
+class TenantUnarchive(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(TenantUnarchiveSchema)
+    @platform_tenants_blp.response(200, TenantDetailSchema)
+    def post(self, data, garage_id):
+        """Lift an archive, back to ACTIVE (or TRIAL)."""
+        garage = _require_tenant(garage_id)
+        try:
+            unarchive_tenant(
                 admin=get_current_platform_admin(),
                 garage=garage,
                 status=data.get("status") or "ACTIVE",

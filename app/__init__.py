@@ -97,7 +97,7 @@ def _token_revoked(_jwt_header, jwt_payload) -> bool:
     from sqlalchemy.orm import joinedload
 
     from .models.employee import Employee
-    from .models.garage import GARAGE_STATUS_SUSPENDED
+    from .models.garage import GARAGE_STATUS_ARCHIVED, GARAGE_STATUS_SUSPENDED
 
     identity = jwt_payload.get("sub")
     try:
@@ -126,7 +126,10 @@ def _token_revoked(_jwt_header, jwt_payload) -> bool:
 
         return impersonation_token_revoked(jwt_payload)
 
-    return employee.garage is not None and employee.garage.status == GARAGE_STATUS_SUSPENDED
+    return employee.garage is not None and employee.garage.status in (
+        GARAGE_STATUS_SUSPENDED,
+        GARAGE_STATUS_ARCHIVED,
+    )
 
 
 def create_app(config_class=Config):

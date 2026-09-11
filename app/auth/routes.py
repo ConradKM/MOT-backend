@@ -22,7 +22,7 @@ from app.garages.onboarding import (
     onboard_garage,
 )
 from app.models.employee import Employee
-from app.models.garage import GARAGE_STATUS_SUSPENDED
+from app.models.garage import GARAGE_STATUS_ARCHIVED, GARAGE_STATUS_SUSPENDED
 from app.platform_admin.impersonation import ImpersonationError, exchange_handoff_code
 
 from .reset import (
@@ -117,12 +117,15 @@ class Login(MethodView):
         ):
             abort(401, message="Invalid email or password.")
 
-        # A tenant suspended by Platform Admin keeps all of its data, but its
-        # staff cannot get in. Checked only *after* the credentials pass, so
-        # this can't be used to discover which businesses are suspended. Live
-        # tokens are cut off separately, by the JWT blocklist loader in
-        # app/__init__.py.
-        if employee.garage is not None and employee.garage.status == GARAGE_STATUS_SUSPENDED:
+        # A tenant suspended or archived by Platform Admin keeps all of its
+        # data, but its staff cannot get in. Checked only *after* the
+        # credentials pass, so this can't be used to discover which
+        # businesses are suspended/archived. Live tokens are cut off
+        # separately, by the JWT blocklist loader in app/__init__.py.
+        if employee.garage is not None and employee.garage.status in (
+            GARAGE_STATUS_SUSPENDED,
+            GARAGE_STATUS_ARCHIVED,
+        ):
             abort(
                 403,
                 message=(

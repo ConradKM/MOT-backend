@@ -54,7 +54,9 @@ STATUS_SKIPPED = "SKIPPED"
 class Reminder(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     __tablename__ = "reminders"
 
-    garage_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("garages.id"), nullable=False)
+    garage_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("garages.id", ondelete="CASCADE"), nullable=False
+    )
     customer_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("customers.id"), nullable=False)
     vehicle_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("vehicles.id"), nullable=False)
     appointment_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("appointments.id"))
