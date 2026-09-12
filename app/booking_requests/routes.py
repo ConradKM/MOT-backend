@@ -5,6 +5,7 @@ from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 
 from app.appointments.checklists.service import snapshot_checklist_for_appointment
+from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
 from app.communications.events import (
     BOOKING_REQUEST_APPROVED,
@@ -18,11 +19,13 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.communications.communication_log import CHANNEL_EMAIL, CommunicationLog
 from app.models.employee import Employee
+from app.payments.service import expire_stale_payment_holds, refund_deposit
 from app.public_booking.availability import slot_capacity_usage
 
 from .schemas import (
     BookingRequestApproveSchema,
     BookingRequestQueryArgsSchema,
+    BookingRequestRefundSchema,
     BookingRequestRejectSchema,
     BookingRequestSchema,
 )
@@ -170,6 +173,7 @@ class BookingRequestList(MethodView):
         # actionable - sweep before every read rather than relying on staff
         # to notice and reject it manually (see service.py).
         expire_stale_booking_requests(garage_id=garage_id)
+        expire_stale_payment_holds(garage_id=garage_id)
 
         query = BookingRequest.query.filter_by(garage_id=garage_id)
         if args.get("status") is not None:
@@ -186,6 +190,7 @@ class BookingRequestResource(MethodView):
     @booking_requests_blp.response(200, BookingRequestSchema)
     def get(self, request_id):
         expire_stale_booking_requests(garage_id=get_current_employee().garage_id)
+        expire_stale_payment_holds(garage_id=get_current_employee().garage_id)
         booking_request = _get_owned_request(request_id)
         attach_review_context([booking_request])
         return booking_request
@@ -332,6 +337,12 @@ class BookingRequestReject(MethodView):
 
         db.session.commit()
 
+        # If a deposit was actually paid, refund it in full now that the
+        # business has declined the booking - the customer shouldn't have to
+        # ask (see the deposit spec's refund policy: full refund on
+        # rejection). A no-op when there's no charged payment to refund.
+        refund_deposit(booking_request, reason="booking_rejected")
+
         # Never rolled back on a failed send - app/email/service.py's own
         # _send never raises (a failure becomes a FAILED CommunicationLog
         # row), so this always runs after the REJECTED status is already
@@ -345,4 +356,30 @@ class BookingRequestReject(MethodView):
         # call's own reset would immediately overwrite it.
         attach_review_context([booking_request])
         booking_request._notification_result = _reject_notification_result(booking_request)
+        return booking_request
+
+
+@booking_requests_blp.route("/<uuid:request_id>/refund")
+class BookingRequestRefund(MethodView):
+    """Manual refund trigger - infrastructure for the cancellation case the
+    deposit spec deliberately leaves without an automatic policy (unlike
+    rejection, which always refunds in full - see BookingRequestReject
+    above). A staff member decides per request whether a cancelled, paid
+    booking gets refunded; this just makes that decision executable rather
+    than "email the customer and refund by hand outside CoMaz OS"."""
+
+    @jwt_required()
+    @owner_required
+    @booking_requests_blp.arguments(BookingRequestRefundSchema)
+    @booking_requests_blp.response(200, BookingRequestSchema)
+    def post(self, data, request_id):
+        booking_request = _get_owned_request(request_id)
+
+        payment = booking_request.active_payment
+        if payment is None or payment.status != "SUCCEEDED":
+            abort(409, message="This booking has no successful payment to refund.")
+
+        refund_deposit(booking_request, reason=data.get("reason") or "manual_staff_refund")
+
+        attach_review_context([booking_request])
         return booking_request

@@ -7,12 +7,25 @@ from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
+from app.payments.money import DepositConfigError, validate_deposit_config
 
 from .schemas import (
     AppointmentTypeQueryArgsSchema,
     AppointmentTypeSchema,
     AppointmentTypeUpdateSchema,
 )
+
+
+def _validate_deposit_or_abort(*, deposit_required, deposit_type, deposit_value, base_price):
+    try:
+        validate_deposit_config(
+            deposit_required=deposit_required,
+            deposit_type=deposit_type,
+            deposit_value=deposit_value,
+            base_price=base_price,
+        )
+    except DepositConfigError as exc:
+        abort(422, message=str(exc), errors={"json": {"deposit_value": [str(exc)]}})
 
 appointment_types_blp = Blueprint(
     "appointment-types",
@@ -58,6 +71,19 @@ class AppointmentTypeList(MethodView):
     def post(self, data):
         garage_id = get_current_employee().garage_id
 
+        deposit_required = data.get("deposit_required", False)
+        # Off means off: never persist a stray type/value alongside a
+        # disabled deposit, regardless of what the client sent.
+        deposit_type = data.get("deposit_type") if deposit_required else None
+        deposit_value = data.get("deposit_value") if deposit_required else None
+
+        _validate_deposit_or_abort(
+            deposit_required=deposit_required,
+            deposit_type=deposit_type,
+            deposit_value=deposit_value,
+            base_price=data.get("base_price"),
+        )
+
         appointment_type = GarageAppointmentType(
             garage_id=garage_id,
             name=data["name"],
@@ -65,6 +91,10 @@ class AppointmentTypeList(MethodView):
             base_price=data.get("base_price"),
             default_duration_minutes=data.get("default_duration_minutes"),
             status=data.get("status") or "ACTIVE",
+            deposit_required=deposit_required,
+            deposit_type=deposit_type,
+            deposit_value=deposit_value,
+            deposit_currency=data.get("deposit_currency") or "GBP",
         )
 
         db.session.add(appointment_type)
@@ -90,8 +120,33 @@ class AppointmentTypeResource(MethodView):
         garage_id = get_current_employee().garage_id
         appointment_type = get_owned_appointment_type(appointment_type_id, garage_id)
 
+        # Merge onto the row's *current* values so a partial PATCH (e.g. just
+        # {"deposit_required": true}) is validated against what the type
+        # already has, not against an incomplete in-flight body.
+        deposit_required = data.get("deposit_required", appointment_type.deposit_required)
+        deposit_type = (
+            data.get("deposit_type", appointment_type.deposit_type) if deposit_required else None
+        )
+        deposit_value = (
+            data.get("deposit_value", appointment_type.deposit_value) if deposit_required else None
+        )
+        base_price = data.get("base_price", appointment_type.base_price)
+
+        _validate_deposit_or_abort(
+            deposit_required=deposit_required,
+            deposit_type=deposit_type,
+            deposit_value=deposit_value,
+            base_price=base_price,
+        )
+
         for field, value in data.items():
+            if field in ("deposit_required", "deposit_type", "deposit_value"):
+                continue
             setattr(appointment_type, field, value)
+
+        appointment_type.deposit_required = deposit_required
+        appointment_type.deposit_type = deposit_type
+        appointment_type.deposit_value = deposit_value
 
         db.session.commit()
 
