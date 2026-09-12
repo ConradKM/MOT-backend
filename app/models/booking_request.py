@@ -26,17 +26,36 @@ if TYPE_CHECKING:
     from app.models.customer import Customer
     from app.models.employee import Employee
     from app.models.garage import Garage
+    from app.models.payments.payment import BookingPayment
     from app.models.vehicle import Vehicle
 
+# AWAITING_PAYMENT: the appointment type requires a deposit and the customer
+# hasn't paid it yet - a short-lived hold (see app/payments/service.py),
+# reserving capacity exactly like PENDING (see
+# app/public_booking/availability.py) but not yet visible to staff for
+# review. It becomes PENDING automatically once the provider webhook
+# confirms the deposit succeeded, or EXPIRED if the hold times out
+# unpaid (app/payments/service.py::expire_stale_payment_holds).
 # PENDING: awaiting staff review, and still reserving capacity for its
 # preferred slot (see app/public_booking/availability.py). APPROVED: staff
 # accepted it and the linked customer/vehicle/appointment rows were created.
-# REJECTED: staff declined it. EXPIRED: nobody reviewed it before its
-# preferred date/time passed - set automatically (see
-# app/booking_requests/service.py::expire_stale_booking_requests), never by
-# staff action. Every terminal status (APPROVED/REJECTED/EXPIRED) releases
-# the capacity the request was holding, simply by no longer being PENDING.
-BOOKING_REQUEST_STATUSES = ("PENDING", "APPROVED", "REJECTED", "EXPIRED")
+# REJECTED: staff declined it - if a deposit was paid, it is refunded in
+# full (see app/booking_requests/routes.py). EXPIRED: nobody reviewed it
+# before its preferred date/time passed, or its payment hold timed out -
+# set automatically, never by staff action. CANCELLED: withdrawn (customer
+# or staff) after being PENDING/APPROVED; reserved for the refund
+# infrastructure in app/payments/service.py - no automatic transition into
+# it exists yet. Every terminal status (everything except PENDING/
+# AWAITING_PAYMENT) releases the capacity the request was holding, simply by
+# no longer being counted in availability.py.
+BOOKING_REQUEST_STATUSES = (
+    "AWAITING_PAYMENT",
+    "PENDING",
+    "APPROVED",
+    "REJECTED",
+    "EXPIRED",
+    "CANCELLED",
+)
 
 
 class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
@@ -132,9 +151,31 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
         Uuid, ForeignKey("appointments.id", ondelete="SET NULL")
     )
 
+    # Set only while status == AWAITING_PAYMENT: when the payment hold
+    # expires (see app/payments/service.py::expire_stale_payment_holds).
+    # Null the rest of this row's life - a request that never required a
+    # deposit, or one whose deposit has already resolved, has nothing to
+    # expire.
+    payment_hold_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     garage: Mapped["Garage"] = relationship("Garage")
     appointment_type: Mapped["GarageAppointmentType | None"] = relationship("GarageAppointmentType")
     reviewed_by: Mapped["Employee | None"] = relationship("Employee")
     customer: Mapped["Customer | None"] = relationship("Customer")
     vehicle: Mapped["Vehicle | None"] = relationship("Vehicle")
     appointment: Mapped["Appointment | None"] = relationship("Appointment")
+    payments: Mapped[list["BookingPayment"]] = relationship(
+        "BookingPayment", back_populates="booking_request", order_by="BookingPayment.created_at"
+    )
+
+    @property
+    def active_payment(self) -> "BookingPayment | None":
+        """The most recent payment attempt that isn't a dead end (CANCELLED/
+        FAILED) - what the review screen and the customer's own status poll
+        should show. Falls back to the most recent attempt of any kind if
+        every attempt failed/was cancelled, so a failure is still visible
+        rather than silently showing no payment at all."""
+        if not self.payments:
+            return None
+        live = [p for p in self.payments if p.status not in ("CANCELLED", "FAILED")]
+        return live[-1] if live else self.payments[-1]

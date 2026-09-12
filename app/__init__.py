@@ -205,6 +205,7 @@ def create_app(config_class=Config):
     from .health.routes import health_blp
     from .mot_records.routes import mot_records_blp
     from .mot_reminders.routes import mot_reminders_blp
+    from .payments.webhooks import payment_webhooks_blp
     from .platform_admin.routes import PLATFORM_ADMIN_BLUEPRINTS
     from .public_booking.routes import public_booking_blp
     from .roles.routes import roles_blp
@@ -213,6 +214,7 @@ def create_app(config_class=Config):
     api.register_blueprint(health_blp)
     api.register_blueprint(twilio_voice_blp)
     api.register_blueprint(twilio_whatsapp_blp)
+    api.register_blueprint(payment_webhooks_blp)
     api.register_blueprint(auth_blp)
     api.register_blueprint(customer_auth_blp)
     api.register_blueprint(customer_portal_blp)
@@ -280,6 +282,8 @@ def create_app(config_class=Config):
         message_template,
     )
     from .models.conversation import callback_request, conversation_session  # noqa: F401
+    from .models.payments import audit_log as payment_audit_log  # noqa: F401
+    from .models.payments import payment, webhook_event  # noqa: F401
     from .models.platform import (  # noqa: F401
         admin,
         audit_log,

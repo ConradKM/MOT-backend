@@ -278,6 +278,31 @@ class Config:
     # transcription or an unknown acronym doesn't end the conversation.
     CONVERSATION_MAX_UNRESOLVED_TURNS = int(os.getenv("CONVERSATION_MAX_UNRESOLVED_TURNS", "3"))
 
+    # --- Payments / booking deposits (see app/payments) -------------------
+    # Which provider adapter backs app/payments/providers/get_provider(). Only
+    # "stripe" exists today; the abstraction (app/payments/providers/base.py)
+    # is what lets a second one be added without touching booking/webhook
+    # routes. Deposits are configured per Appointment Type (deposit_required),
+    # independent of whether a provider is actually wired up - see
+    # is_payments_configured() below for the crash-free "not yet" state.
+    PAYMENTS_PROVIDER = os.getenv("PAYMENTS_PROVIDER", "stripe")
+    # Never hard-code these; never commit real values. Test-mode (sk_test_.../
+    # pk_test_.../whsec_...) keys are fine to run against in a dev deployment -
+    # they are not secrets in the production sense, but still shouldn't be
+    # committed. See docs/PAYMENTS_SETUP.md for where real ones come from.
+    STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    # How long a deposit payment hold reserves the slot (AWAITING_PAYMENT
+    # booking-request status - app/payments/service.py) before it's swept back
+    # to EXPIRED and the provider intent is cancelled. Long enough for a
+    # customer to complete a card challenge, short enough that an abandoned
+    # payment doesn't block the slot for other customers.
+    PAYMENT_HOLD_MINUTES = int(os.getenv("PAYMENT_HOLD_MINUTES", "15"))
+    # Deposits are GBP-only for now (see app/payments/money.py); kept as a
+    # constant, not an env var, since changing it needs code changes anyway.
+    DEPOSIT_CURRENCY = "GBP"
+
 
 class TestConfig(Config):
     """Config for the automated test suite. Always targets a dedicated
@@ -328,3 +353,10 @@ class TestConfig(Config):
     # repository's secret scanner sees a 32-byte string that says what it is
     # instead of a high-entropy literal indistinguishable from a real key.
     COMMS_SECRET_KEY = base64.urlsafe_b64encode(b"comaz-test-key-not-a-real-secret").decode()
+
+    # The test suite runs the full deposit flow (intent -> webhook -> refund)
+    # against an in-process fake provider (app/payments/providers/fake.py),
+    # never the real Stripe SDK/network - no test-mode account needed to run
+    # CI. A short hold so expiry tests don't need to fake-sleep long.
+    PAYMENTS_PROVIDER = "fake"
+    PAYMENT_HOLD_MINUTES = 15

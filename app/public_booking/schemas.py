@@ -45,6 +45,14 @@ class PublicAppointmentTypeSchema(Schema):
     base_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     default_duration_minutes = fields.Int(dump_only=True, allow_none=True)
     included_items = fields.Method("_get_included_items", dump_only=True)
+    # Enough for the wizard to decide whether to show the Deposit step and
+    # what to display there before it calls the deposit-intent endpoint -
+    # the *authoritative* amount is still always recalculated server-side at
+    # that point (see app/payments/service.py::create_deposit_hold).
+    deposit_required = fields.Bool(dump_only=True)
+    deposit_type = fields.Str(dump_only=True, allow_none=True)
+    deposit_value = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    deposit_currency = fields.Str(dump_only=True)
 
     def _get_included_items(self, appointment_type):
         template = appointment_type.checklist_template
@@ -127,6 +135,43 @@ class BookingRequestCreatedSchema(Schema):
     # Short customer-facing code (app/booking_requests/reference.py) - shown
     # on the confirmation screen and usable to log in without a password.
     booking_reference = fields.Str(dump_only=True, allow_none=True)
+
+
+class DepositIntentCreatedSchema(Schema):
+    """What the Deposit step needs: enough to render the payment summary
+    plus the provider client secret its Payment Element confirms directly
+    with the provider - our backend never sees card details either way."""
+
+    booking_request_id = fields.UUID(dump_only=True)
+    booking_reference = fields.Str(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)  # BookingRequest status - AWAITING_PAYMENT/PENDING/EXPIRED
+    payment_status = fields.Str(dump_only=True, allow_none=True)  # BookingPayment status
+    currency = fields.Str(dump_only=True, allow_none=True)
+    service_total = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    # Only present on creation, never on the status-poll response - a fresh
+    # client_secret is only ever handed out once per intent.
+    client_secret = fields.Str(dump_only=True, allow_none=True)
+    publishable_key = fields.Str(dump_only=True, allow_none=True)
+    provider = fields.Str(dump_only=True, allow_none=True)
+    hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
+class DepositStatusSchema(Schema):
+    """The status-poll response - the same shape as DepositIntentCreatedSchema
+    minus the one-time client_secret/publishable_key/provider fields (a
+    fresh client_secret is only ever handed out once, at creation)."""
+
+    booking_request_id = fields.UUID(dump_only=True)
+    booking_reference = fields.Str(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)
+    payment_status = fields.Str(dump_only=True, allow_none=True)
+    currency = fields.Str(dump_only=True, allow_none=True)
+    service_total = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
 
 
 # --- Availability calendar -------------------------------------------------

@@ -15,6 +15,25 @@ class _RequestAppointmentTypeSchema(Schema):
     status = fields.Str(dump_only=True)
 
 
+class BookingPaymentSummarySchema(Schema):
+    """Deposit/payment info for the staff review screen - enough to know
+    whether a deposit has actually been paid before approving, and its
+    refund state after a rejection. provider_payment_id is included for
+    staff/admin troubleshooting (see app/platform_admin) but deliberately
+    not surfaced anywhere in the customer-facing UI."""
+
+    id = fields.UUID(dump_only=True)
+    status = fields.Str(dump_only=True)
+    currency = fields.Str(dump_only=True)
+    amount = fields.Decimal(dump_only=True, as_string=True, attribute="deposit_amount")
+    provider = fields.Str(dump_only=True)
+    provider_payment_id = fields.Str(dump_only=True, allow_none=True)
+    refunded_amount_minor = fields.Int(dump_only=True, allow_none=True)
+    refunded_at = fields.DateTime(dump_only=True, allow_none=True)
+    paid_at = fields.DateTime(dump_only=True, allow_none=True)
+    failure_reason = fields.Str(dump_only=True, allow_none=True)
+
+
 class SlotCheckSchema(Schema):
     """Live re-check of the request's preferred slot, computed at read time -
     the "current availability/conflict status" shown before a decision."""
@@ -99,6 +118,11 @@ class BookingRequestSchema(Schema):
     vehicle_id = fields.UUID(dump_only=True, allow_none=True)
     appointment_id = fields.UUID(dump_only=True, allow_none=True)
 
+    # Null for a request whose type never required a deposit.
+    payment = fields.Nested(
+        BookingPaymentSummarySchema, dump_only=True, allow_none=True, attribute="active_payment"
+    )
+
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
@@ -133,3 +157,11 @@ class BookingRequestRejectSchema(Schema):
 
 class BookingRequestQueryArgsSchema(Schema):
     status = fields.Str(load_default=None, validate=validate.OneOf(BOOKING_REQUEST_STATUSES))
+
+
+class BookingRequestRefundSchema(Schema):
+    #: Free-text, stored on the payment audit log entry - e.g. "customer
+    #: cancelled", "goodwill". No commercial refund policy is encoded here;
+    #: this is a manual decision a staff member makes per request (see the
+    #: deposit spec: cancellation refunds are infrastructure, not policy).
+    reason = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=500))

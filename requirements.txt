@@ -20,5 +20,7 @@ twilio>=9,<10
 # Fernet, for encrypting Twilio subaccount Auth Tokens at rest
 # (app/communications/secrets.py).
 cryptography>=43,<47
+# Payments provider adapter (app/payments/providers/stripe_provider.py).
+stripe>=11,<16
 pytest>=8.3,<9
 pytest-cov>=6,<7
