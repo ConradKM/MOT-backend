@@ -12,9 +12,8 @@ payment_hold_expires_at, meaningless for anything that already exists.
 Nothing here touches existing bookings/appointments/payments (there are
 none yet).
 """
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = '7e66710b3cf8'
