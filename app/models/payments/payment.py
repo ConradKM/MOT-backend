@@ -86,7 +86,9 @@ class BookingPayment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # returning (see app/payments/service.py::create_deposit_hold).
     provider_payment_id: Mapped[str | None] = mapped_column(String(255), index=True)
 
-    payment_type: Mapped[str] = mapped_column(String(20), nullable=False, default=PAYMENT_TYPE_DEPOSIT)
+    payment_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=PAYMENT_TYPE_DEPOSIT
+    )
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="GBP")
     # Minor units (pence for GBP) - never a float. The persisted, calculated-
     # once amount; see class docstring.

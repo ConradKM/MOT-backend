@@ -22,7 +22,9 @@ def _future_weekday(days_ahead=7):
 FUTURE_DATE = _future_weekday().isoformat()
 
 
-def _deposit_type(session, garage, *, deposit_type="FIXED", deposit_value="20.00", base_price="100.00"):
+def _deposit_type(
+    session, garage, *, deposit_type="FIXED", deposit_value="20.00", base_price="100.00"
+):
     t = GarageAppointmentType(
         garage_id=garage.id,
         name="MOT",
@@ -116,9 +118,7 @@ def test_deposit_intent_ignores_client_supplied_amount(client, session, garage):
 def test_plain_submit_rejects_a_deposit_required_type(client, session, garage):
     appt_type = _deposit_type(session, garage)
 
-    resp = client.post(
-        f"/api/public/{garage.slug}/booking-requests", json=_payload(appt_type)
-    )
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_payload(appt_type))
     assert resp.status_code == 422
     assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 0
 

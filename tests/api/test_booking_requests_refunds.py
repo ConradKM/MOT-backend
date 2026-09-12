@@ -122,7 +122,9 @@ def test_rejecting_an_unpaid_booking_does_not_attempt_a_refund(authenticated_use
     session.add(booking_request)
     session.commit()
 
-    resp = authenticated_user.client.post(f"/api/booking-requests/{booking_request.id}/reject", json={})
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/reject", json={}
+    )
     assert resp.status_code == 200
     assert BookingPayment.query.count() == 0
 
@@ -160,7 +162,9 @@ def test_manual_refund_endpoint_rejects_a_booking_with_no_successful_payment(
     session.add(booking_request)
     session.commit()
 
-    resp = authenticated_user.client.post(f"/api/booking-requests/{booking_request.id}/refund", json={})
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/refund", json={}
+    )
     assert resp.status_code == 409
 
 

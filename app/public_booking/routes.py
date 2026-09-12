@@ -182,7 +182,9 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status):
         # Snapshot what the customer actually saw/chose, so staff review
         # (and history, if the type is edited or removed later) reflects
         # the real request rather than the type's current configuration.
-        requested_duration_minutes=(appt_type.default_duration_minutes if appt_type is not None else None),
+        requested_duration_minutes=(
+            appt_type.default_duration_minutes if appt_type is not None else None
+        ),
         requested_price=appt_type.base_price if appt_type is not None else None,
         preferred_date=data["preferred_date"],
         preferred_time=preferred_time,
@@ -331,10 +333,16 @@ class DepositStatus(MethodView):
         db.session.refresh(booking_request)
 
         payment = booking_request.active_payment
-        base_price = booking_request.appointment_type.base_price if booking_request.appointment_type else None
+        base_price = (
+            booking_request.appointment_type.base_price
+            if booking_request.appointment_type
+            else None
+        )
         deposit_amount = minor_to_decimal(payment.amount_minor) if payment else None
         remaining_balance = (
-            (base_price - deposit_amount) if base_price is not None and deposit_amount is not None else None
+            (base_price - deposit_amount)
+            if base_price is not None and deposit_amount is not None
+            else None
         )
 
         return {

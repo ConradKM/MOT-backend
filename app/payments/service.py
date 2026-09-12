@@ -341,7 +341,9 @@ def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
         # The booking only becomes visible/actionable to staff now - this is
         # the deposit-flow's equivalent of the plain submit path's
         # BOOKING_REQUEST_CREATED emit (see app/public_booking/routes.py).
-        emit_event(BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request)
+        emit_event(
+            BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request
+        )
 
     record_payment_event(
         garage_id=payment.garage_id,

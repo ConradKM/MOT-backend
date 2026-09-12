@@ -37,7 +37,9 @@ def validate_deposit_config(
         return
 
     if deposit_type not in ("FIXED", "PERCENTAGE"):
-        raise DepositConfigError("deposit_type must be FIXED or PERCENTAGE when a deposit is required.")
+        raise DepositConfigError(
+            "deposit_type must be FIXED or PERCENTAGE when a deposit is required."
+        )
 
     if deposit_value is None:
         raise DepositConfigError("deposit_value is required when a deposit is required.")

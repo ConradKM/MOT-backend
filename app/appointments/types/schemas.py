@@ -17,7 +17,9 @@ class AppointmentTypeSchema(Schema):
     # cross-field rules - enforced in the route, not here, so a PATCH's
     # partial body can be validated against the row's *existing* values too).
     deposit_required = fields.Bool(load_default=False)
-    deposit_type = fields.Str(allow_none=True, load_default=None, validate=validate.OneOf(DEPOSIT_TYPES))
+    deposit_type = fields.Str(
+        allow_none=True, load_default=None, validate=validate.OneOf(DEPOSIT_TYPES)
+    )
     deposit_value = fields.Decimal(allow_none=True, load_default=None, as_string=True, places=2)
     deposit_currency = fields.Str(load_default="GBP", validate=validate.Equal("GBP"))
 

@@ -27,6 +27,7 @@ def _validate_deposit_or_abort(*, deposit_required, deposit_type, deposit_value,
     except DepositConfigError as exc:
         abort(422, message=str(exc), errors={"json": {"deposit_value": [str(exc)]}})
 
+
 appointment_types_blp = Blueprint(
     "appointment-types",
     "appointment-types",
