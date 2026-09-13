@@ -35,25 +35,16 @@ from app.payments.audit import record_payment_event
 from app.payments.config import is_payments_configured
 from app.payments.money import calculate_deposit_minor, minor_to_decimal
 from app.payments.providers import get_provider
-from app.payments.providers.base import PaymentProviderError, ProviderWebhookEvent
-
-# Provider-native intent/refund status strings -> our domain PAYMENT_STATUSES.
-# Shared across providers - Stripe's PaymentIntent status vocabulary is what
-# the fake provider deliberately mirrors (see providers/fake.py) so this one
-# map covers both.
-_PROVIDER_STATUS_MAP = {
-    "requires_payment_method": "REQUIRES_PAYMENT",
-    "requires_confirmation": "REQUIRES_PAYMENT",
-    "requires_action": "REQUIRES_PAYMENT",
-    "processing": "PENDING",
-    "requires_capture": "PENDING",
-    "succeeded": "SUCCEEDED",
-    "canceled": "CANCELLED",
-}
-
-
-def map_provider_status(provider_status: str | None) -> str:
-    return _PROVIDER_STATUS_MAP.get(provider_status or "", "PENDING")
+from app.payments.providers.base import (
+    WEBHOOK_PAYMENT_CANCELLED,
+    WEBHOOK_PAYMENT_FAILED,
+    WEBHOOK_PAYMENT_SUCCEEDED,
+    WEBHOOK_REFUND_UPDATED,
+    PaymentProviderError,
+    PaymentSessionResult,
+    ProviderWebhookEvent,
+)
+from app.payments.settings import payments_enabled_for_garage, resolve_provider_name
 
 
 class PaymentUnavailableError(RuntimeError):
@@ -73,18 +64,24 @@ def create_deposit_hold(
     garage,
     appointment_type: GarageAppointmentType,
     booking_request: BookingRequest,
-) -> tuple[BookingPayment, str | None]:
-    """Create the BookingPayment row + provider payment intent for an
+) -> tuple[BookingPayment, PaymentSessionResult]:
+    """Create the BookingPayment row + provider payment session for an
     already-built, not-yet-committed AWAITING_PAYMENT ``booking_request``.
 
-    Returns ``(payment, client_secret)``. Raises ``PaymentUnavailableError``
-    if no provider is configured, and re-raises ``PaymentProviderError`` (with
-    the payment row marked FAILED first) if the provider call itself fails -
-    callers must roll back the booking request in that case rather than leave
-    an orphaned AWAITING_PAYMENT hold with no way to ever pay it.
+    Which provider is used is entirely this garage's own choice (see
+    app/payments/settings.py::resolve_provider_name) - nothing here assumes
+    Stripe, or any other single provider.
+
+    Returns ``(payment, session)``. Raises ``PaymentUnavailableError`` if
+    payments are disabled for this garage or its provider isn't configured,
+    and re-raises ``PaymentProviderError`` (with the payment row marked
+    FAILED first) if the provider call itself fails - callers must roll back
+    the booking request in that case rather than leave an orphaned
+    AWAITING_PAYMENT hold with no way to ever pay it.
     """
-    if not is_payments_configured():
-        raise PaymentUnavailableError("Payments are not configured for this deployment yet.")
+    provider_name = resolve_provider_name(garage)
+    if not payments_enabled_for_garage(garage) or not is_payments_configured(provider_name):
+        raise PaymentUnavailableError("Payments are not configured for this business yet.")
 
     # Guaranteed by validate_deposit_config at configuration time (see
     # app/appointments/types/routes.py) - deposit_required=True never
@@ -104,7 +101,7 @@ def create_deposit_hold(
         id=payment_id,
         garage_id=garage.id,
         booking_request_id=booking_request.id,
-        provider=current_app.config.get("PAYMENTS_PROVIDER", "stripe"),
+        provider=provider_name,
         payment_type=PAYMENT_TYPE_DEPOSIT,
         currency=appointment_type.deposit_currency or "GBP",
         amount_minor=amount_minor,
@@ -113,14 +110,14 @@ def create_deposit_hold(
     db.session.add(payment)
     db.session.flush()
 
-    provider = get_provider()
+    provider = get_provider(provider_name)
     try:
-        intent = provider.create_payment_intent(
+        session = provider.create_payment(
             amount_minor=amount_minor,
             currency=payment.currency,
             # Stable per payment row - a network retry of this same call
-            # (not a new customer attempt) returns the same intent instead of
-            # creating a second one; see PaymentProvider.create_payment_intent.
+            # (not a new customer attempt) returns the same session instead
+            # of creating a second one; see PaymentProvider.create_payment.
             idempotency_key=f"deposit-{payment_id}",
             metadata={
                 "booking_request_id": str(booking_request.id),
@@ -134,19 +131,21 @@ def create_deposit_hold(
         payment.failed_at = datetime.now(UTC)
         raise
 
-    payment.provider_payment_id = intent.provider_payment_id
-    payment.status = map_provider_status(intent.status)
+    payment.provider_payment_id = session.provider_payment_id
+    # Already normalised by the adapter - never a provider-native string.
+    payment.status = session.status
 
     record_payment_event(
         garage_id=garage.id,
         booking_request_id=booking_request.id,
         payment_id=payment.id,
         action="payment.deposit.created",
-        summary=f"Deposit intent created ({payment.currency} {minor_to_decimal(amount_minor)}).",
-        details={"provider_payment_id": intent.provider_payment_id, "amount_minor": amount_minor},
+        summary=f"Deposit session created via {provider_name} "
+        f"({payment.currency} {minor_to_decimal(amount_minor)}).",
+        details={"provider_payment_id": session.provider_payment_id, "amount_minor": amount_minor},
     )
 
-    return payment, intent.client_secret
+    return payment, session
 
 
 def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> int:
@@ -165,7 +164,6 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
     if not stale:
         return 0
 
-    provider = get_provider()
     for booking_request in stale:
         booking_request.status = "EXPIRED"
         booking_request.payment_hold_expires_at = None
@@ -174,7 +172,10 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
         if payment is not None and payment.status in ("REQUIRES_PAYMENT", "PENDING"):
             if payment.provider_payment_id:
                 try:
-                    provider.cancel_payment(payment.provider_payment_id)
+                    # Whichever adapter actually created this session - a
+                    # garage's provider setting could in principle have
+                    # changed since, so this must not re-resolve it fresh.
+                    get_provider(payment.provider).cancel_payment(payment.provider_payment_id)
                 except PaymentProviderError:
                     current_app.logger.warning(
                         "Failed to cancel expired payment intent %s",
@@ -213,7 +214,9 @@ def refund_deposit(
         # attempt rather than double-refund.
         return payment
 
-    provider = get_provider()
+    # Whichever adapter actually created this payment - see the same note in
+    # expire_stale_payment_holds above.
+    provider = get_provider(payment.provider)
     payment.status = "REFUND_PENDING"
     payment.refund_requested_at = datetime.now(UTC)
     record_payment_event(
@@ -251,11 +254,12 @@ def refund_deposit(
         return payment
 
     payment.provider_refund_id = refund.provider_refund_id
-    # Some providers/methods settle a refund immediately (fake provider,
-    # many card refunds); others report it async via webhook - only mark
-    # REFUNDED here when the provider already says so, otherwise stay
-    # REFUND_PENDING until charge.refunded/refund.updated arrives.
-    if refund.status == "succeeded":
+    # Already normalised by the adapter. Some providers/methods settle a
+    # refund immediately (fake provider, many card refunds); others report
+    # it async via webhook - only mark REFUNDED here when the provider
+    # already says so, otherwise stay REFUND_PENDING until a refund webhook
+    # arrives (see _handle_refund_updated below).
+    if refund.status == "REFUNDED":
         payment.status = "REFUNDED"
         payment.refunded_amount_minor = refund.amount_minor
         payment.refunded_at = datetime.now(UTC)
@@ -274,18 +278,27 @@ def refund_deposit(
 # --- webhooks --------------------------------------------------------------
 
 
-def process_webhook(raw_payload: bytes, headers: dict) -> None:
+def process_webhook(provider_name: str, raw_payload: bytes, headers: dict) -> None:
     """Verify + apply one provider webhook delivery. Idempotent: a
     redelivered event (same provider event id) is a no-op, enforced at the
     database level (PaymentWebhookEvent.id is the provider's own event id, a
-    primary key) rather than a racy check-then-insert."""
-    provider = get_provider()
+    primary key) rather than a racy check-then-insert.
+
+    ``provider_name`` comes straight from the webhook URL
+    (``/api/webhooks/payments/<provider>`` - see app/payments/webhooks.py),
+    since a webhook delivery carries no garage/business context until *after*
+    its payload has been parsed - unlike every other call in this module,
+    which resolves the provider from a specific garage or payment row.
+    """
+    provider = get_provider(provider_name)
     event = provider.verify_webhook(raw_payload, headers)
 
     record = PaymentWebhookEvent(
         id=event.event_id,
         provider=provider.name,
-        event_type=event.event_type,
+        # The normalised kind, not the provider's raw event type/name - the
+        # raw value is still fully recoverable from `payload` for audit.
+        event_type=event.kind,
         received_at=datetime.now(UTC),
         payload=event.raw,
     )
@@ -306,16 +319,21 @@ def process_webhook(raw_payload: bytes, headers: dict) -> None:
 
 
 def _dispatch(event: ProviderWebhookEvent) -> None:
-    if event.event_type == "payment_intent.succeeded":
+    """Dispatches purely on the adapter-normalised ``kind`` - never a
+    provider-native event type/name. Every adapter maps its own vocabulary
+    to these constants in its own ``verify_webhook`` (see
+    app/payments/providers/base.py)."""
+    if event.kind == WEBHOOK_PAYMENT_SUCCEEDED:
         _handle_payment_succeeded(event)
-    elif event.event_type == "payment_intent.payment_failed":
+    elif event.kind == WEBHOOK_PAYMENT_FAILED:
         _handle_payment_failed(event)
-    elif event.event_type == "payment_intent.canceled":
+    elif event.kind == WEBHOOK_PAYMENT_CANCELLED:
         _handle_payment_cancelled(event)
-    elif event.event_type in ("charge.refunded", "refund.updated"):
+    elif event.kind == WEBHOOK_REFUND_UPDATED:
         _handle_refund_updated(event)
-    # Anything else (e.g. payment_intent.created, payment_intent.processing)
-    # is recorded in PaymentWebhookEvent for audit but needs no state change.
+    # Anything else (WEBHOOK_UNHANDLED - e.g. Stripe's payment_intent.created/
+    # processing) is recorded in PaymentWebhookEvent for audit but needs no
+    # state change.
 
 
 def _find_payment(provider_payment_id: str | None) -> BookingPayment | None:
@@ -395,12 +413,14 @@ def _handle_refund_updated(event: ProviderWebhookEvent) -> None:
     if payment is None or payment.status == "REFUNDED":
         return
 
-    if event.status in ("succeeded", "success"):
+    # event.status is already normalised by the adapter (one of
+    # PAYMENT_STATUSES) - never a provider-native refund status string.
+    if event.status == "REFUNDED":
         payment.status = "REFUNDED"
         payment.refunded_amount_minor = payment.amount_minor
         payment.refunded_at = datetime.now(UTC)
         action, summary = "payment.refund.succeeded", "Refund succeeded."
-    elif event.status == "failed":
+    elif event.status == "REFUND_FAILED":
         payment.status = "REFUND_FAILED"
         payment.refund_failed_at = datetime.now(UTC)
         action, summary = "payment.refund.failed", "Refund failed."

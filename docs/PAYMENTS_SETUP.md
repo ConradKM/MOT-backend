@@ -1,9 +1,16 @@
-# Payments setup: connecting the real Stripe account
+# Payments setup: connecting a real Stripe account
 
 The deposit infrastructure (deposit config, payment records, capacity holds,
 refunds, webhooks) is fully built and merged **dormant** - it ships disabled
 by default and cannot break the existing booking flow. This document is the
-only thing left to do: connect a real Stripe account.
+only thing left to do to accept real deposits: connect a real Stripe
+account.
+
+Stripe is the first *implemented* provider, not the only one CoMaz can ever
+support - the payment layer is provider-neutral, and each business picks its
+own provider independently (see docs/PAYMENTS_PROVIDERS.md for the
+architecture, and for what adding PayPal/Square for real involves). This
+document only covers Stripe, today's one working option.
 
 Everything runs against an in-process fake provider in dev/CI today
 (`PAYMENTS_PROVIDER=fake`), so nothing below is required to keep developing
@@ -109,7 +116,7 @@ With test keys set:
 
 ## What happens if this isn't done yet
 
-Nothing breaks. `is_payments_configured()`
+Nothing breaks. `is_payments_configured("stripe")`
 (`app/payments/config.py`) reports "not configured" whenever
 `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` are unset, and:
 
@@ -120,12 +127,30 @@ Nothing breaks. `is_payments_configured()`
   of a crash - see `app/public_booking/routes.py::DepositIntentCreate`.
 - Every other booking flow (no deposit required) is completely unaffected.
 
+## Other businesses using a different provider
+
+Every business's payment provider is chosen independently (see
+`GaragePaymentSettings` / docs/PAYMENTS_PROVIDERS.md) - configuring Stripe
+here only affects garages using the deployment's default provider (or
+explicitly set to `stripe`). A garage set to `paypal` or `square` today gets
+a clear `503` on any deposit attempt, because neither has a real
+implementation yet - see docs/PAYMENTS_PROVIDERS.md for what building one
+involves.
+
 ## Not built (deliberately out of scope)
 
+- **PayPal and Square are architecture-only skeletons.** The adapters exist
+  (`app/payments/providers/paypal.py`, `.../square.py`) so a business can
+  already be *pointed at* one, but every real operation raises a clear error
+  until someone implements the actual API calls - see
+  docs/PAYMENTS_PROVIDERS.md.
 - **Per-business Stripe Connect accounts / marketplace payouts.** This
-  integration collects deposits into one platform Stripe account. Splitting
-  funds out to individual businesses (Stripe Connect) is a materially
-  different integration and was explicitly out of scope.
+  integration collects deposits into one platform Stripe account per
+  provider. Splitting funds out to individual businesses' own merchant
+  accounts (Stripe Connect, PayPal Partner accounts, ...) is a materially
+  different integration and was explicitly out of scope -
+  `GaragePaymentSettings.merchant_account_reference` is reserved for it
+  later, but nothing reads or writes it today.
 - **Partial refunds / a cancellation refund policy.** The infrastructure
   supports it (`BookingPayment.status` includes `PARTIALLY_REFUNDED`, and a
   manual staff-triggered refund endpoint exists -
@@ -137,13 +162,17 @@ Nothing breaks. `is_payments_configured()`
 ## Where things live in the codebase
 
 - `app/payments/config.py` - the configuration gate (`is_payments_configured`)
-- `app/payments/providers/` - the provider abstraction (`base.py`) and the
-  Stripe (`stripe_provider.py`) / fake-for-tests (`fake.py`) adapters
+- `app/payments/settings.py` - which provider a specific garage uses
+  (`resolve_provider_name`) and whether payments are enabled for it at all
+- `app/payments/providers/` - the provider abstraction (`base.py`), the
+  Stripe adapter (`stripe_provider.py`), the PayPal/Square skeletons
+  (`paypal.py`, `square.py`), and the fake-for-tests adapter (`fake.py`) -
+  see docs/PAYMENTS_PROVIDERS.md for the full architecture
 - `app/payments/service.py` - deposit creation, hold expiry, refunds, webhook
-  dispatch
-- `app/payments/webhooks.py` - the Stripe webhook endpoint
+  dispatch - entirely provider-neutral
+- `app/payments/webhooks.py` - `/api/webhooks/payments/<provider>`
 - `app/models/payments/` - `BookingPayment`, `PaymentWebhookEvent`,
-  `PaymentAuditLog`
+  `PaymentAuditLog`, `GaragePaymentSettings`
 - `app/appointments/types/` - deposit configuration on Appointment Types
 - `app/public_booking/routes.py` - the public deposit-intent + status-poll
   endpoints

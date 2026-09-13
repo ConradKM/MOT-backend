@@ -62,13 +62,13 @@ def _paid_booking_request(client, session, garage, appt_type):
     payment = BookingPayment.query.filter_by(booking_request_id=booking_request.id).one()
 
     client.post(
-        "/api/webhooks/payments/stripe",
+        "/api/webhooks/payments/fake",
         data=json.dumps(
             {
                 "id": f"evt_paid_{booking_request.id}",
-                "type": "payment_intent.succeeded",
+                "type": "payment.succeeded",
                 "provider_payment_id": payment.provider_payment_id,
-                "status": "succeeded",
+                "status": "SUCCEEDED",
             }
         ),
         content_type="application/json",
