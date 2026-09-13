@@ -1,17 +1,22 @@
-"""API tests for the Stripe(-shaped) payment webhook endpoint.
+"""API tests for the provider-neutral payment webhook endpoint.
 
-POST /api/webhooks/payments/stripe
+POST /api/webhooks/payments/<provider>
 
 Runs against the fake payment provider (PAYMENTS_PROVIDER=fake in
-TestConfig, see app/payments/providers/fake.py) - "Fake-Signature: valid" is
-the fake provider's stand-in for real Stripe signature verification, so
-these tests exercise the same dispatch/idempotency code real Stripe events
-go through, without any network call or real account.
+TestConfig, see app/payments/providers/fake.py) via
+``/api/webhooks/payments/fake`` - "Fake-Signature: valid" is the fake
+provider's stand-in for real signature verification, and its own event
+vocabulary (payment.succeeded/failed/cancelled, refund.updated) is mapped to
+CoMaz's normalised ``kind``s exactly like a real adapter would map its own
+provider's names, so these tests exercise the same dispatch/idempotency/
+normalisation code any real provider's events go through, without any
+network call or real account.
 """
 
 import datetime
 import json
 
+from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.payments.payment import BookingPayment
@@ -60,9 +65,9 @@ def _start_deposit(client, garage, appt_type, **overrides):
     ).get_json()
 
 
-def _webhook(client, event, *, signature="valid"):
+def _webhook(client, event, *, provider="fake", signature="valid"):
     return client.post(
-        "/api/webhooks/payments/stripe",
+        f"/api/webhooks/payments/{provider}",
         data=json.dumps(event),
         content_type="application/json",
         headers={"Fake-Signature": signature},
@@ -72,11 +77,29 @@ def _webhook(client, event, *, signature="valid"):
 def test_invalid_signature_is_rejected(client):
     resp = _webhook(
         client,
-        {"id": "evt_1", "type": "payment_intent.succeeded", "provider_payment_id": "pi_x"},
+        {"id": "evt_1", "type": "payment.succeeded", "provider_payment_id": "pi_x"},
         signature="nope",
     )
     assert resp.status_code == 400
     assert PaymentWebhookEvent.query.count() == 0
+
+
+def test_an_unconfigured_provider_is_rejected_cleanly(client):
+    # "stripe" has no real credentials in the test suite (PAYMENTS_PROVIDER
+    # is "fake" - see TestConfig) - a delivery for it must degrade to a
+    # clear 503, never a 500, exactly like the public deposit-intent
+    # endpoint does for an unconfigured provider.
+    resp = _webhook(client, {"id": "evt_x", "type": "payment.succeeded"}, provider="stripe")
+    assert resp.status_code == 503
+    assert PaymentWebhookEvent.query.count() == 0
+
+
+def test_an_unknown_provider_name_is_rejected_cleanly(client):
+    # Same 503 as any other not-configured provider - "unknown" and "not
+    # implemented" both collapse into the same clear, crash-free signal
+    # rather than a 500.
+    resp = _webhook(client, {"id": "evt_x", "type": "payment.succeeded"}, provider="venmo")
+    assert resp.status_code == 503
 
 
 def test_payment_succeeded_flips_booking_request_to_pending(client, session, garage):
@@ -86,14 +109,15 @@ def test_payment_succeeded_flips_booking_request_to_pending(client, session, gar
         booking_reference=created["booking_reference"]
     ).one()
     payment = BookingPayment.query.filter_by(booking_request_id=booking_request.id).one()
+    assert payment.provider == "fake"
 
     resp = _webhook(
         client,
         {
             "id": "evt_success_1",
-            "type": "payment_intent.succeeded",
+            "type": "payment.succeeded",
             "provider_payment_id": payment.provider_payment_id,
-            "status": "succeeded",
+            "status": "SUCCEEDED",
         },
     )
     assert resp.status_code == 200
@@ -104,6 +128,11 @@ def test_payment_succeeded_flips_booking_request_to_pending(client, session, gar
     assert booking_request.payment_hold_expires_at is None
     assert payment.status == "SUCCEEDED"
     assert payment.paid_at is not None
+
+    # The audit ledger stores the normalised kind, not the provider's own
+    # event-type spelling - see app/payments/service.py::process_webhook.
+    stored = db.session.get(PaymentWebhookEvent, "evt_success_1")
+    assert stored.event_type == "payment.succeeded"
 
 
 def test_duplicate_webhook_event_is_a_no_op(client, session, garage):
@@ -116,9 +145,9 @@ def test_duplicate_webhook_event_is_a_no_op(client, session, garage):
 
     event = {
         "id": "evt_dup_1",
-        "type": "payment_intent.succeeded",
+        "type": "payment.succeeded",
         "provider_payment_id": payment.provider_payment_id,
-        "status": "succeeded",
+        "status": "SUCCEEDED",
     }
     first = _webhook(client, event)
     second = _webhook(client, event)
@@ -143,9 +172,9 @@ def test_payment_failed_keeps_hold_open_for_retry(client, session, garage):
         client,
         {
             "id": "evt_fail_1",
-            "type": "payment_intent.payment_failed",
+            "type": "payment.failed",
             "provider_payment_id": payment.provider_payment_id,
-            "status": "requires_payment_method",
+            "status": "REQUIRES_PAYMENT",
             "failure_message": "Your card was declined.",
         },
     )
@@ -155,20 +184,45 @@ def test_payment_failed_keeps_hold_open_for_retry(client, session, garage):
     session.refresh(payment)
     assert payment.status == "FAILED"
     assert payment.failure_reason == "Your card was declined."
-    # Still held - the customer can retry with a fresh intent before the hold
-    # itself expires.
+    # Still held - the customer can retry with a fresh session before the
+    # hold itself expires.
     assert booking_request.status == "AWAITING_PAYMENT"
 
 
-def test_webhook_for_unknown_payment_intent_is_ignored(client):
+def test_webhook_for_unknown_payment_is_ignored(client):
     resp = _webhook(
         client,
         {
             "id": "evt_unknown_1",
-            "type": "payment_intent.succeeded",
-            "provider_payment_id": "pi_does_not_exist",
-            "status": "succeeded",
+            "type": "payment.succeeded",
+            "provider_payment_id": "pay_does_not_exist",
+            "status": "SUCCEEDED",
         },
     )
     assert resp.status_code == 200
     assert PaymentWebhookEvent.query.filter_by(id="evt_unknown_1").count() == 1
+
+
+def test_unhandled_event_kind_is_recorded_but_causes_no_state_change(client, session, garage):
+    appt_type = _deposit_type(session, garage)
+    created = _start_deposit(client, garage, appt_type)
+    booking_request = BookingRequest.query.filter_by(
+        booking_reference=created["booking_reference"]
+    ).one()
+    payment = BookingPayment.query.filter_by(booking_request_id=booking_request.id).one()
+
+    resp = _webhook(
+        client,
+        {
+            "id": "evt_unhandled_1",
+            "type": "payment.something_else_entirely",
+            "provider_payment_id": payment.provider_payment_id,
+        },
+    )
+    assert resp.status_code == 200
+
+    session.refresh(booking_request)
+    session.refresh(payment)
+    assert booking_request.status == "AWAITING_PAYMENT"
+    assert payment.status == "REQUIRES_PAYMENT"
+    assert db.session.get(PaymentWebhookEvent, "evt_unhandled_1").event_type == "unhandled"

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     )
     from app.models.mot_record import MOTRecord
     from app.models.mot_reminder_settings import MOTReminderSettings
+    from app.models.payments.garage_payment_settings import GaragePaymentSettings
     from app.models.platform.feature_flag import GarageFeatureFlag
     from app.models.role import Role
     from app.models.vehicle import Vehicle
@@ -182,6 +183,12 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     )
     communications_onboarding: Mapped["GarageCommunicationsOnboarding | None"] = relationship(
         "GarageCommunicationsOnboarding",
+        back_populates="garage",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    payment_settings: Mapped["GaragePaymentSettings | None"] = relationship(
+        "GaragePaymentSettings",
         back_populates="garage",
         uselist=False,
         cascade="all, delete-orphan",

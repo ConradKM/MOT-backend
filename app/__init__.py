@@ -283,7 +283,7 @@ def create_app(config_class=Config):
     )
     from .models.conversation import callback_request, conversation_session  # noqa: F401
     from .models.payments import audit_log as payment_audit_log  # noqa: F401
-    from .models.payments import payment, webhook_event  # noqa: F401
+    from .models.payments import garage_payment_settings, payment, webhook_event  # noqa: F401
     from .models.platform import (  # noqa: F401
         admin,
         audit_log,

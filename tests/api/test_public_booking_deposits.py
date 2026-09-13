@@ -76,7 +76,9 @@ def test_deposit_intent_creates_awaiting_payment_hold(client, session, garage):
     assert body["deposit_amount"] == "20.00"
     assert body["service_total"] == "100.00"
     assert body["remaining_balance"] == "80.00"
-    assert body["client_secret"] is not None
+    assert body["provider"] == "fake"
+    assert body["checkout_mode"] == "EMBEDDED"
+    assert body["provider_data"]["client_secret"] is not None
     assert body["booking_reference"]
 
     booking_request = BookingRequest.query.filter_by(garage_id=garage.id).one()

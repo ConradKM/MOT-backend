@@ -273,7 +273,7 @@ class DepositIntentCreate(MethodView):
         db.session.flush()
 
         try:
-            payment, client_secret = create_deposit_hold(
+            payment, session = create_deposit_hold(
                 garage=garage, appointment_type=appt_type, booking_request=booking_request
             )
         except PaymentUnavailableError:
@@ -305,9 +305,11 @@ class DepositIntentCreate(MethodView):
             "service_total": base_price,
             "deposit_amount": deposit_amount,
             "remaining_balance": remaining_balance,
-            "client_secret": client_secret,
-            "publishable_key": current_app.config.get("STRIPE_PUBLISHABLE_KEY") or None,
             "provider": payment.provider,
+            "checkout_mode": session.checkout_mode,
+            # Provider-specific, client-safe fields only (e.g. Stripe's
+            # client_secret) - see PaymentSessionResult's docstring.
+            "provider_data": session.provider_data,
             "hold_expires_at": booking_request.payment_hold_expires_at,
         }
 

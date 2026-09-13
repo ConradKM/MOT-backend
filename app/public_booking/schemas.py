@@ -138,9 +138,14 @@ class BookingRequestCreatedSchema(Schema):
 
 
 class DepositIntentCreatedSchema(Schema):
-    """What the Deposit step needs: enough to render the payment summary
-    plus the provider client secret its Payment Element confirms directly
-    with the provider - our backend never sees card details either way."""
+    """What the Deposit step needs: enough to render the payment summary,
+    plus a provider-neutral envelope (``provider`` + ``checkout_mode`` +
+    ``provider_data``) the frontend uses to pick and drive the right
+    checkout component (see src/components/customer/payments/). Nothing
+    Stripe-specific appears at the top level - a Stripe client_secret (or a
+    future PayPal approval_url, Square session token, ...) lives only inside
+    ``provider_data``, and our backend never sees card details either way.
+    """
 
     booking_request_id = fields.UUID(dump_only=True)
     booking_reference = fields.Str(dump_only=True, allow_none=True)
@@ -150,11 +155,14 @@ class DepositIntentCreatedSchema(Schema):
     service_total = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
-    # Only present on creation, never on the status-poll response - a fresh
-    # client_secret is only ever handed out once per intent.
-    client_secret = fields.Str(dump_only=True, allow_none=True)
-    publishable_key = fields.Str(dump_only=True, allow_none=True)
+    # Which adapter is handling this payment, and how the frontend should
+    # present it - see app/payments/providers/base.py's CHECKOUT_MODE_*.
     provider = fields.Str(dump_only=True, allow_none=True)
+    checkout_mode = fields.Str(dump_only=True, allow_none=True)
+    # Only present on creation, never on the status-poll response - a fresh
+    # client_secret (or equivalent) is only ever handed out once. Shape is
+    # provider-specific but always client-safe - see PaymentSessionResult.
+    provider_data = fields.Dict(dump_only=True, allow_none=True)
     hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
 
 
