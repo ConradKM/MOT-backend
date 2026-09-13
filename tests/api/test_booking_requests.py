@@ -8,6 +8,8 @@ POST /api/booking-requests/<id>/reject
 
 import datetime
 
+import pytest
+
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -611,13 +613,28 @@ def test_a_past_pending_request_is_swept_to_expired_on_list(authenticated_user, 
     assert stale.status == "EXPIRED"
 
 
-def test_a_stale_same_day_request_is_swept_to_expired(authenticated_user, session, garage):
-    now = datetime.datetime.now(datetime.UTC)
+def _freeze_expiry_clock(monkeypatch, now):
+    # Patch only the expiry/review service, not JWT validation or the global
+    # datetime module. Production compares the stored date/time components in UTC.
+    class FrozenDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz is not None else now.replace(tzinfo=None)
+
+    monkeypatch.setattr("app.booking_requests.service.datetime", FrozenDateTime)
+
+
+def test_a_stale_same_day_request_is_swept_to_expired(
+    authenticated_user, session, garage, monkeypatch
+):
+    now = datetime.datetime(2026, 9, 13, 12, tzinfo=datetime.UTC)
+    _freeze_expiry_clock(monkeypatch, now)
+    preferred = now - datetime.timedelta(hours=1)
     stale = _pending_request(
         session,
         garage,
-        preferred_date=now.date(),
-        preferred_time=(now - datetime.timedelta(hours=1)).time(),
+        preferred_date=preferred.date(),
+        preferred_time=preferred.time(),
         customer_email="today-stale@example.com",
     )
 
@@ -625,6 +642,52 @@ def test_a_stale_same_day_request_is_swept_to_expired(authenticated_user, sessio
 
     session.refresh(stale)
     assert stale.status == "EXPIRED"
+
+
+@pytest.mark.parametrize(
+    "instant",
+    [
+        "2026-01-01T23:59:59+00:00",  # immediately before UTC midnight
+        "2026-01-02T00:00:00+00:00",  # exactly midnight
+        "2026-01-02T00:00:01+00:00",  # immediately after midnight
+        "2026-09-13T00:30:00+00:00",  # original CI failure window
+        "2026-09-13T01:00:00+00:00",  # subtraction no longer crosses the date
+        "2026-09-12T22:59:59+00:00",  # before London midnight during BST
+        "2026-09-12T23:00:01+00:00",  # after London midnight, same UTC date
+        "2026-12-31T23:59:59+00:00",  # future request crosses the year
+    ],
+)
+def test_expiry_keeps_date_and_time_together_at_midnight(
+    authenticated_user, session, garage, monkeypatch, instant
+):
+    now = datetime.datetime.fromisoformat(instant)
+    _freeze_expiry_clock(monkeypatch, now)
+    expected = {}
+    for offset, status in [(-1, "EXPIRED"), (0, "PENDING"), (1, "PENDING")]:
+        preferred = now + datetime.timedelta(hours=offset)
+        # Never combine now.date() with an earlier/later timestamp's .time():
+        # that can silently change the requested day around midnight.
+        request = _pending_request(
+            session, garage, preferred_date=preferred.date(), preferred_time=preferred.time()
+        )
+        expected[str(request.id)] = status
+    for offset, status in [(-1, "EXPIRED"), (0, "PENDING")]:
+        request = _pending_request(
+            session,
+            garage,
+            preferred_date=now.date() + datetime.timedelta(days=offset),
+            preferred_time=None,
+        )
+        expected[str(request.id)] = status
+
+    response = authenticated_user.client.get("/api/booking-requests/")
+    assert response.status_code == 200
+    rows = response.get_json()
+    assert {row["id"]: row["status"] for row in rows} == expected
+    # The SQL sweep and the Python review-context predicate must agree.
+    assert {row["id"]: row["is_expired"] for row in rows} == {
+        request_id: status == "EXPIRED" for request_id, status in expected.items()
+    }
 
 
 def test_a_future_pending_request_is_not_expired(authenticated_user, booking_request):
