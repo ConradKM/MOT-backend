@@ -1,8 +1,7 @@
-"""Central Twilio/communications service layer.
+"""Provider-neutral communications orchestration and persistence.
 
-Every Twilio SDK call in this codebase happens here (or in
-``app/communications/client.py``, which this module uses) - never in a route,
-a webhook handler, or the booking/appointment/reminder code. Every public
+Provider adapters own transport calls, credentials, and SDK error translation.
+Booking and automation callers keep the existing CommunicationLog contract. Every public
 function here always returns a :class:`CommunicationLog` (never raises for a
 Twilio-side failure) so callers never need special-case error handling around
 "did this actually send" - they read the row's ``status`` if they care.
@@ -12,9 +11,6 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
-
-from flask import current_app
-from twilio.base.exceptions import TwilioRestException
 
 from app.extensions import db
 from app.models.communications.communication_log import (
@@ -27,9 +23,8 @@ from app.models.communications.communication_log import (
 )
 from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
 
-from .client import get_twilio_client_for_garage
-from .config import garage_communications_enabled, is_twilio_configured
-from .delivery_status import describe_delivery_failure
+from .providers import get_messaging_provider, get_voice_provider, provider_name
+from .providers.base import InboundEvent, ProviderFailure, StatusEvent
 
 if TYPE_CHECKING:
     from app.models.customer import Customer
@@ -44,19 +39,6 @@ def _create_log(**fields) -> CommunicationLog:
     return log
 
 
-def _whatsapp_status_callback_url() -> str | None:
-    """Absolute URL Twilio should POST delivery updates to, so an
-    ``undelivered``/``failed`` that only surfaces asynchronously (the 24-hour
-    window, recipient not on WhatsApp, …) is written back to the log row
-    instead of it sitting on ``queued`` forever. ``None`` when this
-    deployment has no real public origin configured (local dev), where
-    handing Twilio a localhost URL would be worse than not asking."""
-    base = (current_app.config.get("PUBLIC_API_BASE_URL") or "").rstrip("/")
-    if not base.startswith("https://"):
-        return None
-    return f"{base}/api/webhooks/twilio/whatsapp/status"
-
-
 def _related_ids(customer=None, appointment=None, booking_request=None) -> dict:
     return {
         "customer_id": customer.id if customer is not None else None,
@@ -66,18 +48,7 @@ def _related_ids(customer=None, appointment=None, booking_request=None) -> dict:
 
 
 def _failure_fields(exc: Exception) -> tuple[str | None, str]:
-    """Normalize a Twilio (or any other) send-time exception into the
-    (error_code, error_message) pair stored on the log row.
-
-    When Twilio gives a code we recognise, the stored message is the
-    business-facing explanation (why it won't reach this person, what to do)
-    rather than Twilio's terse developer string - so staff never see only
-    "undelivered"."""
-    if isinstance(exc, TwilioRestException):
-        code = str(exc.code) if exc.code is not None else None
-        explained = describe_delivery_failure(code)
-        return code, (explained or exc.msg or "The messaging provider rejected the message.")
-    return None, str(exc)
+    return (exc.code if isinstance(exc, ProviderFailure) else None), str(exc)
 
 
 def _skip(
@@ -106,7 +77,7 @@ def _skip(
         garage_id=garage.id,
         channel=channel,
         direction=direction,
-        external_provider="twilio",
+        external_provider=provider_name(garage, channel.lower()),
         external_id=None,
         from_address=from_address,
         to_address=to_address,
@@ -154,6 +125,7 @@ def send_whatsapp_message(
     just with status ``SKIPPED_NOT_CONFIGURED`` and no provider SID.
     """
     settings = garage.communication_settings
+    provider = get_messaging_provider(garage)
 
     try:
         to_e164 = normalize_uk_mobile(to)
@@ -187,35 +159,20 @@ def send_whatsapp_message(
         "booking_request": booking_request,
     }
 
-    if not is_twilio_configured():
-        return _skip(**skip_kwargs, reason="Twilio is not configured for this deployment.")
-    if not garage_communications_enabled(garage):
-        return _skip(**skip_kwargs, reason="Communications are not enabled for this business.")
-    if not (settings.whatsapp_sender or settings.messaging_service_sid):
-        return _skip(**skip_kwargs, reason="No WhatsApp sender configured for this business.")
-
-    client = get_twilio_client_for_garage(garage)
-    assert client is not None  # guaranteed by the is_twilio_configured() check above
-
-    send_kwargs: dict = {"to": to_address, "body": body}
-    if settings.messaging_service_sid:
-        send_kwargs["messaging_service_sid"] = settings.messaging_service_sid
-    else:
-        send_kwargs["from_"] = settings.whatsapp_sender
-
-    callback_url = _whatsapp_status_callback_url()
-    if callback_url:
-        send_kwargs["status_callback"] = callback_url
+    reason = provider.configuration_error(garage)
+    if reason:
+        return _skip(**skip_kwargs, reason=reason)
 
     try:
-        message = client.messages.create(**send_kwargs)
+        provider.capabilities.require("whatsapp")
+        message = provider.send_message(garage, to=to_address, body=body)
     except Exception as exc:  # noqa: BLE001 - a send must never raise; recorded as FAILED below
         error_code, error_message = _failure_fields(exc)
         return _create_log(
             garage_id=garage.id,
             channel=CHANNEL_WHATSAPP,
             direction=DIRECTION_OUTBOUND,
-            external_provider="twilio",
+            external_provider=provider.name,
             external_id=None,
             from_address=settings.whatsapp_sender,
             to_address=to_address,
@@ -231,8 +188,8 @@ def send_whatsapp_message(
         garage_id=garage.id,
         channel=CHANNEL_WHATSAPP,
         direction=DIRECTION_OUTBOUND,
-        external_provider="twilio",
-        external_id=message.sid,
+        external_provider=provider.name,
+        external_id=message.interaction_id,
         from_address=settings.whatsapp_sender,
         to_address=to_address,
         status=message.status,
@@ -246,7 +203,8 @@ def initiate_voice_call(
     *,
     garage,
     to: str,
-    twiml_url: str,
+    twiml_url: str | None = None,
+    instructions_url: str | None = None,
     customer=None,
     appointment=None,
     booking_request=None,
@@ -257,6 +215,7 @@ def initiate_voice_call(
     skip/error/success recording contract as :func:`send_whatsapp_message`.
     """
     settings = garage.communication_settings
+    provider = get_voice_provider(garage)
 
     try:
         to_e164 = normalize_uk_mobile(to)
@@ -284,25 +243,22 @@ def initiate_voice_call(
         "booking_request": booking_request,
     }
 
-    if not is_twilio_configured():
-        return _skip(**skip_kwargs, reason="Twilio is not configured for this deployment.")
-    if not garage_communications_enabled(garage):
-        return _skip(**skip_kwargs, reason="Communications are not enabled for this business.")
-    if not settings.voice_phone_number:
-        return _skip(**skip_kwargs, reason="No voice number configured for this business.")
-
-    client = get_twilio_client_for_garage(garage)
-    assert client is not None  # guaranteed by the is_twilio_configured() check above
+    reason = provider.configuration_error(garage)
+    if reason:
+        return _skip(**skip_kwargs, reason=reason)
 
     try:
-        call = client.calls.create(from_=settings.voice_phone_number, to=to_e164, url=twiml_url)
+        provider.capabilities.require("outbound_voice")
+        call = provider.initiate_call(
+            garage, to=to_e164, instructions_url=instructions_url or twiml_url or ""
+        )
     except Exception as exc:  # noqa: BLE001 - a send must never raise; recorded as FAILED below
         error_code, error_message = _failure_fields(exc)
         return _create_log(
             garage_id=garage.id,
             channel=CHANNEL_VOICE,
             direction=DIRECTION_OUTBOUND,
-            external_provider="twilio",
+            external_provider=provider.name,
             external_id=None,
             from_address=settings.voice_phone_number,
             to_address=to_e164,
@@ -317,9 +273,9 @@ def initiate_voice_call(
         garage_id=garage.id,
         channel=CHANNEL_VOICE,
         direction=DIRECTION_OUTBOUND,
-        external_provider="twilio",
-        external_id=call.sid,
-        call_sid=call.sid,
+        external_provider=provider.name,
+        external_id=call.interaction_id,
+        call_sid=call.interaction_id,
         from_address=settings.voice_phone_number,
         to_address=to_e164,
         status=call.status,
@@ -337,6 +293,7 @@ def record_inbound_communication(
     external_id: str | None,
     status: str,
     body: str | None = None,
+    provider: str = "twilio",
     customer=None,
 ) -> CommunicationLog:
     """Log an inbound call/message a webhook just received. Always succeeds -
@@ -345,7 +302,7 @@ def record_inbound_communication(
         garage_id=garage.id,
         channel=channel,
         direction=DIRECTION_INBOUND,
-        external_provider="twilio",
+        external_provider=provider,
         external_id=external_id,
         # For a voice call this row is the call itself; carrying the CallSid
         # in call_sid too lets the engine's transcript-turn rows group under
@@ -363,6 +320,7 @@ def update_communication_status(
     *,
     external_id: str | None,
     status: str,
+    provider: str = "twilio",
     call_duration_seconds: int | None = None,
     error_code: str | None = None,
     error_message: str | None = None,
@@ -376,7 +334,12 @@ def update_communication_status(
     if not external_id:
         return None
 
-    log: CommunicationLog | None = CommunicationLog.query.filter_by(external_id=external_id).first()
+    query = CommunicationLog.query.filter_by(external_id=external_id)
+    # Legacy Twilio callbacks also update automation-owned rows whose provider
+    # tag is comaz_conversation_engine. Keep that existing lookup contract.
+    if provider != "twilio":
+        query = query.filter_by(external_provider=provider)
+    log: CommunicationLog | None = query.first()
     if log is None:
         logger.warning("[communications] status callback for unknown external_id=%s", external_id)
         return None
@@ -391,3 +354,28 @@ def update_communication_status(
 
     db.session.commit()
     return log
+
+
+def record_inbound_event(garage, event: InboundEvent, *, customer=None) -> CommunicationLog:
+    return record_inbound_communication(
+        garage=garage,
+        channel=event.channel,
+        provider=event.provider,
+        external_id=event.interaction_id,
+        from_address=event.from_address,
+        to_address=event.to_address,
+        status=event.status,
+        body=event.body if event.channel == CHANNEL_WHATSAPP else None,
+        customer=customer,
+    )
+
+
+def apply_status_event(event: StatusEvent) -> CommunicationLog | None:
+    return update_communication_status(
+        provider=event.provider,
+        external_id=event.interaction_id,
+        status=event.status,
+        call_duration_seconds=event.duration_seconds,
+        error_code=event.error_code,
+        error_message=event.error_message,
+    )

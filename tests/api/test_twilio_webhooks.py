@@ -568,3 +568,37 @@ def test_whatsapp_status_undelivered_persists_twilio_error_code_and_a_readable_r
     assert log.error_code == "63016"
     assert "24 hours" in log.error_message
     assert "template" in log.error_message.lower()
+
+
+def test_status_callback_preserves_engine_owned_message_reference(
+    app, session, client, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    log = CommunicationLog(
+        garage_id=garage.id,
+        channel="WHATSAPP",
+        direction="INBOUND",
+        external_provider="comaz_conversation_engine",
+        external_id="SM-engine-legacy",
+        status="received",
+    )
+    session.add(log)
+    session.commit()
+    path = "/api/webhooks/twilio/whatsapp/status"
+    form = {"MessageSid": log.external_id, "MessageStatus": "read"}
+    response = client.post(path, data=form, headers=_signed_headers(path, form))
+    assert response.status_code == 204
+    session.refresh(log)
+    assert log.status == "read"
+
+
+def test_all_webhook_contracts_reject_invalid_signatures(app, client, monkeypatch):
+    _configure_twilio(app, monkeypatch)
+    for channel in ("voice", "whatsapp"):
+        for operation in ("incoming", "status"):
+            response = client.post(
+                f"/api/webhooks/twilio/{channel}/{operation}",
+                data={"CallSid": "CA-bad", "MessageSid": "SM-bad", "To": "+441234"},
+                headers={"X-Twilio-Signature": "invalid"},
+            )
+            assert response.status_code == 403

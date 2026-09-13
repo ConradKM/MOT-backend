@@ -162,6 +162,7 @@ class VoiceTokenSchema(Schema):
     the caller ID the outbound leg will use (never a secret - the token is
     scoped to *outgoing* calls only)."""
 
+    provider = fields.Str(dump_only=True)
     token = fields.Str(dump_only=True)
     identity = fields.Str(dump_only=True)
     expires_in = fields.Int(dump_only=True)

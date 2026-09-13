@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 from datetime import timedelta
 
@@ -171,6 +172,12 @@ class Config:
     # fully supported, permanent state for a deployment that hasn't turned on
     # communications yet - see app/communications/config.py::is_twilio_configured.
     # Never hard-code these; never commit real values.
+    VOICE_PROVIDER_DEFAULT = os.getenv("VOICE_PROVIDER_DEFAULT", "twilio")
+    WHATSAPP_PROVIDER_DEFAULT = os.getenv("WHATSAPP_PROVIDER_DEFAULT", "twilio")
+    COMMUNICATIONS_PROVIDER_OVERRIDES = json.loads(
+        os.getenv("COMMUNICATIONS_PROVIDER_OVERRIDES", "{}")
+    )
+
     TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
     TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
     # Optional: a Twilio Standard API Key (SID starts "SK") and its secret.

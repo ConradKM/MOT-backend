@@ -33,8 +33,8 @@ from app.models.conversation.conversation_session import (
 )
 from app.models.customer import Customer
 
-from .config import garage_communications_enabled, is_twilio_configured
-from .voice_calling import browser_calling_configured
+from .config import garage_communications_enabled
+from .providers import get_messaging_provider, get_voice_provider
 
 # The garage's own definition of "missed" - a Twilio CallStatus for an
 # inbound call that never connected. Not exhaustive of every Twilio value,
@@ -74,8 +74,11 @@ def capabilities_for(garage) -> dict:
     """What this garage can actually do right now - the frontend drives its
     empty/disabled states from this rather than guessing client-side."""
     settings = garage.communication_settings
+    voice = get_voice_provider(garage)
+    messaging = get_messaging_provider(garage)
     return {
-        "communications_enabled": is_twilio_configured() and garage_communications_enabled(garage),
+        "communications_enabled": garage_communications_enabled(garage)
+        and (voice.is_configured() or messaging.is_configured()),
         "voice_number_configured": bool(settings and settings.voice_phone_number),
         "whatsapp_configured": bool(
             settings and (settings.whatsapp_sender or settings.messaging_service_sid)
@@ -84,7 +87,9 @@ def capabilities_for(garage) -> dict:
         # API key + TwiML App (voice_calling.browser_calling_configured), and
         # this business has an outbound number to use as caller ID.
         "outbound_calling_supported": (
-            browser_calling_configured() and bool(settings and settings.voice_phone_number)
+            voice.capabilities.browser_calling
+            and voice.browser_calling_configured()
+            and bool(settings and settings.voice_phone_number)
         ),
     }
 
