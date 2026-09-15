@@ -688,3 +688,77 @@ def test_answer_errors_use_the_same_shape_as_every_other_422(client, session, ga
     assert resp.status_code == 422
     errors = resp.get_json()["errors"]["json"]
     assert errors[str(field.id)] == ["Hair length is required."]
+
+
+# --------------------------------------------------------------------------
+# Deploying over an existing business
+# --------------------------------------------------------------------------
+
+
+def test_a_business_with_no_workflow_asks_for_nothing_extra(client, session, garage):
+    """The state a live tenant is in the instant the schema migration lands,
+    before the backfill runs. Pinned so the consequence stays visible: with no
+    configured questions, nothing beyond name/email/mobile is collected - which
+    is why migration b8e41c5a7d92 exists.
+    """
+    body = client.get(f"/api/public/{garage.slug}/booking-flow").get_json()
+
+    assert body["sections"] == []
+
+
+def test_the_automotive_preset_restores_exactly_what_the_old_form_asked(client, session, garage):
+    """The backfill migration seeds this preset for every existing business.
+    If these fields or bindings change, that migration's frozen copy has to
+    change with them - otherwise an upgrading tenant gets a different form
+    from a freshly onboarded one."""
+    from app.booking_flow.presets import apply_preset
+
+    apply_preset(garage.id, "automotive")
+    session.commit()
+
+    body = client.get(f"/api/public/{garage.slug}/booking-flow").get_json()
+
+    assert [s["title"] for s in body["sections"]] == ["Vehicle details", "Anything else"]
+    vehicle = body["sections"][0]["fields"]
+    assert [f["label"] for f in vehicle] == [
+        "Registration number",
+        "Make",
+        "Model",
+        "Year",
+        "Current mileage",
+    ]
+    # The registration stays mandatory, exactly as the old hard-coded form had
+    # it - a garage must not silently start taking bookings without one.
+    assert vehicle[0]["is_required"] is True
+    assert all(f["is_required"] is False for f in vehicle[1:])
+
+
+def test_the_restored_form_still_creates_the_item_record(client, session, garage):
+    """The bindings are the point of the backfill: an upgraded garage keeps
+    getting vehicle records, and therefore keeps getting MOT reminders."""
+    from app.booking_flow.presets import apply_preset
+    from app.booking_flow.resolve import resolve_fields
+
+    apply_preset(garage.id, "automotive")
+    session.commit()
+
+    reg = next(f for f in resolve_fields(garage.id, None) if f.binds_to == "ITEM_REFERENCE")
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_payload(answers=[{"field_id": str(reg.id), "value": "UP12 GRD"}]),
+    )
+
+    assert resp.status_code == 201
+    assert session.query(Vehicle).one().registration_number == "UP12GRD"
+
+
+def test_the_restored_form_refuses_a_booking_with_no_registration(client, session, garage):
+    from app.booking_flow.presets import apply_preset
+
+    apply_preset(garage.id, "automotive")
+    session.commit()
+
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_payload())
+
+    assert resp.status_code == 422
+    assert session.query(BookingRequest).count() == 0

@@ -43,6 +43,19 @@ class BookingRequestAnswerSchema(Schema):
     field_type = fields.Str(dump_only=True)
     value = fields.Str(dump_only=True, allow_none=True)
     value_list = fields.List(fields.Str(), dump_only=True)
+    # Which real record column this answer also populated, or null. Staff-only
+    # (never on the public payload) and the review screen needs it: a bound
+    # answer is already shown by the dedicated Vehicle / Mileage rows, so
+    # rendering it again would show an automotive business every field twice.
+    binds_to = fields.Method("_get_binds_to", dump_only=True)
+
+    def _get_binds_to(self, answer):
+        # From the live field, not a snapshot: this drives *layout*, not
+        # history. If the binding is removed the answer should start showing
+        # in its own right, and if the field is gone there is no dedicated
+        # row reading it any more either.
+        field = answer.booking_flow_field
+        return None if field is None else field.binds_to
 
 
 class BookingRequestSchema(Schema):

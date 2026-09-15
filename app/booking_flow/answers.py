@@ -105,9 +105,7 @@ def _validate_one(field, raw_value, raw_values) -> tuple[str | None, list[str]]:
         try:
             date.fromisoformat(value)
         except ValueError:
-            raise AnswerError(
-                {str(field.id): [f"{label} must be a date (YYYY-MM-DD)."]}
-            ) from None
+            raise AnswerError({str(field.id): [f"{label} must be a date (YYYY-MM-DD)."]}) from None
         return value, []
 
     if field.field_type == "TIME":
