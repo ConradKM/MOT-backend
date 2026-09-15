@@ -257,9 +257,7 @@ class BookingRequestSubmit(MethodView):
                 "flow instead of submitting directly.",
             )
 
-        resolved_answers = _validate_answers_or_abort(
-            garage, data, data.get("appointment_type_id")
-        )
+        resolved_answers = _validate_answers_or_abort(garage, data, data.get("appointment_type_id"))
 
         preferred_time = _lock_and_validate_slot(garage, data, appt_type)
 
@@ -306,9 +304,7 @@ class DepositIntentCreate(MethodView):
         if appt_type is None or not appt_type.deposit_required:
             abort(422, message="This service does not require a deposit.")
 
-        resolved_answers = _validate_answers_or_abort(
-            garage, data, data.get("appointment_type_id")
-        )
+        resolved_answers = _validate_answers_or_abort(garage, data, data.get("appointment_type_id"))
 
         # Release any expired holds first so their capacity is genuinely
         # free before this one is validated against it.

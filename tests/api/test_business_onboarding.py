@@ -172,7 +172,13 @@ def test_cli_rejects_a_bad_spec(tmp_path, capsys):
 
 GROUPED_SPEC = {
     **SPEC,
-    "business": {**SPEC["business"], "booking_display_mode": "grid"},
+    "business": {
+        "name": "Tints on Demand",
+        "phone": "+44 20 3971 1619",
+        "address": "London, E16 2ES",
+        "postcode": "E16 2ES",
+        "booking_display_mode": "grid",
+    },
     "service_groups": [
         {"name": "Tinting", "description": "Glass work", "display_mode": "GRID"},
     ],
