@@ -12,9 +12,23 @@ class AppointmentTypeSchema(Schema):
     base_price = fields.Decimal(allow_none=True, as_string=True, places=2)
     status = fields.Str(load_default="ACTIVE", validate=validate.OneOf(APPOINTMENT_TYPE_STATUSES))
     default_duration_minutes = fields.Int(allow_none=True, validate=validate.Range(min=1))
+    # None = ungrouped, the normal state for a short menu. The route checks
+    # the group belongs to the same business before assigning it; a UUID from
+    # a client is never trusted to be in-tenant just because it parses.
+    group_id = fields.UUID(allow_none=True, load_default=None)
+    order = fields.Int(load_default=0, validate=validate.Range(min=0))
+
+    image_url = fields.Method("_get_image_url", dump_only=True)
+    image_content_type = fields.Str(dump_only=True, allow_none=True)
+    image_uploaded_at = fields.DateTime(dump_only=True, allow_none=True)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
+
+    def _get_image_url(self, appointment_type):
+        from app.appointments.images import owner_image_url
+
+        return owner_image_url(appointment_type)
 
 
 class AppointmentTypeUpdateSchema(Schema):
@@ -23,6 +37,8 @@ class AppointmentTypeUpdateSchema(Schema):
     base_price = fields.Decimal(allow_none=True, as_string=True, places=2)
     status = fields.Str(validate=validate.OneOf(APPOINTMENT_TYPE_STATUSES))
     default_duration_minutes = fields.Int(allow_none=True, validate=validate.Range(min=1))
+    group_id = fields.UUID(allow_none=True)
+    order = fields.Int(validate=validate.Range(min=0))
 
 
 class AppointmentTypeQueryArgsSchema(Schema):

@@ -266,14 +266,25 @@ def day_open_minutes(day, hours_map, exceptions) -> int:
     return _minutes(closes_at) - _minutes(opens_at)
 
 
-def day_summary(garage, day, settings, hours_map, exceptions, now, today) -> dict:
+def day_summary(
+    garage, day, settings, hours_map, exceptions, now, today, duration_min=None
+) -> dict:
+    """One day's green/amber/red indicator for the month calendar.
+
+    ``duration_min`` is the selected service's length, and passing it matters
+    for correctness rather than just precision: computed at the garage's
+    generic slot length, a day can report ``available`` while a 120-minute
+    service has nowhere to fit, so the customer picks a green day and is then
+    shown no times at all. Falls back to the generic length only when the
+    customer genuinely hasn't chosen a service yet.
+    """
     weekday = day.weekday()
     if day < today:
         return _summary(day, weekday, False, LEVEL_PAST, 0, 0)
     if _day_hours(day, hours_map, exceptions) is None:
         return _summary(day, weekday, False, LEVEL_CLOSED, 0, 0)
 
-    slots = day_slots(garage, day, settings, hours_map, exceptions, now)
+    slots = day_slots(garage, day, settings, hours_map, exceptions, now, duration_min=duration_min)
     total = len(slots)
     open_slots = sum(1 for s in slots if s["status"] in (SLOT_AVAILABLE, SLOT_LIMITED))
     if open_slots == 0:
@@ -311,8 +322,14 @@ def _opening_hours_payload(hours_map) -> list[dict]:
     return out
 
 
-def availability_range(garage, from_date, to_date, now: datetime) -> dict:
-    """Payload for GET /api/public/<slug>/availability."""
+def availability_range(garage, from_date, to_date, now: datetime, appointment_type=None) -> dict:
+    """Payload for GET /api/public/<slug>/availability.
+
+    ``appointment_type`` is optional and defaults to the previous, generic
+    behaviour - but the booking wizard now asks what the customer is booking
+    *before* showing the calendar, so it should almost always be supplied.
+    See :func:`day_summary` for why an unqualified day level can lie.
+    """
     settings = resolve_settings(garage)
     hours_map = resolve_opening_hours(garage)
     today = now.date()
@@ -323,11 +340,14 @@ def availability_range(garage, from_date, to_date, now: datetime) -> dict:
     end = max(end, start)
 
     exceptions = resolve_exceptions(garage, start, end)
+    duration = _type_duration(appointment_type, settings)
 
     days = []
     cursor = start
     while cursor <= end:
-        days.append(day_summary(garage, cursor, settings, hours_map, exceptions, now, today))
+        days.append(
+            day_summary(garage, cursor, settings, hours_map, exceptions, now, today, duration)
+        )
         cursor += timedelta(days=1)
 
     return {
@@ -362,8 +382,11 @@ def single_day(garage, day: date, now: datetime, appointment_type=None) -> dict:
     hours_map = resolve_opening_hours(garage)
     today = now.date()
     exceptions = resolve_exceptions(garage, day, day)
-    summary = day_summary(garage, day, settings, hours_map, exceptions, now, today)
     duration = _type_duration(appointment_type, settings)
+    # The same duration drives the summary as drives the slots: this endpoint
+    # already knows the service, so reporting a generic `level` next to
+    # service-specific `slots` would contradict itself within one payload.
+    summary = day_summary(garage, day, settings, hours_map, exceptions, now, today, duration)
     slots = (
         day_slots(garage, day, settings, hours_map, exceptions, now, duration_min=duration)
         if summary["is_open"]

@@ -56,6 +56,7 @@ from app.models.appointments.appointment_checklist_item import (
     AppointmentChecklistItem,
 )
 from app.models.appointments.appointment_type import GarageAppointmentType
+from app.models.appointments.appointment_type_group import AppointmentTypeGroup
 from app.models.appointments.checklist_item_media import ChecklistItemMedia
 from app.models.appointments.checklist_template import ChecklistTemplate
 from app.models.appointments.checklist_template_item import (
@@ -112,6 +113,7 @@ _DELETE_ORDER = [
     "checklist_template_items",
     "checklist_templates",
     "garage_appointment_types",
+    "appointment_type_groups",
     "vehicles",
     "customers",
     "employees",  # employee_roles rows cascade via FK ON DELETE CASCADE
@@ -239,8 +241,30 @@ def _seed_children(garage: Garage) -> None:
     db.session.add_all([owner, greg, tom, rachel, sam])
     db.session.flush()
 
+    # ---- Service groups ---------------------------------------------
+    # Deliberately partial: "Courtesy Check" and the inactive services below
+    # stay ungrouped, so the seeded business exercises the mixed case (some
+    # grouped, some not) rather than the tidy all-or-nothing one.
+    def make_group(name, description, order, display_mode=None):
+        g = AppointmentTypeGroup(
+            garage_id=garage.id,
+            name=name,
+            description=description,
+            order=order,
+            display_mode=display_mode,
+        )
+        db.session.add(g)
+        return g
+
+    group_testing = make_group("MOT & Servicing", "Annual testing and scheduled servicing.", 0)
+    # Overrides the business's LIST default, so one group renders as a grid
+    # without every group doing so - the inheritance rule is only really
+    # exercised when the two differ.
+    group_repairs = make_group("Repairs & Diagnostics", "Fault-finding and repair work.", 1, "GRID")
+    db.session.flush()
+
     # ---- Appointment types ------------------------------------------
-    def make_type(name, description, price, duration, status="ACTIVE"):
+    def make_type(name, description, price, duration, status="ACTIVE", group=None, order=0):
         t = GarageAppointmentType(
             garage_id=garage.id,
             name=name,
@@ -248,31 +272,51 @@ def _seed_children(garage: Garage) -> None:
             base_price=None if price is None else Decimal(price),
             default_duration_minutes=duration,
             status=status,
+            group_id=None if group is None else group.id,
+            order=order,
         )
         db.session.add(t)
         return t
 
-    type_mot = make_type("MOT Test", "Class 4 MOT test to current DVSA standards.", "54.85", 45)
+    type_mot = make_type(
+        "MOT Test",
+        "Class 4 MOT test to current DVSA standards.",
+        "54.85",
+        45,
+        group=group_testing,
+        order=0,
+    )
     type_service = make_type(
         "Full Service",
         "Comprehensive 60-point service including oil and filter change.",
         "189.00",
         90,
+        group=group_testing,
+        order=1,
     )
     type_mot_service = make_type(
         "MOT + Full Service",
         "Full service carried out alongside the MOT test, same visit.",
         "235.00",
         120,
+        group=group_testing,
+        order=2,
     )
     type_brakes = make_type(
-        "Brake Repair", "Diagnosis and replacement of brake components.", "120.00", 60
+        "Brake Repair",
+        "Diagnosis and replacement of brake components.",
+        "120.00",
+        60,
+        group=group_repairs,
+        order=0,
     )
     type_diagnostic = make_type(
         "Diagnostic Check",
         "Engine management / fault-code diagnostic investigation.",
         "60.00",
         30,
+        group=group_repairs,
+        order=1,
     )
     # No price and no default duration - still bookable, but an explicit
     # end_time is required.
@@ -886,6 +930,7 @@ def _garage_counts(garage_id) -> dict[str, int]:
     return {
         "roles": Role.query.filter_by(garage_id=garage_id).count(),
         "employees": Employee.query.filter_by(garage_id=garage_id).count(),
+        "service groups": AppointmentTypeGroup.query.filter_by(garage_id=garage_id).count(),
         "appointment types": GarageAppointmentType.query.filter_by(garage_id=garage_id).count(),
         "checklist templates": ChecklistTemplate.query.filter_by(garage_id=garage_id).count(),
         "customers": Customer.query.filter_by(garage_id=garage_id).count(),

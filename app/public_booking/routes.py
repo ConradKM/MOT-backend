@@ -12,6 +12,7 @@ from app.garages.logo import logo_public_url
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.garage import Garage
+from app.storage.images import image_url
 
 from .availability import availability_range, single_day, validate_slot
 from .captcha import verify_captcha
@@ -61,12 +62,35 @@ class PublicGarageBySlug(MethodView):
     def get(self, slug):
         garage = _get_garage_by_slug(slug)
 
+        active = sorted(
+            (t for t in garage.appointment_types if t.status == "ACTIVE"),
+            key=lambda t: (t.order, t.name),
+        )
+        # Only groups that still have something active in them - an empty
+        # group is a configuration leftover, and rendering it would give the
+        # customer a heading to click that leads nowhere.
+        grouped_ids = {t.group_id for t in active if t.group_id is not None}
+
         return {
             "id": garage.id,
             "name": garage.name,
             "slug": garage.slug,
             "logo_url": logo_public_url(garage),
-            "appointment_types": [t for t in garage.appointment_types if t.status == "ACTIVE"],
+            "booking_display_mode": garage.booking_display_mode,
+            "appointment_type_groups": [
+                {
+                    "id": g.id,
+                    "name": g.name,
+                    "description": g.description,
+                    "order": g.order,
+                    # Resolve NULL-inherits here so no client reimplements it.
+                    "display_mode": g.display_mode or garage.booking_display_mode,
+                    "image_url": image_url(g.image_storage_key),
+                }
+                for g in garage.appointment_type_groups
+                if g.id in grouped_ids
+            ],
+            "appointment_types": active,
         }
 
 
@@ -77,7 +101,14 @@ class PublicGarageAvailability(MethodView):
     @public_booking_blp.response(200, AvailabilityRangeSchema)
     def get(self, args, slug):
         garage = _get_garage_by_slug(slug)
-        return availability_range(garage, args.get("from_"), args.get("to"), datetime.now(UTC))
+        appt_type = _get_active_appointment_type(garage, args.get("appointment_type_id"))
+        return availability_range(
+            garage,
+            args.get("from_"),
+            args.get("to"),
+            datetime.now(UTC),
+            appointment_type=appt_type,
+        )
 
 
 @public_booking_blp.route("/<slug>/availability/<day>")

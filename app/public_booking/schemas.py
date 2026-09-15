@@ -11,6 +11,7 @@ from marshmallow import (
 )
 
 from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
+from app.storage.images import image_url
 
 
 class UKMobileField(fields.Str):
@@ -44,7 +45,19 @@ class PublicAppointmentTypeSchema(Schema):
     description = fields.Str(dump_only=True, allow_none=True)
     base_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     default_duration_minutes = fields.Int(dump_only=True, allow_none=True)
+    # NULL for an ungrouped service. The client groups on this and orders
+    # within a group by `order`, rather than the groups carrying id lists -
+    # one source of truth for membership, no chance of the two disagreeing.
+    group_id = fields.UUID(dump_only=True, allow_none=True)
+    order = fields.Int(dump_only=True)
+    # A fresh presigned url per request, or null - the client renders its own
+    # fallback, never a broken-image icon. Only meaningful in GRID display
+    # mode, but always sent: the mode can differ per group.
+    image_url = fields.Method("_get_image_url", dump_only=True)
     included_items = fields.Method("_get_included_items", dump_only=True)
+
+    def _get_image_url(self, appointment_type):
+        return image_url(appointment_type.image_storage_key)
 
     def _get_included_items(self, appointment_type):
         template = appointment_type.checklist_template
@@ -54,6 +67,23 @@ class PublicAppointmentTypeSchema(Schema):
             (i for i in template.items if i.visible_to_customer), key=lambda i: i.order
         )
         return PublicIncludedItemSchema(many=True).dump(visible)
+
+
+class PublicAppointmentTypeGroupSchema(Schema):
+    """One navigational grouping of services.
+
+    Carries no list of members: services declare their own `group_id`, so
+    there is exactly one place membership is expressed.
+    """
+
+    id = fields.UUID(dump_only=True)
+    name = fields.Str(dump_only=True)
+    description = fields.Str(dump_only=True, allow_none=True)
+    order = fields.Int(dump_only=True)
+    # Already resolved against the business default by the route, so the
+    # client never has to implement the NULL-inherits rule itself.
+    display_mode = fields.Str(dump_only=True)
+    image_url = fields.Str(dump_only=True, allow_none=True)
 
 
 class PublicGarageDetailSchema(Schema):
@@ -66,6 +96,16 @@ class PublicGarageDetailSchema(Schema):
     # logo - see app/garages/logo.py::logo_public_url. The frontend renders
     # its own fallback on null; never a broken-image icon.
     logo_url = fields.Str(dump_only=True, allow_none=True)
+    # The business-wide default presentation; a group may override it, and
+    # each group's own `display_mode` is already resolved.
+    booking_display_mode = fields.Str(dump_only=True)
+    appointment_type_groups = fields.List(
+        fields.Nested(PublicAppointmentTypeGroupSchema), dump_only=True
+    )
+    # Every ACTIVE service, grouped or not, in display order. Deliberately
+    # *not* narrowed to the ungrouped ones when groups exist: a client that
+    # knows nothing about groups (and the conversational channel) still sees
+    # the full menu, and a client that does simply partitions on `group_id`.
     appointment_types = fields.List(fields.Nested(PublicAppointmentTypeSchema), dump_only=True)
 
 
@@ -139,6 +179,12 @@ class AvailabilityQueryArgsSchema(Schema):
     # `from` is a Python keyword, so bind it to `from_` but keep the query name.
     from_ = fields.Date(data_key="from", load_default=None)
     to = fields.Date(load_default=None)
+    # Which service the customer is booking. Optional for backwards
+    # compatibility, but the wizard picks the service before the date, so in
+    # practice it is always sent - without it each day's level is computed at
+    # the business's generic slot length and can advertise availability that a
+    # longer service cannot actually use (see availability.py::day_summary).
+    appointment_type_id = fields.UUID(load_default=None)
 
 
 class DayAvailabilityQueryArgsSchema(Schema):

@@ -93,6 +93,12 @@ class Config:
     # public page, not checklist evidence.
     LOGO_MAX_BYTES = int(os.getenv("LOGO_MAX_BYTES", str(2 * 1024 * 1024)))
 
+    # Service / service-group images on the public booking page (see
+    # app/appointments/images.py). Larger than a logo because these are
+    # photographs a customer chooses between in GRID display mode, not a small
+    # brand mark - but still nowhere near MEDIA_MAX_BYTES.
+    SERVICE_IMAGE_MAX_BYTES = int(os.getenv("SERVICE_IMAGE_MAX_BYTES", str(5 * 1024 * 1024)))
+
     # --- Platform Admin (see app/platform_admin) -------------------------
     # The internal operator console at admin.comaz.co.uk. Its accounts live in
     # their own table and are created only by `flask create-platform-admin` -

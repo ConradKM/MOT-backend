@@ -3,10 +3,18 @@ from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 from sqlalchemy.exc import IntegrityError
 
+from app.appointments.image_schemas import (
+    ImageFinalizeSchema,
+    ImageUploadRequestSchema,
+    ImageUploadTicketSchema,
+)
+from app.appointments.images import clear_image, finalize_upload, request_upload
 from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
+from app.models.appointments.appointment_type_group import AppointmentTypeGroup
+from app.storage.images import ImageError, ImageNotUploadedError, delete_image
 
 from .schemas import (
     AppointmentTypeQueryArgsSchema,
@@ -33,6 +41,21 @@ def get_owned_appointment_type(appointment_type_id, garage_id):
     return appointment_type
 
 
+def _validate_group(group_id, garage_id):
+    """Reject a group_id that isn't this business's own.
+
+    The FK alone would happily accept another tenant's group id, which would
+    then leak that group's name onto this business's booking page. None is
+    always fine - it means ungrouped.
+    """
+    if group_id is None:
+        return
+
+    exists = AppointmentTypeGroup.query.filter_by(id=group_id, garage_id=garage_id).first()
+    if exists is None:
+        abort(422, message="group_id is not a group for this business.")
+
+
 @appointment_types_blp.route("/")
 class AppointmentTypeList(MethodView):
     @jwt_required()
@@ -49,7 +72,10 @@ class AppointmentTypeList(MethodView):
         if args.get("status") is not None:
             query = query.filter(GarageAppointmentType.status == args["status"])
 
-        return query.order_by(GarageAppointmentType.name).all()
+        # Display order first, name as the tie-break - so a business that has
+        # never reordered anything still gets the alphabetical listing this
+        # endpoint has always returned.
+        return query.order_by(GarageAppointmentType.order, GarageAppointmentType.name).all()
 
     @jwt_required()
     @owner_required
@@ -57,6 +83,7 @@ class AppointmentTypeList(MethodView):
     @appointment_types_blp.response(201, AppointmentTypeSchema)
     def post(self, data):
         garage_id = get_current_employee().garage_id
+        _validate_group(data.get("group_id"), garage_id)
 
         appointment_type = GarageAppointmentType(
             garage_id=garage_id,
@@ -65,6 +92,8 @@ class AppointmentTypeList(MethodView):
             base_price=data.get("base_price"),
             default_duration_minutes=data.get("default_duration_minutes"),
             status=data.get("status") or "ACTIVE",
+            group_id=data.get("group_id"),
+            order=data.get("order") or 0,
         )
 
         db.session.add(appointment_type)
@@ -90,6 +119,9 @@ class AppointmentTypeResource(MethodView):
         garage_id = get_current_employee().garage_id
         appointment_type = get_owned_appointment_type(appointment_type_id, garage_id)
 
+        if "group_id" in data:
+            _validate_group(data["group_id"], garage_id)
+
         for field, value in data.items():
             setattr(appointment_type, field, value)
 
@@ -104,6 +136,12 @@ class AppointmentTypeResource(MethodView):
         garage_id = get_current_employee().garage_id
         appointment_type = get_owned_appointment_type(appointment_type_id, garage_id)
 
+        # Grab the key before the delete: afterwards the row is gone and the
+        # object would be orphaned in the bucket forever. Removing the object
+        # itself waits until the delete has actually committed - a 409 below
+        # must leave the service completely untouched, image included.
+        image_key = appointment_type.image_storage_key
+
         db.session.delete(appointment_type)
 
         try:
@@ -115,4 +153,56 @@ class AppointmentTypeResource(MethodView):
                 message="Cannot delete an appointment type that has appointments booked against it.",
             )
 
+        delete_image(image_key)
+
         return ""
+
+
+@appointment_types_blp.route("/<uuid:appointment_type_id>/image")
+class AppointmentTypeImage(MethodView):
+    @jwt_required()
+    @owner_required
+    @appointment_types_blp.arguments(ImageUploadRequestSchema)
+    @appointment_types_blp.response(201, ImageUploadTicketSchema)
+    def post(self, data, appointment_type_id):
+        """Step 1: a presigned PUT ticket. Writes nothing to the service yet -
+        see app/appointments/images.py for the three-step flow."""
+        garage_id = get_current_employee().garage_id
+        get_owned_appointment_type(appointment_type_id, garage_id)
+
+        try:
+            return request_upload(
+                garage_id,
+                content_type=data["content_type"],
+                size_bytes=data.get("size_bytes"),
+            )
+        except ImageError as exc:
+            abort(422, message=str(exc))
+
+    @jwt_required()
+    @owner_required
+    @appointment_types_blp.arguments(ImageFinalizeSchema)
+    @appointment_types_blp.response(200, AppointmentTypeSchema)
+    def put(self, data, appointment_type_id):
+        """Step 3: confirm the bytes landed and are really an image, then make
+        it the service's live image."""
+        garage_id = get_current_employee().garage_id
+        appointment_type = get_owned_appointment_type(appointment_type_id, garage_id)
+
+        try:
+            return finalize_upload(appointment_type, storage_key=data["storage_key"])
+        except ImageNotUploadedError as exc:
+            abort(409, message=str(exc))
+        except ImageError as exc:
+            abort(422, message=str(exc))
+
+    @jwt_required()
+    @owner_required
+    @appointment_types_blp.response(200, AppointmentTypeSchema)
+    def delete(self, appointment_type_id):
+        garage_id = get_current_employee().garage_id
+        appointment_type = get_owned_appointment_type(appointment_type_id, garage_id)
+
+        clear_image(appointment_type)
+
+        return appointment_type

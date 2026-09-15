@@ -164,3 +164,93 @@ def test_cli_rejects_a_bad_spec(tmp_path, capsys):
 
     rc = main([str(spec_file), "--validate"])
     assert rc == 1
+
+
+# --------------------------------------------------------------------------
+# Service groups in a spec
+# --------------------------------------------------------------------------
+
+GROUPED_SPEC = {
+    **SPEC,
+    "business": {**SPEC["business"], "booking_display_mode": "grid"},
+    "service_groups": [
+        {"name": "Tinting", "description": "Glass work", "display_mode": "GRID"},
+    ],
+    "services": [
+        {"name": "Window tints", "base_price": "120.00", "group": "Tinting"},
+        {"name": "Ceramic coating", "group": "Tinting"},
+        {"name": "Consultation"},
+        {"name": "Paint correction", "group": "Detailing"},
+    ],
+}
+
+
+def test_spec_creates_groups_named_by_services(app, session):
+    """A group exists if any service names it - declaring it in
+    `service_groups` is only how a description or display mode gets set."""
+    from app.models.appointments.appointment_type_group import AppointmentTypeGroup
+
+    result = onboard_business(parse_business_spec(GROUPED_SPEC), temp_password=TEMP_PW)
+
+    groups = (
+        session.query(AppointmentTypeGroup)
+        .filter_by(garage_id=result.garage.id)
+        .order_by(AppointmentTypeGroup.order)
+        .all()
+    )
+    assert [g.name for g in groups] == ["Tinting", "Detailing"]
+    assert groups[0].description == "Glass work"
+    assert groups[0].display_mode == "GRID"
+    # Never declared, only referenced - so it inherits.
+    assert groups[1].display_mode is None
+
+
+def test_spec_assigns_services_to_groups_and_leaves_the_rest_ungrouped(app, session):
+    result = onboard_business(parse_business_spec(GROUPED_SPEC), temp_password=TEMP_PW)
+
+    by_name = {
+        t.name: t
+        for t in session.query(GarageAppointmentType).filter_by(garage_id=result.garage.id).all()
+    }
+    assert by_name["Window tints"].group_id is not None
+    assert by_name["Window tints"].group_id == by_name["Ceramic coating"].group_id
+    assert by_name["Consultation"].group_id is None
+    assert by_name["Paint correction"].group_id != by_name["Window tints"].group_id
+
+
+def test_spec_order_becomes_display_order_within_each_group(app, session):
+    result = onboard_business(parse_business_spec(GROUPED_SPEC), temp_password=TEMP_PW)
+
+    by_name = {
+        t.name: t
+        for t in session.query(GarageAppointmentType).filter_by(garage_id=result.garage.id).all()
+    }
+    assert by_name["Window tints"].order == 0
+    assert by_name["Ceramic coating"].order == 1
+    # Ordering restarts per group, and the ungrouped list is its own sequence.
+    assert by_name["Paint correction"].order == 0
+    assert by_name["Consultation"].order == 0
+
+
+def test_spec_sets_the_business_display_mode(app, session):
+    result = onboard_business(parse_business_spec(GROUPED_SPEC), temp_password=TEMP_PW)
+
+    assert result.garage.booking_display_mode == "GRID"
+
+
+def test_spec_without_groups_leaves_every_service_ungrouped(app, session):
+    result = onboard_business(parse_business_spec(SPEC), temp_password=TEMP_PW)
+
+    services = session.query(GarageAppointmentType).filter_by(garage_id=result.garage.id).all()
+    assert services
+    assert all(s.group_id is None for s in services)
+    assert result.garage.booking_display_mode == "LIST"
+
+
+def test_rejects_an_unknown_display_mode_in_a_spec():
+    with pytest.raises(BusinessSpecError):
+        parse_business_spec({**SPEC, "service_groups": [{"name": "X", "display_mode": "CAROUSEL"}]})
+    with pytest.raises(BusinessSpecError):
+        parse_business_spec(
+            {**SPEC, "business": {**SPEC["business"], "booking_display_mode": "CAROUSEL"}}
+        )
