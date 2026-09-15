@@ -55,6 +55,14 @@ class PublicAppointmentTypeSchema(Schema):
     # mode, but always sent: the mode can differ per group.
     image_url = fields.Method("_get_image_url", dump_only=True)
     included_items = fields.Method("_get_included_items", dump_only=True)
+    # Enough for the wizard to decide whether to show the Deposit step and
+    # what to display there before it calls the deposit-intent endpoint -
+    # the *authoritative* amount is still always recalculated server-side at
+    # that point (see app/payments/service.py::create_deposit_hold).
+    deposit_required = fields.Bool(dump_only=True)
+    deposit_type = fields.Str(dump_only=True, allow_none=True)
+    deposit_value = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    deposit_currency = fields.Str(dump_only=True)
 
     def _get_image_url(self, appointment_type):
         return image_url(appointment_type.image_storage_key)
@@ -241,6 +249,51 @@ class BookingRequestCreatedSchema(Schema):
     # Short customer-facing code (app/booking_requests/reference.py) - shown
     # on the confirmation screen and usable to log in without a password.
     booking_reference = fields.Str(dump_only=True, allow_none=True)
+
+
+class DepositIntentCreatedSchema(Schema):
+    """What the Deposit step needs: enough to render the payment summary,
+    plus a provider-neutral envelope (``provider`` + ``checkout_mode`` +
+    ``provider_data``) the frontend uses to pick and drive the right
+    checkout component (see src/components/customer/payments/). Nothing
+    Stripe-specific appears at the top level - a Stripe client_secret (or a
+    future PayPal approval_url, Square session token, ...) lives only inside
+    ``provider_data``, and our backend never sees card details either way.
+    """
+
+    booking_request_id = fields.UUID(dump_only=True)
+    booking_reference = fields.Str(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)  # BookingRequest status - AWAITING_PAYMENT/PENDING/EXPIRED
+    payment_status = fields.Str(dump_only=True, allow_none=True)  # BookingPayment status
+    currency = fields.Str(dump_only=True, allow_none=True)
+    service_total = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    # Which adapter is handling this payment, and how the frontend should
+    # present it - see app/payments/providers/base.py's CHECKOUT_MODE_*.
+    provider = fields.Str(dump_only=True, allow_none=True)
+    checkout_mode = fields.Str(dump_only=True, allow_none=True)
+    # Only present on creation, never on the status-poll response - a fresh
+    # client_secret (or equivalent) is only ever handed out once. Shape is
+    # provider-specific but always client-safe - see PaymentSessionResult.
+    provider_data = fields.Dict(dump_only=True, allow_none=True)
+    hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
+class DepositStatusSchema(Schema):
+    """The status-poll response - the same shape as DepositIntentCreatedSchema
+    minus the one-time client_secret/publishable_key/provider fields (a
+    fresh client_secret is only ever handed out once, at creation)."""
+
+    booking_request_id = fields.UUID(dump_only=True)
+    booking_reference = fields.Str(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)
+    payment_status = fields.Str(dump_only=True, allow_none=True)
+    currency = fields.Str(dump_only=True, allow_none=True)
+    service_total = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
 
 
 # --- Availability calendar -------------------------------------------------

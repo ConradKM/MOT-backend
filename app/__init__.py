@@ -3,7 +3,7 @@ import os
 import sys
 import uuid
 
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
 
 from .config import Config
@@ -29,6 +29,37 @@ def _configure_logging(app: Flask) -> None:
         root.addHandler(handler)
     root.setLevel(level)
     app.logger.setLevel(level)
+
+
+def _log_validation_errors(app: Flask) -> None:
+    """Log the field-by-field reason behind every 4xx that carries
+    flask-smorest's own ``errors`` body (a raw marshmallow/webargs schema
+    validation failure - an unknown field, an out-of-range value, a bad
+    enum), so a request like ``POST /tenants`` failing with a 422 leaves more
+    in the platform log stream than a bare access-log line with no body.
+
+    Deliberately safe to log broadly: ``errors`` is marshmallow's own
+    {field: [message, ...]} structure - field *names* and canned validation
+    *messages* only, never the submitted values (so nothing a client typed,
+    and therefore nothing secret, ever reaches this log line) and never an
+    application-level ``abort(422, message=...)`` body (those carry
+    `message`, not `errors`, and are a deliberate business decision already
+    visible in the response - not a mystery to diagnose).
+    """
+
+    @app.after_request
+    def _log(response):
+        if 400 <= response.status_code < 500 and response.is_json:
+            body = response.get_json(silent=True)
+            if isinstance(body, dict) and body.get("errors"):
+                app.logger.warning(
+                    "[validation] %s %s -> %s errors=%s",
+                    request.method,
+                    request.path,
+                    response.status_code,
+                    body["errors"],
+                )
+        return response
 
 
 @jwt.token_in_blocklist_loader
@@ -66,7 +97,7 @@ def _token_revoked(_jwt_header, jwt_payload) -> bool:
     from sqlalchemy.orm import joinedload
 
     from .models.employee import Employee
-    from .models.garage import GARAGE_STATUS_SUSPENDED
+    from .models.garage import GARAGE_STATUS_ARCHIVED, GARAGE_STATUS_SUSPENDED
 
     identity = jwt_payload.get("sub")
     try:
@@ -95,7 +126,10 @@ def _token_revoked(_jwt_header, jwt_payload) -> bool:
 
         return impersonation_token_revoked(jwt_payload)
 
-    return employee.garage is not None and employee.garage.status == GARAGE_STATUS_SUSPENDED
+    return employee.garage is not None and employee.garage.status in (
+        GARAGE_STATUS_SUSPENDED,
+        GARAGE_STATUS_ARCHIVED,
+    )
 
 
 def create_app(config_class=Config):
@@ -103,6 +137,7 @@ def create_app(config_class=Config):
     app.config.from_object(config_class)
 
     _configure_logging(app)
+    _log_validation_errors(app)
 
     db.init_app(app)
     migrate.init_app(app, db)
@@ -172,6 +207,7 @@ def create_app(config_class=Config):
     from .health.routes import health_blp
     from .mot_records.routes import mot_records_blp
     from .mot_reminders.routes import mot_reminders_blp
+    from .payments.webhooks import payment_webhooks_blp
     from .platform_admin.routes import PLATFORM_ADMIN_BLUEPRINTS
     from .public_booking.routes import public_booking_blp
     from .roles.routes import roles_blp
@@ -180,6 +216,7 @@ def create_app(config_class=Config):
     api.register_blueprint(health_blp)
     api.register_blueprint(twilio_voice_blp)
     api.register_blueprint(twilio_whatsapp_blp)
+    api.register_blueprint(payment_webhooks_blp)
     api.register_blueprint(auth_blp)
     api.register_blueprint(customer_auth_blp)
     api.register_blueprint(customer_portal_blp)
@@ -251,6 +288,8 @@ def create_app(config_class=Config):
         message_template,
     )
     from .models.conversation import callback_request, conversation_session  # noqa: F401
+    from .models.payments import audit_log as payment_audit_log  # noqa: F401
+    from .models.payments import garage_payment_settings, payment, webhook_event  # noqa: F401
     from .models.platform import (  # noqa: F401
         admin,
         audit_log,

@@ -16,13 +16,14 @@ from flask import Response, current_app, request
 from flask_smorest import Blueprint, abort
 from twilio.twiml.voice_response import VoiceResponse
 
-from app.models.communications.communication_log import CHANNEL_VOICE, DIRECTION_INBOUND
+from app.models.communications.communication_log import DIRECTION_INBOUND
 
 from .config import is_twilio_configured
 from .events import MISSED_CALL, emit_event
+from .providers.twilio import TwilioVoiceProvider
 from .queries import MISSED_CALL_STATUSES
 from .security import validate_twilio_request
-from .service import record_inbound_communication, update_communication_status
+from .service import apply_status_event, record_inbound_event
 from .tenant_resolution import resolve_garage_by_voice_number
 from .voice_relay import build_incoming_call_twiml, conversationrelay_enabled
 
@@ -43,9 +44,9 @@ def incoming_call():
     if not validate_twilio_request(request):
         abort(403, message="Invalid Twilio signature.")
 
-    to_number = request.form.get("To", "")
-    from_number = request.form.get("From", "")
-    call_sid = request.form.get("CallSid")
+    event = TwilioVoiceProvider().normalise_inbound(request.form)
+    to_number = event.to_address
+    call_sid = event.interaction_id
 
     garage = resolve_garage_by_voice_number(to_number)
 
@@ -62,14 +63,7 @@ def incoming_call():
         reply.say("Sorry, this number is not currently in service.")
         return Response(str(reply), mimetype="text/xml")
 
-    record_inbound_communication(
-        garage=garage,
-        channel=CHANNEL_VOICE,
-        from_address=from_number,
-        to_address=to_number,
-        external_id=call_sid,
-        status=request.form.get("CallStatus") or "received",
-    )
+    record_inbound_event(garage, event)
 
     # The automated assistant, when it's switched on for this deployment. Any
     # failure building the TwiML falls through to the escalation/static
@@ -138,14 +132,9 @@ def voice_status():
     if not validate_twilio_request(request):
         abort(403, message="Invalid Twilio signature.")
 
-    duration = request.form.get("CallDuration")
-    status = request.form.get("CallStatus") or "unknown"
-    log = update_communication_status(
-        external_id=request.form.get("CallSid"),
-        status=status,
-        call_duration_seconds=int(duration) if duration and duration.isdigit() else None,
-        error_code=request.form.get("ErrorCode") or None,
-    )
+    event = TwilioVoiceProvider().normalise_status(request.form)
+    status = event.status
+    log = apply_status_event(event)
     # A call that never connected (see queries.py::MISSED_CALL_STATUSES) is
     # exactly what the MISSED_CALL automation rule exists for - only for a
     # call that came IN, never one CoMaz OS itself placed.

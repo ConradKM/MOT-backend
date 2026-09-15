@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 from datetime import timedelta
 
@@ -177,6 +178,12 @@ class Config:
     # fully supported, permanent state for a deployment that hasn't turned on
     # communications yet - see app/communications/config.py::is_twilio_configured.
     # Never hard-code these; never commit real values.
+    VOICE_PROVIDER_DEFAULT = os.getenv("VOICE_PROVIDER_DEFAULT", "twilio")
+    WHATSAPP_PROVIDER_DEFAULT = os.getenv("WHATSAPP_PROVIDER_DEFAULT", "twilio")
+    COMMUNICATIONS_PROVIDER_OVERRIDES = json.loads(
+        os.getenv("COMMUNICATIONS_PROVIDER_OVERRIDES", "{}")
+    )
+
     TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
     TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
     # Optional: a Twilio Standard API Key (SID starts "SK") and its secret.
@@ -284,6 +291,50 @@ class Config:
     # transcription or an unknown acronym doesn't end the conversation.
     CONVERSATION_MAX_UNRESOLVED_TURNS = int(os.getenv("CONVERSATION_MAX_UNRESOLVED_TURNS", "3"))
 
+    # --- Payments / booking deposits (see app/payments) -------------------
+    # The deployment-wide default provider adapter (see
+    # app/payments/providers/get_provider() and app/payments/settings.py) -
+    # used by any garage that hasn't been given its own
+    # GaragePaymentSettings row. Only "stripe" has a real implementation
+    # today; "paypal" and "square" are architecture-only skeletons (see
+    # app/payments/providers/paypal.py, .../square.py) that always report
+    # "not configured" until someone actually builds them. The provider
+    # abstraction (app/payments/providers/base.py) is what lets a business
+    # choose a different one - or a new provider be added entirely -
+    # without touching booking/webhook/refund routes. Deposits are
+    # configured per Appointment Type (deposit_required), independent of
+    # whether a provider is actually wired up - see
+    # is_payments_configured() (app/payments/config.py) for the crash-free
+    # "not yet" state.
+    PAYMENTS_PROVIDER = os.getenv("PAYMENTS_PROVIDER", "stripe")
+    # Never hard-code these; never commit real values. Test-mode (sk_test_.../
+    # pk_test_.../whsec_...) keys are fine to run against in a dev deployment -
+    # they are not secrets in the production sense, but still shouldn't be
+    # committed. See docs/PAYMENTS_SETUP.md for where real ones come from.
+    STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+    STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    # Reserved for when app/payments/providers/paypal.py gets a real
+    # implementation - unused today (the adapter is a skeleton that never
+    # reads these). Named now so a future PR only has to fill in the
+    # adapter, not invent the config surface.
+    PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")
+    PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET", "")
+    PAYPAL_WEBHOOK_ID = os.getenv("PAYPAL_WEBHOOK_ID", "")
+    # Reserved for app/payments/providers/square.py - see the PayPal note above.
+    SQUARE_ACCESS_TOKEN = os.getenv("SQUARE_ACCESS_TOKEN", "")
+    SQUARE_APPLICATION_ID = os.getenv("SQUARE_APPLICATION_ID", "")
+    SQUARE_WEBHOOK_SIGNATURE_KEY = os.getenv("SQUARE_WEBHOOK_SIGNATURE_KEY", "")
+    # How long a deposit payment hold reserves the slot (AWAITING_PAYMENT
+    # booking-request status - app/payments/service.py) before it's swept back
+    # to EXPIRED and the provider session is cancelled. Long enough for a
+    # customer to complete a card challenge, short enough that an abandoned
+    # payment doesn't block the slot for other customers.
+    PAYMENT_HOLD_MINUTES = int(os.getenv("PAYMENT_HOLD_MINUTES", "15"))
+    # Deposits are GBP-only for now (see app/payments/money.py); kept as a
+    # constant, not an env var, since changing it needs code changes anyway.
+    DEPOSIT_CURRENCY = "GBP"
+
 
 class TestConfig(Config):
     """Config for the automated test suite. Always targets a dedicated
@@ -334,3 +385,10 @@ class TestConfig(Config):
     # repository's secret scanner sees a 32-byte string that says what it is
     # instead of a high-entropy literal indistinguishable from a real key.
     COMMS_SECRET_KEY = base64.urlsafe_b64encode(b"comaz-test-key-not-a-real-secret").decode()
+
+    # The test suite runs the full deposit flow (intent -> webhook -> refund)
+    # against an in-process fake provider (app/payments/providers/fake.py),
+    # never the real Stripe SDK/network - no test-mode account needed to run
+    # CI. A short hold so expiry tests don't need to fake-sleep long.
+    PAYMENTS_PROVIDER = "fake"
+    PAYMENT_HOLD_MINUTES = 15

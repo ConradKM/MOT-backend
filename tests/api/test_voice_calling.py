@@ -237,3 +237,30 @@ def test_overview_outbound_calling_unsupported_without_a_twiml_app(
 
     caps = authenticated_client.get("/api/communications/overview").get_json()["capabilities"]
     assert caps["outbound_calling_supported"] is False
+
+
+def test_sip_selection_disables_browser_without_disabling_whatsapp(
+    app, session, garage, authenticated_client, monkeypatch
+):
+    _configure(app, monkeypatch)
+    _voice_number(session, garage)
+    monkeypatch.setitem(
+        app.config, "COMMUNICATIONS_PROVIDER_OVERRIDES", {str(garage.id): {"voice": "sip"}}
+    )
+    response = authenticated_client.get("/api/communications/voice/token")
+    assert response.status_code == 503
+    caps = authenticated_client.get("/api/communications/overview").get_json()["capabilities"]
+    assert caps["outbound_calling_supported"] is False
+    from app.communications.providers import get_messaging_provider
+
+    assert get_messaging_provider(garage).name == "twilio"
+
+
+def test_browser_token_identifies_twilio_provider(
+    app, session, garage, authenticated_client, monkeypatch
+):
+    _configure(app, monkeypatch)
+    _voice_number(session, garage)
+    response = authenticated_client.get("/api/communications/voice/token")
+    assert response.status_code == 200
+    assert response.get_json()["provider"] == "twilio"

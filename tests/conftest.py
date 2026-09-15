@@ -104,6 +104,20 @@ def app(_flask_app):
     ctx.pop()
 
 
+@pytest.fixture(autouse=True)
+def _reset_fake_payment_provider():
+    """The fake payment provider (app/payments/providers/fake.py, what
+    TestConfig.PAYMENTS_PROVIDER selects) keeps its in-memory intents at
+    class scope so it survives across requests within one test - reset it
+    between tests so one test's payment intents can never leak into
+    another's."""
+    from app.payments.providers.fake import FakePaymentProvider
+
+    FakePaymentProvider.reset()
+    yield
+    FakePaymentProvider.reset()
+
+
 @pytest.fixture()
 def client(app):
     return app.test_client()

@@ -84,6 +84,7 @@ class TenantSchema(Schema):
     status = fields.Str(dump_only=True)
     status_changed_at = fields.DateTime(dump_only=True, allow_none=True)
     suspension_reason = fields.Str(dump_only=True, allow_none=True)
+    archive_reason = fields.Str(dump_only=True, allow_none=True)
     plan = fields.Str(dump_only=True)
     trial_ends_at = fields.DateTime(dump_only=True, allow_none=True)
     internal_notes = fields.Str(dump_only=True, allow_none=True)
@@ -221,6 +222,18 @@ class TenantSuspendSchema(Schema):
 
 class TenantReactivateSchema(Schema):
     status = fields.Str(load_default="ACTIVE", validate=validate.OneOf(("ACTIVE", "TRIAL")))
+
+
+class TenantArchiveSchema(Schema):
+    reason = fields.Str(required=True, validate=validate.Length(min=1, max=2000))
+
+
+class TenantUnarchiveSchema(Schema):
+    status = fields.Str(load_default="ACTIVE", validate=validate.OneOf(("ACTIVE", "TRIAL")))
+
+
+class TenantDeleteSchema(Schema):
+    confirm = fields.Str(required=True, validate=validate.Length(min=1, max=200))
 
 
 # --------------------------------------------------------------------------

@@ -35,14 +35,18 @@ from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.garage import (
     GARAGE_STATUS_ACTIVE,
+    GARAGE_STATUS_ARCHIVED,
     GARAGE_STATUS_SUSPENDED,
     GARAGE_STATUSES,
     Garage,
 )
 from app.models.platform.audit_log import (
+    ACTION_TENANT_ARCHIVE,
+    ACTION_TENANT_DELETE,
     ACTION_TENANT_PLAN_CHANGE,
     ACTION_TENANT_REACTIVATE,
     ACTION_TENANT_SUSPEND,
+    ACTION_TENANT_UNARCHIVE,
     ACTION_TENANT_UPDATE,
 )
 from app.models.role import Role, employee_roles
@@ -429,3 +433,84 @@ def reactivate_tenant(*, admin, garage: Garage, status: str = GARAGE_STATUS_ACTI
     )
     db.session.commit()
     return garage
+
+
+def archive_tenant(*, admin, garage: Garage, reason: str) -> Garage:
+    """Archive a tenant: taken out of active use, staff lose access, nothing
+    is deleted. Distinct from suspension, which is meant to be short-lived -
+    archiving is where a business goes once it has churned. Reversible with
+    :func:`unarchive_tenant`.
+    """
+    reason = (reason or "").strip()
+    if not reason:
+        raise TenantError("An archive reason is required.")
+    if garage.status == GARAGE_STATUS_ARCHIVED:
+        raise TenantError("This tenant is already archived.")
+
+    previous = garage.status
+    garage.status = GARAGE_STATUS_ARCHIVED
+    garage.status_changed_at = _utcnow()
+    garage.archive_reason = reason
+
+    record_audit(
+        admin=admin,
+        action=ACTION_TENANT_ARCHIVE,
+        garage=garage,
+        summary=f"Archived {garage.name}",
+        details={"reason": reason, "previous_status": previous},
+    )
+    db.session.commit()
+    return garage
+
+
+def unarchive_tenant(*, admin, garage: Garage, status: str = GARAGE_STATUS_ACTIVE) -> Garage:
+    """Lift an archive, back to ACTIVE (or TRIAL)."""
+    if status == GARAGE_STATUS_ARCHIVED or status not in GARAGE_STATUSES:
+        raise TenantError(f"Unarchive expects ACTIVE or TRIAL, got {status!r}.")
+    if garage.status != GARAGE_STATUS_ARCHIVED:
+        raise TenantError("This tenant is not archived.")
+
+    garage.status = status
+    garage.status_changed_at = _utcnow()
+    previous_reason = garage.archive_reason
+    garage.archive_reason = None
+
+    record_audit(
+        admin=admin,
+        action=ACTION_TENANT_UNARCHIVE,
+        garage=garage,
+        summary=f"Unarchived {garage.name} as {status}",
+        details={"status": status, "previous_archive_reason": previous_reason},
+    )
+    db.session.commit()
+    return garage
+
+
+def delete_tenant(*, admin, garage: Garage, confirm: str) -> None:
+    """Permanently delete a tenant and everything it owns. Irreversible.
+
+    Only reachable once a tenant is already SUSPENDED or ARCHIVED - a live
+    business cannot be deleted out from under its own staff in one click -
+    and only when ``confirm`` matches the business's exact current name, so
+    a superadmin cannot fat-finger the wrong row from a list view.
+
+    The audit row survives the delete: ``record_audit`` snapshots the name
+    onto ``garage_name`` (a plain column, not a foreign key), and
+    ``platform_audit_logs.garage_id`` itself is ON DELETE SET NULL - deleting
+    a tenant never deletes its own history of having existed. Every other
+    table the tenant owns is ON DELETE CASCADE at the database level.
+    """
+    if garage.status not in (GARAGE_STATUS_SUSPENDED, GARAGE_STATUS_ARCHIVED):
+        raise TenantError("Suspend or archive this tenant before deleting it.")
+    if (confirm or "").strip() != garage.name:
+        raise TenantError("Confirmation text does not match this business's name.")
+
+    record_audit(
+        admin=admin,
+        action=ACTION_TENANT_DELETE,
+        garage=garage,
+        summary=f"Permanently deleted {garage.name}",
+        details={"name": garage.name, "slug": garage.slug, "previous_status": garage.status},
+    )
+    db.session.delete(garage)
+    db.session.commit()

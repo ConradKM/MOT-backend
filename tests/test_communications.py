@@ -234,7 +234,8 @@ def test_send_whatsapp_success_records_log(app, comms_settings, garage, monkeypa
         messages=_FakeMessages(result=SimpleNamespace(sid="SM123", status="queued"))
     )
     monkeypatch.setattr(
-        "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
+        "app.communications.providers.twilio.get_twilio_client_for_garage",
+        lambda garage: fake_client,
     )
 
     log = send_whatsapp_message(garage=garage, to="07123456789", body="Hi there")
@@ -262,7 +263,8 @@ def test_send_whatsapp_prefers_messaging_service_sid_when_set(
         messages=_FakeMessages(result=SimpleNamespace(sid="SM124", status="queued"))
     )
     monkeypatch.setattr(
-        "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
+        "app.communications.providers.twilio.get_twilio_client_for_garage",
+        lambda garage: fake_client,
     )
 
     send_whatsapp_message(garage=garage, to="07123456789", body="Hi")
@@ -277,7 +279,8 @@ def test_send_whatsapp_records_twilio_failure(app, comms_settings, garage, monke
     exc = TwilioRestException(status=400, uri="/Messages", msg="Invalid number", code=21211)
     fake_client = SimpleNamespace(messages=_FakeMessages(exc=exc))
     monkeypatch.setattr(
-        "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
+        "app.communications.providers.twilio.get_twilio_client_for_garage",
+        lambda garage: fake_client,
     )
 
     log = send_whatsapp_message(garage=garage, to="07123456789", body="Hi")
@@ -296,7 +299,7 @@ def test_send_whatsapp_failure_with_unknown_code_still_stores_a_readable_message
     _configure_twilio(app, monkeypatch)
     exc = TwilioRestException(status=500, uri="/Messages", msg="", code=64999)
     monkeypatch.setattr(
-        "app.communications.service.get_twilio_client_for_garage",
+        "app.communications.providers.twilio.get_twilio_client_for_garage",
         lambda garage: SimpleNamespace(messages=_FakeMessages(exc=exc)),
     )
 
@@ -316,7 +319,8 @@ def test_send_whatsapp_adds_status_callback_when_deployment_has_a_public_https_o
         messages=_FakeMessages(result=SimpleNamespace(sid="SM900", status="queued"))
     )
     monkeypatch.setattr(
-        "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
+        "app.communications.providers.twilio.get_twilio_client_for_garage",
+        lambda garage: fake_client,
     )
 
     send_whatsapp_message(garage=garage, to="07123456789", body="Hi")
@@ -336,7 +340,8 @@ def test_send_whatsapp_omits_status_callback_on_a_local_origin(
         messages=_FakeMessages(result=SimpleNamespace(sid="SM901", status="queued"))
     )
     monkeypatch.setattr(
-        "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
+        "app.communications.providers.twilio.get_twilio_client_for_garage",
+        lambda garage: fake_client,
     )
 
     send_whatsapp_message(garage=garage, to="07123456789", body="Hi")
@@ -363,7 +368,8 @@ def test_initiate_voice_call_success_records_log(app, comms_settings, garage, mo
         calls=_FakeCalls(result=SimpleNamespace(sid="CA123", status="queued"))
     )
     monkeypatch.setattr(
-        "app.communications.service.get_twilio_client_for_garage", lambda garage: fake_client
+        "app.communications.providers.twilio.get_twilio_client_for_garage",
+        lambda garage: fake_client,
     )
 
     log = initiate_voice_call(

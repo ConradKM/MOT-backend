@@ -24,7 +24,7 @@ The image columns are references, never blobs - the bytes live in object
 storage and only ever arrive through app/storage/images.py's presigned flow.
 
 Revision ID: 6752d8b37573
-Revises: a1f3c9d02b77
+Revises: 9b4e7f21c6a3
 Create Date: 2026-09-15 10:58:08.267182
 
 """
@@ -34,7 +34,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "6752d8b37573"
-down_revision = "a1f3c9d02b77"
+down_revision = "9b4e7f21c6a3"
 branch_labels = None
 depends_on = None
 

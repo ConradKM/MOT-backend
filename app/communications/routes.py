@@ -35,6 +35,7 @@ from app.models.employee import Employee
 from app.phone import InvalidPhoneNumberError, normalize_uk_mobile, normalize_uk_phone
 
 from . import queries
+from .providers import get_voice_provider, provider_name
 from .schemas import (
     AttentionQueueResponseSchema,
     AutomationSettingsSchema,
@@ -65,8 +66,6 @@ from .schemas import (
 from .security import validate_twilio_request
 from .service import find_customer_by_phone, send_whatsapp_message
 from .voice_calling import (
-    browser_calling_configured,
-    build_voice_access_token,
     parse_client_identity,
 )
 
@@ -200,14 +199,16 @@ class VoiceToken(MethodView):
         browser calls for their own business. Never returns the Auth Token,
         the API Key secret, or any permanent credential."""
         employee = get_current_employee()
-        if not browser_calling_configured():
+        provider = get_voice_provider(employee.garage)
+        if not (provider.capabilities.browser_calling and provider.browser_calling_configured()):
             abort(503, message="Browser calling is not configured for this deployment.")
         settings = employee.garage.communication_settings
         if not (settings and settings.voice_phone_number):
             abort(409, message="This business has no outbound voice number configured.")
-        token, identity = build_voice_access_token(employee.garage, employee)
+        token, identity = provider.generate_client_token(employee.garage, employee)
         return {
             "token": token,
+            "provider": provider.name,
             "identity": identity,
             "expires_in": int(current_app.config.get("TWILIO_VOICE_TOKEN_TTL", 3600)),
             "caller_id": settings.voice_phone_number,
@@ -242,7 +243,7 @@ def voice_outbound():
 
     garage = employee.garage
     settings = garage.communication_settings
-    if not (settings and settings.voice_phone_number):
+    if provider_name(garage, "voice") != "twilio" or not (settings and settings.voice_phone_number):
         reply.say("This business is not set up for outbound calling.")
         return Response(str(reply), mimetype="text/xml")
 

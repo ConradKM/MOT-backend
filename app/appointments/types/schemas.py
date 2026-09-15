@@ -1,6 +1,6 @@
 from marshmallow import Schema, fields, validate
 
-from app.models.appointments.appointment_type import APPOINTMENT_TYPE_STATUSES
+from app.models.appointments.appointment_type import APPOINTMENT_TYPE_STATUSES, DEPOSIT_TYPES
 
 
 class AppointmentTypeSchema(Schema):
@@ -22,6 +22,16 @@ class AppointmentTypeSchema(Schema):
     image_content_type = fields.Str(dump_only=True, allow_none=True)
     image_uploaded_at = fields.DateTime(dump_only=True, allow_none=True)
 
+    # --- deposit configuration (see app/payments/money.py for the actual
+    # cross-field rules - enforced in the route, not here, so a PATCH's
+    # partial body can be validated against the row's *existing* values too).
+    deposit_required = fields.Bool(load_default=False)
+    deposit_type = fields.Str(
+        allow_none=True, load_default=None, validate=validate.OneOf(DEPOSIT_TYPES)
+    )
+    deposit_value = fields.Decimal(allow_none=True, load_default=None, as_string=True, places=2)
+    deposit_currency = fields.Str(load_default="GBP", validate=validate.Equal("GBP"))
+
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
@@ -39,6 +49,11 @@ class AppointmentTypeUpdateSchema(Schema):
     default_duration_minutes = fields.Int(allow_none=True, validate=validate.Range(min=1))
     group_id = fields.UUID(allow_none=True)
     order = fields.Int(validate=validate.Range(min=0))
+
+    deposit_required = fields.Bool()
+    deposit_type = fields.Str(allow_none=True, validate=validate.OneOf(DEPOSIT_TYPES))
+    deposit_value = fields.Decimal(allow_none=True, as_string=True, places=2)
+    deposit_currency = fields.Str(validate=validate.Equal("GBP"))
 
 
 class AppointmentTypeQueryArgsSchema(Schema):

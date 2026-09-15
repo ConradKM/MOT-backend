@@ -1,5 +1,7 @@
 from marshmallow import Schema, fields, validate
 
+from app.garages.logo import logo_public_url
+
 
 class GarageSchema(Schema):
     id = fields.UUID(dump_only=True)
@@ -18,9 +20,17 @@ class GarageSchema(Schema):
     address = fields.Str(dump_only=True, allow_none=True)
     postcode = fields.Str(dump_only=True, allow_none=True)
     website = fields.Str(dump_only=True, allow_none=True)
+    # Read-only here too: the logo is managed from Platform Admin
+    # (app/platform_admin/routes/tenants.py), same as every other field on
+    # this schema - this just lets the garage's own app (its header) show
+    # what Platform Admin set. A fresh presigned url each request, or null.
+    logo_url = fields.Method("_get_logo_url", dump_only=True)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
+
+    def _get_logo_url(self, obj):
+        return logo_public_url(obj)
 
 
 class GarageDetailsUpdateSchema(Schema):

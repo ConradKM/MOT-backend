@@ -16,12 +16,12 @@ from app.conversation import automation, engine
 from app.models.communications.communication_log import CHANNEL_WHATSAPP
 
 from .config import is_twilio_configured
-from .delivery_status import describe_delivery_failure
+from .providers.twilio import TwilioMessagingProvider
 from .security import validate_twilio_request
 from .service import (
+    apply_status_event,
     find_customer_by_phone,
-    record_inbound_communication,
-    update_communication_status,
+    record_inbound_event,
 )
 from .tenant_resolution import resolve_garage_by_whatsapp_sender
 
@@ -43,10 +43,11 @@ def incoming_whatsapp():
     if not validate_twilio_request(request):
         abort(403, message="Invalid Twilio signature.")
 
-    to_number = request.form.get("To", "")
-    from_number = request.form.get("From", "")
-    message_sid = request.form.get("MessageSid")
-    body = request.form.get("Body", "")
+    event = TwilioMessagingProvider().normalise_inbound(request.form)
+    to_number = event.to_address
+    from_number = event.from_address
+    message_sid = event.interaction_id
+    body = event.body
 
     garage = resolve_garage_by_whatsapp_sender(to_number)
 
@@ -77,16 +78,7 @@ def incoming_whatsapp():
         return Response(str(reply), mimetype="text/xml")
 
     customer = find_customer_by_phone(garage, phone_e164)
-    record_inbound_communication(
-        garage=garage,
-        channel=CHANNEL_WHATSAPP,
-        from_address=from_number,
-        to_address=to_number,
-        external_id=message_sid,
-        status="received",
-        body=body,
-        customer=customer,
-    )
+    record_inbound_event(garage, event, customer=customer)
 
     # Off by default (TWILIO_WHATSAPP_AUTO_ACK) - deliberately isolated from
     # the logging above so turning it on/off never changes what gets recorded.
@@ -109,19 +101,5 @@ def whatsapp_status():
     if not validate_twilio_request(request):
         abort(403, message="Invalid Twilio signature.")
 
-    message_status = request.form.get("MessageStatus") or "unknown"
-    error_code = request.form.get("ErrorCode") or None
-    # Prefer our business-facing explanation for a known code; otherwise keep
-    # Twilio's own ErrorMessage if it sent one, so the row never ends up with
-    # a code and no readable reason.
-    error_message = describe_delivery_failure(error_code, message_status) or (
-        request.form.get("ErrorMessage") or None
-    )
-
-    update_communication_status(
-        external_id=request.form.get("MessageSid"),
-        status=message_status,
-        error_code=error_code,
-        error_message=error_message,
-    )
+    apply_status_event(TwilioMessagingProvider().normalise_status(request.form))
     return ("", 204)

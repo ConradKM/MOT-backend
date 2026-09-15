@@ -3,8 +3,9 @@
 Everything the customer-facing calendar shows is computed here from real data:
 the garage's ``garage_schedule_settings`` / ``garage_opening_hours`` /
 ``garage_schedule_exceptions`` rows (or the in-code defaults when a garage has
-none), its live non-cancelled ``appointments``, and its still-PENDING
-``booking_requests``. Nothing is mocked or hard-coded.
+none), its live non-cancelled ``appointments``, and its still-PENDING or
+AWAITING_PAYMENT ``booking_requests`` (the latter is a deposit payment hold -
+see app/payments/service.py). Nothing is mocked or hard-coded.
 
 Timezone note: like the rest of the codebase (see
 app/appointments/routes.py::_day_bounds and
@@ -135,7 +136,10 @@ def _load_day_usage(garage_id, day: date):
     ).all()
     pending = BookingRequest.query.filter(
         BookingRequest.garage_id == garage_id,
-        BookingRequest.status == "PENDING",
+        # AWAITING_PAYMENT reserves the slot exactly like PENDING while a
+        # deposit is being paid (see app/payments/service.py) - counted here
+        # too so a second customer can't take the slot mid-payment.
+        BookingRequest.status.in_(("PENDING", "AWAITING_PAYMENT")),
         BookingRequest.preferred_date == day,
         BookingRequest.preferred_time.isnot(None),
     ).all()
