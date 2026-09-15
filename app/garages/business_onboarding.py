@@ -34,6 +34,7 @@ from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.booking_flow.presets import PRESETS, apply_preset
 from app.employees.service import email_format_error, password_policy_error
 from app.extensions import db
 from app.garages.layouts import validate_layout_variant
@@ -124,6 +125,10 @@ class BusinessSpec:
     # How the booking page presents this business's services when a group
     # doesn't override it. None keeps the model default (LIST).
     booking_display_mode: str | None = None
+    # Which starting workflow to seed (app/booking_flow/presets.py). A
+    # preset is only ever seed data - once applied it is ordinary,
+    # editable configuration and nothing reads the preset again.
+    booking_workflow_preset: str | None = None
     # weekday index 0-6 -> ("HH:MM", "HH:MM") open range, or None = closed.
     # `None` for the whole mapping = keep the seeded default hours.
     opening_hours: dict[int, tuple[str, str] | None] | None = None
@@ -299,6 +304,18 @@ def _parse_display_mode(raw: Any) -> str | None:
     return value
 
 
+def _parse_preset(raw: Any) -> str | None:
+    value = _str_or_none(raw)
+    if value is None:
+        return None
+    value = value.lower()
+    if value not in PRESETS:
+        raise BusinessSpecError(
+            f"business.booking_workflow_preset: {value!r} not in {sorted(PRESETS)}."
+        )
+    return value
+
+
 def _parse_service_group(raw: Any, i: int) -> ServiceGroupSpec:
     if not isinstance(raw, dict) or not _str_or_none(raw.get("name")):
         raise BusinessSpecError(f"service_groups[{i}]: needs a non-empty 'name'.")
@@ -358,6 +375,7 @@ def parse_business_spec(raw: Any) -> BusinessSpec:
             _parse_service_group(g, i) for i, g in enumerate(raw.get("service_groups", []) or [])
         ],
         booking_display_mode=_parse_display_mode(business.get("booking_display_mode")),
+        booking_workflow_preset=_parse_preset(business.get("booking_workflow_preset")),
         opening_hours=_parse_opening_hours(raw.get("opening_hours")),
         booking_settings=_parse_booking_settings(raw.get("booking_settings")),
         plan=(_str_or_none(business.get("plan")) or "").upper() or None,
@@ -636,6 +654,11 @@ def onboard_business(
     services = _apply_services(result.garage, spec.services, session, groups)
     if spec.booking_display_mode is not None:
         result.garage.booking_display_mode = spec.booking_display_mode
+    # Seeded only when the spec asks for it - a business with no preset
+    # starts with just the built-in 'Your details' section and builds its
+    # own form, which is a perfectly valid starting point.
+    if spec.booking_workflow_preset is not None:
+        apply_preset(result.garage.id, spec.booking_workflow_preset, session)
     used_default_hours = spec.opening_hours is None
     if spec.opening_hours is not None:
         _apply_opening_hours(result.garage, spec.opening_hours, session)

@@ -109,6 +109,51 @@ class PublicGarageDetailSchema(Schema):
     appointment_types = fields.List(fields.Nested(PublicAppointmentTypeSchema), dump_only=True)
 
 
+class PublicBookingFlowFieldSchema(Schema):
+    """One question, as the booking page needs to render and validate it.
+
+    `binds_to` is deliberately absent: which internal record an answer also
+    populates is the business's concern, never the customer's, and exposing it
+    would leak the shape of the business's own data onto a public page.
+    """
+
+    id = fields.UUID(dump_only=True)
+    label = fields.Str(dump_only=True)
+    help_text = fields.Str(dump_only=True, allow_none=True)
+    placeholder = fields.Str(dump_only=True, allow_none=True)
+    field_type = fields.Str(dump_only=True)
+    is_required = fields.Bool(dump_only=True)
+    options = fields.List(fields.Str(), dump_only=True)
+    min_value = fields.Int(dump_only=True, allow_none=True)
+    max_value = fields.Int(dump_only=True, allow_none=True)
+    max_length = fields.Int(dump_only=True, allow_none=True)
+
+
+class PublicBookingFlowSectionSchema(Schema):
+    id = fields.UUID(dump_only=True)
+    title = fields.Str(dump_only=True)
+    description = fields.Str(dump_only=True, allow_none=True)
+    fields_ = fields.List(
+        fields.Nested(PublicBookingFlowFieldSchema),
+        dump_only=True,
+        data_key="fields",
+        attribute="fields",
+    )
+
+
+class PublicBookingFlowSchema(Schema):
+    """The configured part of the booking form for one service.
+
+    The built-in "Your details" section is not in here - the booking page
+    renders it directly, because the platform needs name/email/mobile to
+    create the account and issue a booking reference, so it is not something a
+    business can configure away.
+    """
+
+    appointment_type_id = fields.UUID(dump_only=True, allow_none=True)
+    sections = fields.List(fields.Nested(PublicBookingFlowSectionSchema), dump_only=True)
+
+
 _CURRENT_YEAR = datetime.now(UTC).year
 
 
@@ -124,7 +169,14 @@ class BookingRequestCreateSchema(Schema):
     # app/phone.py). Normalised to E.164 for storage.
     customer_phone = UKMobileField(required=True, validate=validate.Length(max=40))
 
-    vehicle_registration = fields.Str(required=True, validate=validate.Length(min=1, max=20))
+    # No longer required: what the business collects about the thing being
+    # booked in is configured per business (see app/booking_flow/), and a
+    # business that tracks nothing collects none of this. These keys remain
+    # for the pre-workflow client, which still posts them; a bound field's
+    # answer wins wherever both are present.
+    vehicle_registration = fields.Str(
+        allow_none=True, load_default=None, validate=validate.Length(max=20)
+    )
     vehicle_make = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
     vehicle_model = fields.Str(
         allow_none=True, load_default=None, validate=validate.Length(max=100)
@@ -144,6 +196,12 @@ class BookingRequestCreateSchema(Schema):
     )
     notes = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=2000))
 
+    # What the customer answered to this business's own configured questions.
+    # Validated in the route against the workflow that actually applies to the
+    # chosen service - nothing about them can be checked here, since which
+    # fields exist depends on the business and the service.
+    answers = fields.List(fields.Nested(lambda: AnswerSubmitSchema()), load_default=list)
+
     # Verified in the route (needs app context / config), not here.
     captcha_token = fields.Str(load_default="", load_only=True)
 
@@ -159,6 +217,22 @@ class BookingRequestCreateSchema(Schema):
         # UTC to match the availability engine (app/public_booking/availability).
         if value < datetime.now(UTC).date():
             raise ValidationError("Preferred date cannot be in the past.")
+
+
+class AnswerSubmitSchema(Schema):
+    """One answer to one configured field.
+
+    `value` for a scalar field, `values` for a MULTI_SELECT. Which of the two
+    is read is decided by the *field's* type, never by which key the client
+    happened to send - see app/booking_flow/answers.py.
+    """
+
+    class Meta:
+        unknown = EXCLUDE
+
+    field_id = fields.UUID(required=True)
+    value = fields.Raw(allow_none=True, load_default=None)
+    values = fields.List(fields.Str(), load_default=list)
 
 
 class BookingRequestCreatedSchema(Schema):
@@ -184,6 +258,15 @@ class AvailabilityQueryArgsSchema(Schema):
     # practice it is always sent - without it each day's level is computed at
     # the business's generic slot length and can advertise availability that a
     # longer service cannot actually use (see availability.py::day_summary).
+    appointment_type_id = fields.UUID(load_default=None)
+
+
+class BookingFlowQueryArgsSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    # Which service's questions to return. Omitted before the customer has
+    # chosen one, which resolves to the business's default workflow.
     appointment_type_id = fields.UUID(load_default=None)
 
 

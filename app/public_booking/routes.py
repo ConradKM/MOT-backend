@@ -4,6 +4,14 @@ from flask import current_app
 from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
+from app.booking_flow.answers import (
+    AnswerError,
+    bound_values,
+    persist_answers,
+    tracked_item_kwargs,
+    validate_answers,
+)
+from app.booking_flow.resolve import resolve_sections
 from app.booking_requests.reference import unique_booking_reference
 from app.booking_requests.service import resolve_customer_and_vehicle
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
@@ -19,10 +27,12 @@ from .captcha import verify_captcha
 from .schemas import (
     AvailabilityQueryArgsSchema,
     AvailabilityRangeSchema,
+    BookingFlowQueryArgsSchema,
     BookingRequestCreatedSchema,
     BookingRequestCreateSchema,
     DayAvailabilityQueryArgsSchema,
     DaySlotsSchema,
+    PublicBookingFlowSchema,
     PublicGarageDetailSchema,
 )
 
@@ -178,8 +188,34 @@ class BookingRequestSubmit(MethodView):
                     ),
                 )
 
-        # Create (or match, by email) the customer's account + vehicle right
-        # away, rather than waiting for staff to approve the request - see
+        # Validate the business's own configured questions before anything
+        # is created. The client renders the form from this same
+        # configuration, but that is a convenience: a direct POST must not be
+        # able to skip a required field or invent one. Raises a 422 with
+        # per-field messages.
+        try:
+            resolved_answers = validate_answers(
+                garage.id, appointment_type_id, data.get("answers") or []
+            )
+        except AnswerError as exc:
+            # Reported in the same shape flask-smorest uses for schema-level
+            # failures, so the client has one error format to handle rather
+            # than two. Keyed by field id, which is what the form renders from.
+            abort(
+                422, message="Please check the highlighted answers.", errors={"json": exc.messages}
+            )
+        item = tracked_item_kwargs(bound_values(resolved_answers))
+
+        # A business that tracks the thing it books in binds a field to the
+        # item's reference (see app/models/booking_flow/field.py); one that
+        # tracks nothing collects none and `item` is empty. The top-level
+        # vehicle_* keys are the pre-workflow client's shape, still accepted
+        # so it keeps working - a binding wins wherever both are present.
+        reference = item.get("reference") or data.get("vehicle_registration")
+
+        # Create (or match, by email) the customer's account - and the tracked
+        # item, when there is one - right away, rather than waiting for staff
+        # to approve the request; see
         # app/booking_requests/service.py::resolve_customer_and_vehicle. The
         # appointment itself still isn't created until a staff member
         # approves and assigns it a slot/employee (see
@@ -191,11 +227,11 @@ class BookingRequestSubmit(MethodView):
             first_name=data["customer_first_name"],
             last_name=data["customer_last_name"],
             phone=data.get("customer_phone"),
-            vehicle_registration=data["vehicle_registration"],
-            vehicle_make=data.get("vehicle_make"),
-            vehicle_model=data.get("vehicle_model"),
-            vehicle_year=data.get("vehicle_year"),
-            vehicle_mileage=data.get("vehicle_mileage"),
+            vehicle_registration=reference,
+            vehicle_make=item.get("make") or data.get("vehicle_make"),
+            vehicle_model=item.get("model") or data.get("vehicle_model"),
+            vehicle_year=item.get("year") or data.get("vehicle_year"),
+            vehicle_mileage=item.get("usage") or data.get("vehicle_mileage"),
         )
 
         booking_request = BookingRequest(
@@ -203,16 +239,20 @@ class BookingRequestSubmit(MethodView):
             status="PENDING",
             booking_reference=unique_booking_reference(db.session),
             customer_id=customer.id,
-            vehicle_id=vehicle.id,
+            vehicle_id=None if vehicle is None else vehicle.id,
             customer_first_name=data["customer_first_name"],
             customer_last_name=data["customer_last_name"],
             customer_email=data["customer_email"],
             customer_phone=data.get("customer_phone"),
-            vehicle_registration=data["vehicle_registration"],
-            vehicle_make=data.get("vehicle_make"),
-            vehicle_model=data.get("vehicle_model"),
-            vehicle_year=data.get("vehicle_year"),
-            vehicle_mileage=data.get("vehicle_mileage"),
+            # Denormalised onto the request as well as the item record, so the
+            # staff review screen reads what was actually submitted even if
+            # the item is later edited. All None for a business that tracks
+            # no item.
+            vehicle_registration=reference,
+            vehicle_make=item.get("make") or data.get("vehicle_make"),
+            vehicle_model=item.get("model") or data.get("vehicle_model"),
+            vehicle_year=item.get("year") or data.get("vehicle_year"),
+            vehicle_mileage=item.get("usage") or data.get("vehicle_mileage"),
             appointment_type_id=appointment_type_id,
             # Snapshot what the customer actually saw/chose, so staff review
             # (and history, if the type is edited or removed later) reflects
@@ -228,8 +268,34 @@ class BookingRequestSubmit(MethodView):
         )
 
         db.session.add(booking_request)
+        db.session.flush()
+        persist_answers(booking_request, resolved_answers)
         db.session.commit()
 
         emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
 
         return booking_request
+
+
+@public_booking_blp.route("/<slug>/booking-flow")
+class PublicBookingFlow(MethodView):
+    @limiter.limit(lambda: current_app.config["PUBLIC_AVAILABILITY_RATELIMIT"])
+    @public_booking_blp.arguments(BookingFlowQueryArgsSchema, location="query")
+    @public_booking_blp.response(200, PublicBookingFlowSchema)
+    def get(self, args, slug):
+        """The questions this business asks for the chosen service.
+
+        Resolved server-side (business default, or the service's own override)
+        so the booking page and the submission validator can never disagree
+        about what the customer was asked - see app/booking_flow/resolve.py.
+        """
+        garage = _get_garage_by_slug(slug)
+        appointment_type_id = args.get("appointment_type_id")
+        # Validated even though only its id is used: a customer must not be
+        # able to probe which services exist by watching the form change.
+        _get_active_appointment_type(garage, appointment_type_id)
+
+        return {
+            "appointment_type_id": appointment_type_id,
+            "sections": resolve_sections(garage.id, appointment_type_id),
+        }

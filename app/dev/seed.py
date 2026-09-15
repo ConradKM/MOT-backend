@@ -47,6 +47,7 @@ from decimal import Decimal
 
 from werkzeug.security import generate_password_hash
 
+from app.booking_flow.presets import apply_preset
 from app.dev.guard import require_development
 from app.extensions import db
 from app.garages.slug import slugify_unique
@@ -63,6 +64,7 @@ from app.models.appointments.checklist_template_item import (
     CHECKLIST_ITEM_STATUSES,
     ChecklistTemplateItem,
 )
+from app.models.booking_flow.section import BookingFlowSection
 from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.garage import Garage
@@ -112,6 +114,9 @@ _DELETE_ORDER = [
     "mot_records",
     "checklist_template_items",
     "checklist_templates",
+    "booking_request_answers",
+    "booking_flow_fields",
+    "booking_flow_sections",
     "garage_appointment_types",
     "appointment_type_groups",
     "vehicles",
@@ -240,6 +245,12 @@ def _seed_children(garage: Garage) -> None:
     sam = make_employee("sam.kaur@kingsway-mot.example", None, None, [role_staff])
     db.session.add_all([owner, greg, tom, rachel, sam])
     db.session.flush()
+
+    # ---- Booking workflow -------------------------------------------
+    # The automotive preset, so the seeded business exercises bound
+    # fields (its item records keep being populated) rather than the
+    # unbound-only case.
+    apply_preset(garage.id, "automotive", db.session)
 
     # ---- Service groups ---------------------------------------------
     # Deliberately partial: "Courtesy Check" and the inactive services below
@@ -931,6 +942,7 @@ def _garage_counts(garage_id) -> dict[str, int]:
         "roles": Role.query.filter_by(garage_id=garage_id).count(),
         "employees": Employee.query.filter_by(garage_id=garage_id).count(),
         "service groups": AppointmentTypeGroup.query.filter_by(garage_id=garage_id).count(),
+        "booking flow sections": BookingFlowSection.query.filter_by(garage_id=garage_id).count(),
         "appointment types": GarageAppointmentType.query.filter_by(garage_id=garage_id).count(),
         "checklist templates": ChecklistTemplate.query.filter_by(garage_id=garage_id).count(),
         "customers": Customer.query.filter_by(garage_id=garage_id).count(),

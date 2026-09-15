@@ -270,7 +270,9 @@ class BookingRequestApprove(MethodView):
             garage_id=garage_id,
             employee_id=assigned_employee_id,
             customer_id=customer.id,
-            vehicle_id=vehicle.id,
+            # None when the business tracks no item - both this column
+            # and BookingRequest.vehicle_id are nullable for exactly that.
+            vehicle_id=None if vehicle is None else vehicle.id,
             appointment_type_id=appointment_type.id,
             start_time=start_time,
             end_time=end_time,
@@ -285,7 +287,7 @@ class BookingRequestApprove(MethodView):
         booking_request.status = "APPROVED"
         booking_request.appointment_type_id = appointment_type.id
         booking_request.customer_id = customer.id
-        booking_request.vehicle_id = vehicle.id
+        booking_request.vehicle_id = None if vehicle is None else vehicle.id
         booking_request.appointment_id = appointment.id
         booking_request.reviewed_by_employee_id = employee.id
         booking_request.reviewed_at = datetime.now(UTC)
