@@ -189,8 +189,10 @@ def create_app(config_class=Config):
     from .appointments.media.routes import checklist_item_media_blp
     from .appointments.routes import appointments_blp
     from .appointments.statuses.routes import appointment_statuses_blp
+    from .appointments.type_groups.routes import appointment_type_groups_blp
     from .appointments.types.routes import appointment_types_blp
     from .auth.routes import auth_blp
+    from .booking_flow.routes import booking_flow_blp
     from .booking_requests.routes import booking_requests_blp
     from .communications.routes import communications_blp
     from .communications.voice_webhooks import twilio_voice_blp
@@ -223,6 +225,7 @@ def create_app(config_class=Config):
     api.register_blueprint(public_garages_blp)
     api.register_blueprint(public_booking_blp)
     api.register_blueprint(booking_requests_blp)
+    api.register_blueprint(booking_flow_blp)
     api.register_blueprint(communications_blp)
     api.register_blueprint(conversation_blp)
     api.register_blueprint(customers_blp)
@@ -232,6 +235,7 @@ def create_app(config_class=Config):
     api.register_blueprint(mot_records_blp)
     api.register_blueprint(mot_reminders_blp)
     api.register_blueprint(appointment_types_blp)
+    api.register_blueprint(appointment_type_groups_blp)
     api.register_blueprint(appointment_statuses_blp)
     api.register_blueprint(checklist_templates_blp)
     api.register_blueprint(appointments_blp)
@@ -269,10 +273,12 @@ def create_app(config_class=Config):
         appointment_checklist_item,
         appointment_status,
         appointment_type,
+        appointment_type_group,
         checklist_item_media,
         checklist_template,
         checklist_template_item,
     )
+    from .models.booking_flow import answer, field, section  # noqa: F401
     from .models.communications import (  # noqa: F401
         automation_settings,
         comms_onboarding,

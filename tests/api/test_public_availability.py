@@ -417,3 +417,121 @@ def test_tenant_isolation(client, session, garage, second_garage):
         ]
     }
     assert slots["10:00"]["status"] == "available"
+
+
+# --------------------------------------------------------------------------
+# Type-aware day levels
+#
+# The month calendar used to compute every day's level at the business's
+# generic slot length, so a day could advertise itself as `available` while
+# the service the customer had actually chosen had nowhere to fit. The
+# customer picked a green day and was then shown no times at all.
+# --------------------------------------------------------------------------
+
+
+def _long_type(session, garage, minutes):
+    from app.models.appointments.appointment_type import GarageAppointmentType
+
+    t = GarageAppointmentType(
+        garage_id=garage.id,
+        name=f"{minutes} minute service",
+        status="ACTIVE",
+        default_duration_minutes=minutes,
+    )
+    session.add(t)
+    session.commit()
+    return t
+
+
+def _day(body, wanted):
+    return next(d for d in body["days"] if d["date"] == wanted.isoformat())
+
+
+def test_range_without_a_type_keeps_the_generic_behaviour(client, session, garage, garage_schedule):
+    day = _future_weekday()
+
+    body = client.get(f"/api/public/{garage.slug}/availability").get_json()
+
+    assert _day(body, day)["level"] == "available"
+
+
+def test_a_service_longer_than_the_day_leaves_no_slots_on_the_calendar(
+    client, session, garage, garage_schedule
+):
+    """Opening hours are 09:00-17:00, so a 10-hour service can never fit. The
+    calendar must say `full`, not `available`."""
+    day = _future_weekday()
+    long_service = _long_type(session, garage, 600)
+
+    body = client.get(
+        f"/api/public/{garage.slug}/availability",
+        query_string={"appointment_type_id": str(long_service.id)},
+    ).get_json()
+
+    assert _day(body, day)["level"] == "full"
+    assert _day(body, day)["total_slots"] == 0
+
+
+def test_the_calendar_level_agrees_with_the_slots_actually_offered(
+    client, session, garage, garage_schedule
+):
+    """The invariant that was broken: whatever the month view says about a
+    day, opening that day must produce a consistent number of slots."""
+    day = _future_weekday()
+    long_service = _long_type(session, garage, 600)
+
+    body = client.get(
+        f"/api/public/{garage.slug}/availability",
+        query_string={"appointment_type_id": str(long_service.id)},
+    ).get_json()
+    slots = client.get(
+        f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+        query_string={"appointment_type_id": str(long_service.id)},
+    ).get_json()
+
+    assert _day(body, day)["total_slots"] == len(slots["slots"])
+    assert _day(body, day)["level"] == slots["level"]
+
+
+def test_a_longer_service_offers_no_more_days_than_a_shorter_one(
+    client, session, garage, garage_schedule
+):
+    short = _long_type(session, garage, 30)
+    long_ = _long_type(session, garage, 240)
+
+    def open_days(appointment_type):
+        body = client.get(
+            f"/api/public/{garage.slug}/availability",
+            query_string={"appointment_type_id": str(appointment_type.id)},
+        ).get_json()
+        return sum(d["open_slots"] for d in body["days"])
+
+    assert open_days(long_) < open_days(short)
+
+
+def test_range_rejects_a_type_from_another_business(client, session, garage, second_garage):
+    foreign = _long_type(session, second_garage, 60)
+
+    resp = client.get(
+        f"/api/public/{garage.slug}/availability",
+        query_string={"appointment_type_id": str(foreign.id)},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_range_rejects_an_inactive_type(client, session, garage):
+    from app.models.appointments.appointment_type import GarageAppointmentType
+
+    hidden = GarageAppointmentType(
+        garage_id=garage.id, name="Paused", status="HIDDEN", default_duration_minutes=60
+    )
+    session.add(hidden)
+    session.commit()
+
+    resp = client.get(
+        f"/api/public/{garage.slug}/availability",
+        query_string={"appointment_type_id": str(hidden.id)},
+    )
+
+    assert resp.status_code == 422

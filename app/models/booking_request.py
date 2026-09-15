@@ -23,6 +23,7 @@ from .mixins import PrimaryKeyMixin, TimestampMixin
 if TYPE_CHECKING:
     from app.models.appointments.appointment import Appointment
     from app.models.appointments.appointment_type import GarageAppointmentType
+    from app.models.booking_flow.answer import BookingRequestAnswer
     from app.models.customer import Customer
     from app.models.employee import Employee
     from app.models.garage import Garage
@@ -57,6 +58,17 @@ BOOKING_REQUEST_STATUSES = (
     "CANCELLED",
 )
 
+# Which channel the request came in through. This is not cosmetic: the
+# business's configured booking questions (app/booking_flow/) can only be
+# asked by the web form. The conversational channel is a fixed state machine
+# and cannot ask them, so its requests arrive with no answers at all - and
+# without knowing the channel, the staff review screen cannot tell "this
+# business asks nothing" apart from "this business asks three things and
+# nobody answered them".
+BOOKING_REQUEST_SOURCE_WEB = "WEB"
+BOOKING_REQUEST_SOURCE_CONVERSATION = "CONVERSATION"
+BOOKING_REQUEST_SOURCES = (BOOKING_REQUEST_SOURCE_WEB, BOOKING_REQUEST_SOURCE_CONVERSATION)
+
 
 class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
     """An unauthenticated public booking submission, held for staff review.
@@ -75,6 +87,9 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
         index=True,
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", index=True)
+    source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="WEB", server_default="WEB"
+    )
     # A short customer-facing code (see app/booking_requests/reference.py),
     # e.g. "BK7F3K9Q2" - shown on the confirmation screen and usable to log
     # in (see app/customer_auth/routes.py::CustomerReferenceLogin) without a
@@ -98,7 +113,13 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # normalises it for every new submission.
     customer_phone: Mapped[str | None] = mapped_column(String(40))
 
-    vehicle_registration: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Nullable since the booking form became business-configurable: the
+    # identifier of whatever the business books in is now an ordinary field
+    # with a binding (see app/models/booking_flow/field.py), and a business
+    # that tracks nothing - a salon, a clinic - collects no identifier at all.
+    # Still populated for every business that does bind one, which is what
+    # keeps the existing records and the reminders built on them working.
+    vehicle_registration: Mapped[str | None] = mapped_column(String(20))
     vehicle_make: Mapped[str | None] = mapped_column(String(100))
     vehicle_model: Mapped[str | None] = mapped_column(String(100))
     vehicle_year: Mapped[int | None] = mapped_column(Integer)
@@ -163,6 +184,14 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     reviewed_by: Mapped["Employee | None"] = relationship("Employee")
     customer: Mapped["Customer | None"] = relationship("Customer")
     vehicle: Mapped["Vehicle | None"] = relationship("Vehicle")
+    # What the customer answered to this business's own configured questions,
+    # snapshotted at submission - see app/models/booking_flow/answer.py.
+    answers: Mapped[list["BookingRequestAnswer"]] = relationship(
+        "BookingRequestAnswer",
+        back_populates="booking_request",
+        cascade="all, delete-orphan",
+        order_by="BookingRequestAnswer.order",
+    )
     appointment: Mapped["Appointment | None"] = relationship("Appointment")
     payments: Mapped[list["BookingPayment"]] = relationship(
         "BookingPayment", back_populates="booking_request", order_by="BookingPayment.created_at"

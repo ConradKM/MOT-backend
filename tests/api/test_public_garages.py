@@ -15,7 +15,15 @@ def test_list_only_exposes_public_fields(client, garage):
     resp = client.get("/api/public/garages/")
 
     body = next(g for g in resp.get_json() if g["id"] == str(garage.id))
-    assert set(body.keys()) == {"id", "name", "slug", "logo_url", "appointment_types"}
+    assert set(body.keys()) == {
+        "id",
+        "name",
+        "slug",
+        "logo_url",
+        "booking_display_mode",
+        "appointment_type_groups",
+        "appointment_types",
+    }
 
 
 def test_unauthenticated_client_can_fetch_one_garage(client, garage):
@@ -27,9 +35,11 @@ def test_unauthenticated_client_can_fetch_one_garage(client, garage):
         "name": garage.name,
         "slug": garage.slug,
         "logo_url": None,
-        # Same shape as GET /api/public/<slug> (see PublicGarageDetailSchema)
-        # - the id-based booking entry point needs the type list too, to
-        # drive the date/type/time step (item 3).
+        "booking_display_mode": "LIST",
+        "appointment_type_groups": [],
+        # Same shape as GET /api/public/<slug> - this is the /book/:garageId
+        # entry point, so it is the *same page*, not a second view of it.
+        # Both build it through app/public_booking/payload.py.
         "appointment_types": [],
     }
 
@@ -72,3 +82,30 @@ def test_fetching_unknown_garage_id_returns_404(client):
     resp = client.get(f"/api/public/garages/{uuid.uuid4()}")
 
     assert resp.status_code == 404
+
+
+def test_the_two_public_lookups_return_the_same_payload(client, session, garage):
+    """The by-id and by-slug lookups feed the same booking page.
+
+    They are separate endpoints with separate history, and the by-id one
+    silently fell behind when groups were added - the page crashed on a
+    missing key, and no test caught it because both are mocked in the
+    frontend suite. They share a builder now; this is what keeps them shared.
+    """
+    from app.models.appointments.appointment_type import GarageAppointmentType
+    from app.models.appointments.appointment_type_group import AppointmentTypeGroup
+
+    group = AppointmentTypeGroup(garage_id=garage.id, name="Colour", display_mode="GRID")
+    session.add(group)
+    session.commit()
+    session.add(
+        GarageAppointmentType(
+            garage_id=garage.id, name="Balayage", status="ACTIVE", group_id=group.id
+        )
+    )
+    session.commit()
+
+    by_id = client.get(f"/api/public/garages/{garage.id}").get_json()
+    by_slug = client.get(f"/api/public/{garage.slug}").get_json()
+
+    assert by_id == by_slug

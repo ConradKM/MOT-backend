@@ -40,18 +40,27 @@ def resolve_customer_and_vehicle(
     first_name: str,
     last_name: str,
     phone: str | None,
-    vehicle_registration: str,
-    vehicle_make: str | None,
-    vehicle_model: str | None,
-    vehicle_year: int | None,
-    vehicle_mileage: int | None,
-) -> tuple[Customer, Vehicle]:
-    """Reuse-or-create the ``Customer`` + ``Vehicle`` a booking (request)
-    refers to. Shared by the public web form - which resolves this eagerly,
-    at submission time (see app/public_booking/routes.py) - and staff
-    approval (app/booking_requests/routes.py), which mostly just re-finds
-    what the public form already created; it's still needed as-is for
+    vehicle_registration: str | None,
+    vehicle_make: str | None = None,
+    vehicle_model: str | None = None,
+    vehicle_year: int | None = None,
+    vehicle_mileage: int | None = None,
+) -> tuple[Customer, Vehicle | None]:
+    """Reuse-or-create the ``Customer`` - and the tracked item, when there is
+    one - that a booking (request) refers to.
+
+    Shared by the public web form, which resolves this eagerly at submission
+    time (see app/public_booking/routes.py), and staff approval
+    (app/booking_requests/routes.py), which mostly just re-finds what the
+    public form already created; it is still needed as-is for
     conversation-engine requests, which don't resolve eagerly.
+
+    ``vehicle_registration`` is now optional, and None is a perfectly ordinary
+    outcome rather than an error: since the booking form became
+    business-configurable, the identifier of whatever is being booked in is an
+    ordinary field with a binding, and a business that tracks no item at all -
+    a salon, a clinic - never collects one. The customer is always resolved;
+    the item is returned as None when nothing identified it.
     """
     customer = None
     if customer_id is not None:
@@ -77,6 +86,12 @@ def resolve_customer_and_vehicle(
         # customer nobody can see in the normal list.
         customer.is_active = True
 
+    if not vehicle_registration or not vehicle_registration.strip():
+        # No identifier collected - the business tracks no item. Both
+        # BookingRequest.vehicle_id and Appointment.vehicle_id are nullable,
+        # so the booking is complete without one.
+        return customer, None
+
     reg = _normalize_registration(vehicle_registration)
     vehicle = Vehicle.query.filter_by(garage_id=garage_id, registration_number=reg).first()
     if vehicle is None:
@@ -94,7 +109,7 @@ def resolve_customer_and_vehicle(
     elif vehicle.customer_id != customer.id:
         abort(
             409,
-            message="A vehicle with this registration already exists for a different "
+            message="An item with this reference already exists for a different "
             "customer - resolve it manually before approving.",
         )
     elif not vehicle.is_active:

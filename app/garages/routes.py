@@ -6,6 +6,8 @@ from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.garage import Garage
+from app.public_booking.payload import public_garage_payload
+from app.public_booking.schemas import PublicGarageDetailSchema
 
 from .capacity import capacity_summary
 from .details import update_garage_details
@@ -13,7 +15,6 @@ from .schemas import (
     CapacitySummarySchema,
     GarageDetailsUpdateSchema,
     GarageSchema,
-    PublicGarageSchema,
 )
 
 garages_blp = Blueprint(
@@ -72,18 +73,25 @@ class GarageCapacitySummary(MethodView):
 
 @public_garages_blp.route("/")
 class PublicGarageList(MethodView):
-    @public_garages_blp.response(200, PublicGarageSchema(many=True))
+    @public_garages_blp.response(200, PublicGarageDetailSchema(many=True))
     def get(self):
-        return Garage.query.order_by(Garage.name).all()
+        return [public_garage_payload(g) for g in Garage.query.order_by(Garage.name).all()]
 
 
 @public_garages_blp.route("/<uuid:garage_id>")
 class PublicGarageResource(MethodView):
-    @public_garages_blp.response(200, PublicGarageSchema)
+    @public_garages_blp.response(200, PublicGarageDetailSchema)
     def get(self, garage_id):
+        """The same payload as GET /api/public/<slug>, by id instead.
+
+        This is the /book/:garageId entry point - the one the QR codes and
+        onboarding emails point at - so it must not be a second, slightly
+        different view of the same page. Both call
+        app/public_booking/payload.py.
+        """
         garage = db.session.get(Garage, garage_id)
 
         if not garage:
             abort(404, message="Garage not found")
 
-        return garage
+        return public_garage_payload(garage)

@@ -1,8 +1,9 @@
 import uuid
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -11,6 +12,7 @@ from ..mixins import PrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
     from app.models.appointments.appointment import Appointment
+    from app.models.appointments.appointment_type_group import AppointmentTypeGroup
     from app.models.appointments.checklist_template import ChecklistTemplate
     from app.models.garage import Garage
 
@@ -55,6 +57,25 @@ class GarageAppointmentType(db.Model, PrimaryKeyMixin, TimestampMixin):  # type:
     # derived from start_time + this duration (see appointments/routes.py).
     default_duration_minutes: Mapped[int | None] = mapped_column(Integer)
 
+    # NULL means ungrouped, which is the normal state for a business with a
+    # short menu - grouping is opt-in. SET NULL rather than CASCADE: deleting
+    # a group must not take its services (and their booking history) with it.
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey("appointment_type_groups.id", ondelete="SET NULL"),
+        index=True,
+    )
+    # Explicit display order within the group (or within the ungrouped list).
+    # See AppointmentTypeGroup.order - a business sells in its own order.
+    order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Presented on the booking page's GRID display mode, where the picture is
+    # what the customer is choosing between. See AppointmentTypeGroup for the
+    # same three columns and app/storage/images.py for how they get set.
+    image_storage_key: Mapped[str | None] = mapped_column(String(500))
+    image_content_type: Mapped[str | None] = mapped_column(String(100))
+    image_uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     # --- deposit configuration (see app/payments) --------------------------
     # Off by default - existing and newly created appointment types never
     # require a deposit unless an owner explicitly turns it on, and turning
@@ -71,6 +92,9 @@ class GarageAppointmentType(db.Model, PrimaryKeyMixin, TimestampMixin):  # type:
     deposit_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="GBP")
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="appointment_types")
+    group: Mapped["AppointmentTypeGroup | None"] = relationship(
+        "AppointmentTypeGroup", back_populates="appointment_types"
+    )
     checklist_template: Mapped["ChecklistTemplate | None"] = relationship(
         "ChecklistTemplate",
         back_populates="appointment_type",

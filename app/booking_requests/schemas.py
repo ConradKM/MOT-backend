@@ -1,6 +1,9 @@
 from marshmallow import Schema, fields, validate
 
-from app.models.booking_request import BOOKING_REQUEST_STATUSES
+from app.models.booking_request import (
+    BOOKING_REQUEST_SOURCE_WEB,
+    BOOKING_REQUEST_STATUSES,
+)
 
 
 class _RequestAppointmentTypeSchema(Schema):
@@ -43,6 +46,37 @@ class SlotCheckSchema(Schema):
     reason = fields.Str(dump_only=True, allow_none=True)
 
 
+class BookingRequestAnswerSchema(Schema):
+    """One answer, as snapshotted at submission.
+
+    Every value here was copied at submission rather than read live, so a
+    field the business has since renamed or deleted still shows the review
+    screen what the customer was actually asked - see
+    app/models/booking_flow/answer.py.
+    """
+
+    id = fields.UUID(dump_only=True)
+    order = fields.Int(dump_only=True)
+    section_title = fields.Str(dump_only=True)
+    label = fields.Str(dump_only=True)
+    field_type = fields.Str(dump_only=True)
+    value = fields.Str(dump_only=True, allow_none=True)
+    value_list = fields.List(fields.Str(), dump_only=True)
+    # Which real record column this answer also populated, or null. Staff-only
+    # (never on the public payload) and the review screen needs it: a bound
+    # answer is already shown by the dedicated Vehicle / Mileage rows, so
+    # rendering it again would show an automotive business every field twice.
+    binds_to = fields.Method("_get_binds_to", dump_only=True)
+
+    def _get_binds_to(self, answer):
+        # From the live field, not a snapshot: this drives *layout*, not
+        # history. If the binding is removed the answer should start showing
+        # in its own right, and if the field is gone there is no dedicated
+        # row reading it any more either.
+        field = answer.booking_flow_field
+        return None if field is None else field.binds_to
+
+
 class BookingRequestSchema(Schema):
     """Full dump of a booking request, for staff review."""
 
@@ -62,7 +96,10 @@ class BookingRequestSchema(Schema):
     customer_email = fields.Email(dump_only=True, allow_none=True)
     customer_phone = fields.Str(dump_only=True, allow_none=True)
 
-    vehicle_registration = fields.Str(dump_only=True)
+    # Null for a business that tracks no item (a salon, a clinic): what is
+    # collected about the thing being booked in is configured per business,
+    # and a business that binds no identifier field collects none of these.
+    vehicle_registration = fields.Str(dump_only=True, allow_none=True)
     vehicle_make = fields.Str(dump_only=True, allow_none=True)
     vehicle_model = fields.Str(dump_only=True, allow_none=True)
     vehicle_year = fields.Int(dump_only=True, allow_none=True)
@@ -83,6 +120,13 @@ class BookingRequestSchema(Schema):
     # edited (or the type is deleted) afterwards. Null on requests submitted
     # before this column existed, or with no type chosen.
     requested_duration_minutes = fields.Int(dump_only=True, allow_none=True)
+    # What the customer answered to this business's own configured questions.
+    # Empty for a request from the conversational channel, which cannot ask
+    # them - `answers_collected` is what distinguishes that from a business
+    # that simply configures no questions.
+    answers = fields.List(fields.Nested(BookingRequestAnswerSchema), dump_only=True)
+    answers_collected = fields.Method("_get_answers_collected", dump_only=True)
+    source = fields.Str(dump_only=True)
     requested_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
 
     preferred_date = fields.Date(dump_only=True)
@@ -125,6 +169,18 @@ class BookingRequestSchema(Schema):
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
+
+    def _get_answers_collected(self, obj):
+        """Whether this request's channel could ask the business's configured
+        questions at all.
+
+        False for the conversational channel (WhatsApp/voice), which is a
+        fixed state machine and cannot ask them - so the review screen can say
+        "not collected, booked by phone" rather than leaving staff to guess
+        whether an empty list means the business asks nothing. See
+        app/conversation/workflows.py.
+        """
+        return obj.source == BOOKING_REQUEST_SOURCE_WEB
 
     def _get_customer_full_name(self, obj):
         return f"{obj.customer_first_name} {obj.customer_last_name}".strip()

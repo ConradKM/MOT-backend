@@ -34,6 +34,7 @@ from datetime import UTC, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.booking_flow.presets import PRESETS, apply_preset
 from app.employees.service import email_format_error, password_policy_error
 from app.extensions import db
 from app.garages.layouts import validate_layout_variant
@@ -41,6 +42,10 @@ from app.garages.onboarding import GarageSpec, OnboardingError, OwnerSpec, onboa
 from app.models.appointments.appointment_type import (
     APPOINTMENT_TYPE_STATUSES,
     GarageAppointmentType,
+)
+from app.models.appointments.appointment_type_group import (
+    DISPLAY_MODES,
+    AppointmentTypeGroup,
 )
 from app.models.employee import Employee
 from app.models.garage import (
@@ -81,6 +86,24 @@ class ServiceSpec:
     base_price: str | None = None  # decimal string, e.g. "54.85"
     default_duration_minutes: int | None = None
     status: str = "ACTIVE"
+    # The group this service belongs to, named rather than id'd - a spec is
+    # written by hand before any row exists. Groups are created implicitly, in
+    # first-appearance order; None leaves the service ungrouped.
+    group: str | None = None
+
+
+@dataclass
+class ServiceGroupSpec:
+    """An optional declaration for a group named by a service.
+
+    A spec need not list its groups at all - naming one on a service is
+    enough. Listing it is how a business sets the group's description or
+    display mode.
+    """
+
+    name: str
+    description: str | None = None
+    display_mode: str | None = None
 
 
 @dataclass
@@ -98,6 +121,14 @@ class BusinessSpec:
     # the shared default layout.
     layout_variant: str | None = None
     services: list[ServiceSpec] = field(default_factory=list)
+    service_groups: list[ServiceGroupSpec] = field(default_factory=list)
+    # How the booking page presents this business's services when a group
+    # doesn't override it. None keeps the model default (LIST).
+    booking_display_mode: str | None = None
+    # Which starting workflow to seed (app/booking_flow/presets.py). A
+    # preset is only ever seed data - once applied it is ordinary,
+    # editable configuration and nothing reads the preset again.
+    booking_workflow_preset: str | None = None
     # weekday index 0-6 -> ("HH:MM", "HH:MM") open range, or None = closed.
     # `None` for the whole mapping = keep the seeded default hours.
     opening_hours: dict[int, tuple[str, str] | None] | None = None
@@ -257,6 +288,48 @@ def _parse_service(raw: Any, i: int) -> ServiceSpec:
         base_price=price,
         default_duration_minutes=duration,
         status=status,
+        group=_str_or_none(raw.get("group")),
+    )
+
+
+def _parse_display_mode(raw: Any) -> str | None:
+    """Validate an optional business-level display mode. None = keep the
+    model's own default (LIST)."""
+    value = _str_or_none(raw)
+    if value is None:
+        return None
+    value = value.upper()
+    if value not in DISPLAY_MODES:
+        raise BusinessSpecError(f"business.booking_display_mode: {value!r} not in {DISPLAY_MODES}.")
+    return value
+
+
+def _parse_preset(raw: Any) -> str | None:
+    value = _str_or_none(raw)
+    if value is None:
+        return None
+    value = value.lower()
+    if value not in PRESETS:
+        raise BusinessSpecError(
+            f"business.booking_workflow_preset: {value!r} not in {sorted(PRESETS)}."
+        )
+    return value
+
+
+def _parse_service_group(raw: Any, i: int) -> ServiceGroupSpec:
+    if not isinstance(raw, dict) or not _str_or_none(raw.get("name")):
+        raise BusinessSpecError(f"service_groups[{i}]: needs a non-empty 'name'.")
+    display_mode = _str_or_none(raw.get("display_mode"))
+    if display_mode is not None:
+        display_mode = display_mode.upper()
+        if display_mode not in DISPLAY_MODES:
+            raise BusinessSpecError(
+                f"service_groups[{i}].display_mode: {display_mode!r} not in {DISPLAY_MODES}."
+            )
+    return ServiceGroupSpec(
+        name=_str_or_none(raw["name"]),  # type: ignore[arg-type]
+        description=_str_or_none(raw.get("description")),
+        display_mode=display_mode,
     )
 
 
@@ -298,6 +371,11 @@ def parse_business_spec(raw: Any) -> BusinessSpec:
         website=_str_or_none(business.get("website")),
         layout_variant=_str_or_none(business.get("layout_variant")),
         services=[_parse_service(s, i) for i, s in enumerate(raw.get("services", []) or [])],
+        service_groups=[
+            _parse_service_group(g, i) for i, g in enumerate(raw.get("service_groups", []) or [])
+        ],
+        booking_display_mode=_parse_display_mode(business.get("booking_display_mode")),
+        booking_workflow_preset=_parse_preset(business.get("booking_workflow_preset")),
         opening_hours=_parse_opening_hours(raw.get("opening_hours")),
         booking_settings=_parse_booking_settings(raw.get("booking_settings")),
         plan=(_str_or_none(business.get("plan")) or "").upper() or None,
@@ -388,11 +466,60 @@ def find_existing_business(owner_email: str, session=None) -> tuple[Employee, Ga
     return owner, owner.garage
 
 
+def _apply_service_groups(
+    garage: Garage,
+    specs: list[ServiceSpec],
+    group_specs: list[ServiceGroupSpec],
+    session,
+) -> dict[str, AppointmentTypeGroup]:
+    """Create every group the spec mentions, keyed by name.
+
+    A group exists if any service names it, whether or not it is also declared
+    in `service_groups` - declaring it is only how a description or display
+    mode gets set. Order follows first appearance in the spec, which is the
+    order a human wrote them in and so the order they should be sold in.
+    """
+    declared = {g.name: g for g in group_specs}
+
+    names: list[str] = []
+    for name in [g.name for g in group_specs] + [s.group for s in specs if s.group]:
+        if name not in names:
+            names.append(name)
+
+    groups: dict[str, AppointmentTypeGroup] = {}
+    for order, name in enumerate(names):
+        spec = declared.get(name)
+        row = AppointmentTypeGroup(
+            garage_id=garage.id,
+            name=name,
+            description=None if spec is None else spec.description,
+            display_mode=None if spec is None else spec.display_mode,
+            order=order,
+        )
+        session.add(row)
+        groups[name] = row
+
+    session.flush()
+    return groups
+
+
 def _apply_services(
-    garage: Garage, specs: list[ServiceSpec], session
+    garage: Garage,
+    specs: list[ServiceSpec],
+    session,
+    groups: dict[str, AppointmentTypeGroup] | None = None,
 ) -> list[GarageAppointmentType]:
+    groups = groups or {}
+    # Position within the service's own group (or within the ungrouped list),
+    # so spec order survives as display order.
+    next_order: dict[str | None, int] = {}
+
     created = []
     for s in specs:
+        order = next_order.get(s.group, 0)
+        next_order[s.group] = order + 1
+
+        group = groups.get(s.group) if s.group else None
         row = GarageAppointmentType(
             garage_id=garage.id,
             name=s.name,
@@ -400,6 +527,8 @@ def _apply_services(
             base_price=None if s.base_price is None else Decimal(s.base_price),
             default_duration_minutes=s.default_duration_minutes,
             status=s.status,
+            group_id=None if group is None else group.id,
+            order=order,
         )
         session.add(row)
         created.append(row)
@@ -521,7 +650,15 @@ def onboard_business(
         commit=False,
     )
 
-    services = _apply_services(result.garage, spec.services, session)
+    groups = _apply_service_groups(result.garage, spec.services, spec.service_groups, session)
+    services = _apply_services(result.garage, spec.services, session, groups)
+    if spec.booking_display_mode is not None:
+        result.garage.booking_display_mode = spec.booking_display_mode
+    # Seeded only when the spec asks for it - a business with no preset
+    # starts with just the built-in 'Your details' section and builds its
+    # own form, which is a perfectly valid starting point.
+    if spec.booking_workflow_preset is not None:
+        apply_preset(result.garage.id, spec.booking_workflow_preset, session)
     used_default_hours = spec.opening_hours is None
     if spec.opening_hours is not None:
         _apply_opening_hours(result.garage, spec.opening_hours, session)

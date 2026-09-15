@@ -4,11 +4,18 @@ from flask import current_app
 from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
+from app.booking_flow.answers import (
+    AnswerError,
+    bound_values,
+    persist_answers,
+    tracked_item_kwargs,
+    validate_answers,
+)
+from app.booking_flow.resolve import resolve_sections
 from app.booking_requests.reference import unique_booking_reference
 from app.booking_requests.service import resolve_customer_and_vehicle
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
-from app.garages.logo import logo_public_url
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.garage import Garage
@@ -23,15 +30,18 @@ from app.payments.service import (
 
 from .availability import availability_range, single_day, validate_slot
 from .captcha import verify_captcha
+from .payload import public_garage_payload
 from .schemas import (
     AvailabilityQueryArgsSchema,
     AvailabilityRangeSchema,
+    BookingFlowQueryArgsSchema,
     BookingRequestCreatedSchema,
     BookingRequestCreateSchema,
     DayAvailabilityQueryArgsSchema,
     DaySlotsSchema,
     DepositIntentCreatedSchema,
     DepositStatusSchema,
+    PublicBookingFlowSchema,
     PublicGarageDetailSchema,
 )
 
@@ -69,15 +79,7 @@ def _get_active_appointment_type(garage, appointment_type_id):
 class PublicGarageBySlug(MethodView):
     @public_booking_blp.response(200, PublicGarageDetailSchema)
     def get(self, slug):
-        garage = _get_garage_by_slug(slug)
-
-        return {
-            "id": garage.id,
-            "name": garage.name,
-            "slug": garage.slug,
-            "logo_url": logo_public_url(garage),
-            "appointment_types": [t for t in garage.appointment_types if t.status == "ACTIVE"],
-        }
+        return public_garage_payload(_get_garage_by_slug(slug))
 
 
 @public_booking_blp.route("/<slug>/availability")
@@ -87,7 +89,14 @@ class PublicGarageAvailability(MethodView):
     @public_booking_blp.response(200, AvailabilityRangeSchema)
     def get(self, args, slug):
         garage = _get_garage_by_slug(slug)
-        return availability_range(garage, args.get("from_"), args.get("to"), datetime.now(UTC))
+        appt_type = _get_active_appointment_type(garage, args.get("appointment_type_id"))
+        return availability_range(
+            garage,
+            args.get("from_"),
+            args.get("to"),
+            datetime.now(UTC),
+            appointment_type=appt_type,
+        )
 
 
 @public_booking_blp.route("/<slug>/availability/<day>")
@@ -145,10 +154,39 @@ def _lock_and_validate_slot(garage, data, appt_type):
     return preferred_time
 
 
-def _build_booking_request(garage, data, appt_type, preferred_time, *, status):
+def _validate_answers_or_abort(garage, data, appointment_type_id):
+    """Check the business's own configured questions before anything is
+    created, so a rejected answer never leaves a half-built customer behind.
+
+    The booking page renders from this same configuration, but that is a
+    convenience: a direct POST must not be able to skip a required field,
+    invent one, or answer a SELECT with something never on offer.
+    """
+    try:
+        return validate_answers(garage.id, appointment_type_id, data.get("answers") or [])
+    except AnswerError as exc:
+        # Same shape flask-smorest uses for schema-level failures, keyed by
+        # field id - which is what the form renders from.
+        abort(422, message="Please check the highlighted answers.", errors={"json": exc.messages})
+
+
+def _build_booking_request(garage, data, appt_type, preferred_time, *, status, answers):
     """Construct (not yet added/committed) a BookingRequest snapshotting the
     public form's submission - shared by the plain submit path (status
     PENDING) and the deposit-intent path (status AWAITING_PAYMENT)."""
+    item = tracked_item_kwargs(bound_values(answers))
+
+    # A business that tracks the thing it books in binds a field to the item's
+    # reference (see app/models/booking_flow/field.py); one that tracks
+    # nothing collects none and `item` is empty. The top-level vehicle_* keys
+    # are the pre-workflow client's shape, still accepted so it keeps working -
+    # a binding wins wherever both are present.
+    reference = item.get("reference") or data.get("vehicle_registration")
+    make = item.get("make") or data.get("vehicle_make")
+    model = item.get("model") or data.get("vehicle_model")
+    year = item.get("year") or data.get("vehicle_year")
+    usage = item.get("usage") or data.get("vehicle_mileage")
+
     customer, vehicle = resolve_customer_and_vehicle(
         garage.id,
         customer_id=None,
@@ -156,11 +194,11 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status):
         first_name=data["customer_first_name"],
         last_name=data["customer_last_name"],
         phone=data.get("customer_phone"),
-        vehicle_registration=data["vehicle_registration"],
-        vehicle_make=data.get("vehicle_make"),
-        vehicle_model=data.get("vehicle_model"),
-        vehicle_year=data.get("vehicle_year"),
-        vehicle_mileage=data.get("vehicle_mileage"),
+        vehicle_registration=reference,
+        vehicle_make=make,
+        vehicle_model=model,
+        vehicle_year=year,
+        vehicle_mileage=usage,
     )
 
     return BookingRequest(
@@ -168,16 +206,20 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status):
         status=status,
         booking_reference=unique_booking_reference(db.session),
         customer_id=customer.id,
-        vehicle_id=vehicle.id,
+        # None when the business tracks no item - the column is nullable for
+        # exactly that.
+        vehicle_id=None if vehicle is None else vehicle.id,
         customer_first_name=data["customer_first_name"],
         customer_last_name=data["customer_last_name"],
         customer_email=data["customer_email"],
         customer_phone=data.get("customer_phone"),
-        vehicle_registration=data["vehicle_registration"],
-        vehicle_make=data.get("vehicle_make"),
-        vehicle_model=data.get("vehicle_model"),
-        vehicle_year=data.get("vehicle_year"),
-        vehicle_mileage=data.get("vehicle_mileage"),
+        # Denormalised onto the request as well as the item record, so staff
+        # review reads what was submitted even if the item is edited later.
+        vehicle_registration=reference,
+        vehicle_make=make,
+        vehicle_model=model,
+        vehicle_year=year,
+        vehicle_mileage=usage,
         appointment_type_id=data.get("appointment_type_id"),
         # Snapshot what the customer actually saw/chose, so staff review
         # (and history, if the type is edited or removed later) reflects
@@ -215,6 +257,8 @@ class BookingRequestSubmit(MethodView):
                 "flow instead of submitting directly.",
             )
 
+        resolved_answers = _validate_answers_or_abort(garage, data, data.get("appointment_type_id"))
+
         preferred_time = _lock_and_validate_slot(garage, data, appt_type)
 
         # Create (or match, by email) the customer's account + vehicle right
@@ -224,10 +268,12 @@ class BookingRequestSubmit(MethodView):
         # approves and assigns it a slot/employee (see
         # app/booking_requests/routes.py::BookingRequestApprove).
         booking_request = _build_booking_request(
-            garage, data, appt_type, preferred_time, status="PENDING"
+            garage, data, appt_type, preferred_time, status="PENDING", answers=resolved_answers
         )
 
         db.session.add(booking_request)
+        db.session.flush()
+        persist_answers(booking_request, resolved_answers)
         db.session.commit()
 
         emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
@@ -258,6 +304,8 @@ class DepositIntentCreate(MethodView):
         if appt_type is None or not appt_type.deposit_required:
             abort(422, message="This service does not require a deposit.")
 
+        resolved_answers = _validate_answers_or_abort(garage, data, data.get("appointment_type_id"))
+
         # Release any expired holds first so their capacity is genuinely
         # free before this one is validated against it.
         expire_stale_payment_holds(garage_id=garage.id)
@@ -265,12 +313,18 @@ class DepositIntentCreate(MethodView):
         preferred_time = _lock_and_validate_slot(garage, data, appt_type)
 
         booking_request = _build_booking_request(
-            garage, data, appt_type, preferred_time, status="AWAITING_PAYMENT"
+            garage,
+            data,
+            appt_type,
+            preferred_time,
+            status="AWAITING_PAYMENT",
+            answers=resolved_answers,
         )
         booking_request.payment_hold_expires_at = payment_hold_deadline()
 
         db.session.add(booking_request)
         db.session.flush()
+        persist_answers(booking_request, resolved_answers)
 
         try:
             payment, session = create_deposit_hold(
@@ -357,4 +411,28 @@ class DepositStatus(MethodView):
             "deposit_amount": deposit_amount,
             "remaining_balance": remaining_balance,
             "hold_expires_at": booking_request.payment_hold_expires_at,
+        }
+
+
+@public_booking_blp.route("/<slug>/booking-flow")
+class PublicBookingFlow(MethodView):
+    @limiter.limit(lambda: current_app.config["PUBLIC_AVAILABILITY_RATELIMIT"])
+    @public_booking_blp.arguments(BookingFlowQueryArgsSchema, location="query")
+    @public_booking_blp.response(200, PublicBookingFlowSchema)
+    def get(self, args, slug):
+        """The questions this business asks for the chosen service.
+
+        Resolved server-side (business default, or the service's own override)
+        so the booking page and the submission validator can never disagree
+        about what the customer was asked - see app/booking_flow/resolve.py.
+        """
+        garage = _get_garage_by_slug(slug)
+        appointment_type_id = args.get("appointment_type_id")
+        # Validated even though only its id is used: a customer must not be
+        # able to probe which services exist by watching the form change.
+        _get_active_appointment_type(garage, appointment_type_id)
+
+        return {
+            "appointment_type_id": appointment_type_id,
+            "sections": resolve_sections(garage.id, appointment_type_id),
         }

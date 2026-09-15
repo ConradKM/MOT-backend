@@ -33,7 +33,10 @@ from app.communications.service import find_customer_by_phone
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
-from app.models.booking_request import BookingRequest
+from app.models.booking_request import (
+    BOOKING_REQUEST_SOURCE_CONVERSATION,
+    BookingRequest,
+)
 from app.models.conversation.callback_request import CallbackRequest
 from app.models.customer import Customer
 from app.models.vehicle import Vehicle
@@ -192,6 +195,11 @@ def create_booking_request(
 
     booking_request = BookingRequest(
         garage_id=garage.id,
+        # This channel cannot ask the business's configured questions -
+        # see BOOKING_REQUEST_SOURCES. Saying so explicitly is what lets
+        # the staff review screen show 'not collected' rather than an
+        # empty section staff have to interpret.
+        source=BOOKING_REQUEST_SOURCE_CONVERSATION,
         status="PENDING",
         booking_reference=unique_booking_reference(db.session),
         # Pre-linked when the customer is already known (e.g. identified by

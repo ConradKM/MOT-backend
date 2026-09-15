@@ -11,6 +11,7 @@ from .mixins import PrimaryKeyMixin, TimestampMixin
 if TYPE_CHECKING:
     from app.models.appointments.appointment import Appointment
     from app.models.appointments.appointment_type import GarageAppointmentType
+    from app.models.appointments.appointment_type_group import AppointmentTypeGroup
     from app.models.communications.comms_onboarding import (
         GarageCommunicationsOnboarding,
     )
@@ -81,6 +82,16 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     # app/garages/layouts.py::LAYOUT_VARIANTS. Set only by onboarding.
     layout_variant: Mapped[str | None] = mapped_column(String(50))
 
+    # How this business's services are presented on the public booking page
+    # when a group doesn't override it - see
+    # app/models/appointments/appointment_type_group.py::DISPLAY_MODES for
+    # why this is the business's call and not the platform's. LIST is the
+    # conservative default: it renders correctly with no images configured,
+    # which every business starts out with.
+    booking_display_mode: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="LIST", server_default="LIST"
+    )
+
     # Customer-facing business details. The authoritative source for future
     # telephone / email-reminder / SMS / booking-confirmation systems - not to
     # be hardcoded anywhere. Garage users see these read-only (GET /api/garage);
@@ -149,6 +160,12 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     )
     appointment_types: Mapped[list["GarageAppointmentType"]] = relationship(
         "GarageAppointmentType", back_populates="garage", cascade="all, delete-orphan"
+    )
+    appointment_type_groups: Mapped[list["AppointmentTypeGroup"]] = relationship(
+        "AppointmentTypeGroup",
+        back_populates="garage",
+        cascade="all, delete-orphan",
+        order_by="(AppointmentTypeGroup.order, AppointmentTypeGroup.name)",
     )
     roles: Mapped[list["Role"]] = relationship(
         "Role", back_populates="garage", cascade="all, delete-orphan"

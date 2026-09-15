@@ -11,6 +11,7 @@ from marshmallow import (
 )
 
 from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
+from app.storage.images import image_url
 
 
 class UKMobileField(fields.Str):
@@ -44,6 +45,15 @@ class PublicAppointmentTypeSchema(Schema):
     description = fields.Str(dump_only=True, allow_none=True)
     base_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     default_duration_minutes = fields.Int(dump_only=True, allow_none=True)
+    # NULL for an ungrouped service. The client groups on this and orders
+    # within a group by `order`, rather than the groups carrying id lists -
+    # one source of truth for membership, no chance of the two disagreeing.
+    group_id = fields.UUID(dump_only=True, allow_none=True)
+    order = fields.Int(dump_only=True)
+    # A fresh presigned url per request, or null - the client renders its own
+    # fallback, never a broken-image icon. Only meaningful in GRID display
+    # mode, but always sent: the mode can differ per group.
+    image_url = fields.Method("_get_image_url", dump_only=True)
     included_items = fields.Method("_get_included_items", dump_only=True)
     # Enough for the wizard to decide whether to show the Deposit step and
     # what to display there before it calls the deposit-intent endpoint -
@@ -54,6 +64,9 @@ class PublicAppointmentTypeSchema(Schema):
     deposit_value = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     deposit_currency = fields.Str(dump_only=True)
 
+    def _get_image_url(self, appointment_type):
+        return image_url(appointment_type.image_storage_key)
+
     def _get_included_items(self, appointment_type):
         template = appointment_type.checklist_template
         if template is None:
@@ -62,6 +75,23 @@ class PublicAppointmentTypeSchema(Schema):
             (i for i in template.items if i.visible_to_customer), key=lambda i: i.order
         )
         return PublicIncludedItemSchema(many=True).dump(visible)
+
+
+class PublicAppointmentTypeGroupSchema(Schema):
+    """One navigational grouping of services.
+
+    Carries no list of members: services declare their own `group_id`, so
+    there is exactly one place membership is expressed.
+    """
+
+    id = fields.UUID(dump_only=True)
+    name = fields.Str(dump_only=True)
+    description = fields.Str(dump_only=True, allow_none=True)
+    order = fields.Int(dump_only=True)
+    # Already resolved against the business default by the route, so the
+    # client never has to implement the NULL-inherits rule itself.
+    display_mode = fields.Str(dump_only=True)
+    image_url = fields.Str(dump_only=True, allow_none=True)
 
 
 class PublicGarageDetailSchema(Schema):
@@ -74,7 +104,62 @@ class PublicGarageDetailSchema(Schema):
     # logo - see app/garages/logo.py::logo_public_url. The frontend renders
     # its own fallback on null; never a broken-image icon.
     logo_url = fields.Str(dump_only=True, allow_none=True)
+    # The business-wide default presentation; a group may override it, and
+    # each group's own `display_mode` is already resolved.
+    booking_display_mode = fields.Str(dump_only=True)
+    appointment_type_groups = fields.List(
+        fields.Nested(PublicAppointmentTypeGroupSchema), dump_only=True
+    )
+    # Every ACTIVE service, grouped or not, in display order. Deliberately
+    # *not* narrowed to the ungrouped ones when groups exist: a client that
+    # knows nothing about groups (and the conversational channel) still sees
+    # the full menu, and a client that does simply partitions on `group_id`.
     appointment_types = fields.List(fields.Nested(PublicAppointmentTypeSchema), dump_only=True)
+
+
+class PublicBookingFlowFieldSchema(Schema):
+    """One question, as the booking page needs to render and validate it.
+
+    `binds_to` is deliberately absent: which internal record an answer also
+    populates is the business's concern, never the customer's, and exposing it
+    would leak the shape of the business's own data onto a public page.
+    """
+
+    id = fields.UUID(dump_only=True)
+    label = fields.Str(dump_only=True)
+    help_text = fields.Str(dump_only=True, allow_none=True)
+    placeholder = fields.Str(dump_only=True, allow_none=True)
+    field_type = fields.Str(dump_only=True)
+    is_required = fields.Bool(dump_only=True)
+    options = fields.List(fields.Str(), dump_only=True)
+    min_value = fields.Int(dump_only=True, allow_none=True)
+    max_value = fields.Int(dump_only=True, allow_none=True)
+    max_length = fields.Int(dump_only=True, allow_none=True)
+
+
+class PublicBookingFlowSectionSchema(Schema):
+    id = fields.UUID(dump_only=True)
+    title = fields.Str(dump_only=True)
+    description = fields.Str(dump_only=True, allow_none=True)
+    fields_ = fields.List(
+        fields.Nested(PublicBookingFlowFieldSchema),
+        dump_only=True,
+        data_key="fields",
+        attribute="fields",
+    )
+
+
+class PublicBookingFlowSchema(Schema):
+    """The configured part of the booking form for one service.
+
+    The built-in "Your details" section is not in here - the booking page
+    renders it directly, because the platform needs name/email/mobile to
+    create the account and issue a booking reference, so it is not something a
+    business can configure away.
+    """
+
+    appointment_type_id = fields.UUID(dump_only=True, allow_none=True)
+    sections = fields.List(fields.Nested(PublicBookingFlowSectionSchema), dump_only=True)
 
 
 _CURRENT_YEAR = datetime.now(UTC).year
@@ -92,7 +177,14 @@ class BookingRequestCreateSchema(Schema):
     # app/phone.py). Normalised to E.164 for storage.
     customer_phone = UKMobileField(required=True, validate=validate.Length(max=40))
 
-    vehicle_registration = fields.Str(required=True, validate=validate.Length(min=1, max=20))
+    # No longer required: what the business collects about the thing being
+    # booked in is configured per business (see app/booking_flow/), and a
+    # business that tracks nothing collects none of this. These keys remain
+    # for the pre-workflow client, which still posts them; a bound field's
+    # answer wins wherever both are present.
+    vehicle_registration = fields.Str(
+        allow_none=True, load_default=None, validate=validate.Length(max=20)
+    )
     vehicle_make = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
     vehicle_model = fields.Str(
         allow_none=True, load_default=None, validate=validate.Length(max=100)
@@ -112,6 +204,12 @@ class BookingRequestCreateSchema(Schema):
     )
     notes = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=2000))
 
+    # What the customer answered to this business's own configured questions.
+    # Validated in the route against the workflow that actually applies to the
+    # chosen service - nothing about them can be checked here, since which
+    # fields exist depends on the business and the service.
+    answers = fields.List(fields.Nested(lambda: AnswerSubmitSchema()), load_default=list)
+
     # Verified in the route (needs app context / config), not here.
     captcha_token = fields.Str(load_default="", load_only=True)
 
@@ -127,6 +225,22 @@ class BookingRequestCreateSchema(Schema):
         # UTC to match the availability engine (app/public_booking/availability).
         if value < datetime.now(UTC).date():
             raise ValidationError("Preferred date cannot be in the past.")
+
+
+class AnswerSubmitSchema(Schema):
+    """One answer to one configured field.
+
+    `value` for a scalar field, `values` for a MULTI_SELECT. Which of the two
+    is read is decided by the *field's* type, never by which key the client
+    happened to send - see app/booking_flow/answers.py.
+    """
+
+    class Meta:
+        unknown = EXCLUDE
+
+    field_id = fields.UUID(required=True)
+    value = fields.Raw(allow_none=True, load_default=None)
+    values = fields.List(fields.Str(), load_default=list)
 
 
 class BookingRequestCreatedSchema(Schema):
@@ -192,6 +306,21 @@ class AvailabilityQueryArgsSchema(Schema):
     # `from` is a Python keyword, so bind it to `from_` but keep the query name.
     from_ = fields.Date(data_key="from", load_default=None)
     to = fields.Date(load_default=None)
+    # Which service the customer is booking. Optional for backwards
+    # compatibility, but the wizard picks the service before the date, so in
+    # practice it is always sent - without it each day's level is computed at
+    # the business's generic slot length and can advertise availability that a
+    # longer service cannot actually use (see availability.py::day_summary).
+    appointment_type_id = fields.UUID(load_default=None)
+
+
+class BookingFlowQueryArgsSchema(Schema):
+    class Meta:
+        unknown = EXCLUDE
+
+    # Which service's questions to return. Omitted before the customer has
+    # chosen one, which resolves to the business's default workflow.
+    appointment_type_id = fields.UUID(load_default=None)
 
 
 class DayAvailabilityQueryArgsSchema(Schema):
