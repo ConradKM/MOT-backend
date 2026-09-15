@@ -33,9 +33,20 @@ _EMAIL_RE_MESSAGE = "Enter a valid email address."
 
 
 class AnswerError(ValidationError):
-    """A rejected set of answers. Raised as a marshmallow ValidationError so
-    the route reports it as a 422 with per-field messages, exactly like any
-    other bad input."""
+    """A rejected set of answers.
+
+    A marshmallow ValidationError so the route can report it as a 422 with
+    per-field messages, exactly like any other bad input. Use :func:`reject`
+    to raise one rather than constructing it directly - marshmallow leaves a
+    bare string message as a string, while every other 422 this API produces
+    carries a *list* per key, and clients rely on that.
+    """
+
+
+def reject(key, message: str) -> None:
+    """Raise an AnswerError keyed by field id, in the list-per-key shape the
+    rest of the API's 422s use."""
+    raise AnswerError({str(key): [message]})
 
 
 def _as_text(raw) -> str:
@@ -53,17 +64,17 @@ def _validate_one(field, raw_value, raw_values) -> tuple[str | None, list[str]]:
     if field.field_type in MULTI_VALUE_FIELD_TYPES:
         values = [_as_text(v) for v in (raw_values or []) if _as_text(v)]
         if field.is_required and not values:
-            raise AnswerError({str(field.id): f"{label} is required."})
+            reject(field.id, f"{label} is required.")
         unknown = [v for v in values if v not in field.options]
         if unknown:
-            raise AnswerError({str(field.id): f"{label}: {unknown[0]!r} is not an option."})
+            reject(field.id, f"{label}: {unknown[0]!r} is not an option.")
         return None, values
 
     value = _as_text(raw_value)
 
     if not value:
         if field.is_required:
-            raise AnswerError({str(field.id): f"{label} is required."})
+            reject(field.id, f"{label} is required.")
         # An optional field left blank is stored as an explicit blank answer
         # rather than dropped, so the staff screen can show "asked, not
         # answered" instead of silently omitting the question.
@@ -76,41 +87,41 @@ def _validate_one(field, raw_value, raw_values) -> tuple[str | None, list[str]]:
 
     if field.field_type == "SELECT":
         if value not in field.options:
-            raise AnswerError({str(field.id): f"{label}: {value!r} is not an option."})
+            reject(field.id, f"{label}: {value!r} is not an option.")
         return value, []
 
     if field.field_type == "NUMBER":
         try:
             number = int(value)
         except ValueError:
-            raise AnswerError({str(field.id): f"{label} must be a whole number."}) from None
+            raise AnswerError({str(field.id): [f"{label} must be a whole number."]}) from None
         if field.min_value is not None and number < field.min_value:
-            raise AnswerError({str(field.id): f"{label} must be at least {field.min_value}."})
+            reject(field.id, f"{label} must be at least {field.min_value}.")
         if field.max_value is not None and number > field.max_value:
-            raise AnswerError({str(field.id): f"{label} must be at most {field.max_value}."})
+            reject(field.id, f"{label} must be at most {field.max_value}.")
         return str(number), []
 
     if field.field_type == "DATE":
         try:
             date.fromisoformat(value)
         except ValueError:
-            raise AnswerError({str(field.id): f"{label} must be a date (YYYY-MM-DD)."}) from None
+            raise AnswerError(
+                {str(field.id): [f"{label} must be a date (YYYY-MM-DD)."]}
+            ) from None
         return value, []
 
     if field.field_type == "TIME":
         try:
             time.fromisoformat(value)
         except ValueError:
-            raise AnswerError({str(field.id): f"{label} must be a time (HH:MM)."}) from None
+            raise AnswerError({str(field.id): [f"{label} must be a time (HH:MM)."]}) from None
         return value, []
 
     if field.field_type == "EMAIL" and ("@" not in value or "." not in value.split("@")[-1]):
-        raise AnswerError({str(field.id): f"{label}: {_EMAIL_RE_MESSAGE}"})
+        reject(field.id, f"{label}: {_EMAIL_RE_MESSAGE}")
 
     if field.max_length is not None and len(value) > field.max_length:
-        raise AnswerError(
-            {str(field.id): f"{label} must be {field.max_length} characters or fewer."}
-        )
+        reject(field.id, f"{label} must be {field.max_length} characters or fewer.")
 
     return value, []
 
@@ -134,7 +145,7 @@ def validate_answers(
             # Not merely ignored: a client sending a field that isn't in this
             # workflow is either stale or probing, and silently dropping it
             # would hide a real integration bug.
-            raise AnswerError({"answers": f"{field_id} is not a field on this booking form."})
+            reject("answers", f"{field_id} is not a field on this booking form.")
         incoming[field_id] = entry
 
     resolved = []

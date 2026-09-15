@@ -671,3 +671,20 @@ def test_a_web_request_defaults_to_the_web_source(client, session, garage):
     client.post(f"/api/public/{garage.slug}/booking-requests", json=_payload())
 
     assert session.query(BookingRequest).one().source == "WEB"
+
+
+def test_answer_errors_use_the_same_shape_as_every_other_422(client, session, garage):
+    """Keyed by field id, with a *list* per key.
+
+    The client renders per-field messages straight from this, and its shared
+    error helper (src/lib/errors.ts::fieldErrors) reads messages[0] - a bare
+    string would silently surface as the single character "H".
+    """
+    section = _section(session, garage)
+    field = _field(session, garage, section, "Hair length", is_required=True)
+
+    resp = client.post(f"/api/public/{garage.slug}/booking-requests", json=_payload())
+
+    assert resp.status_code == 422
+    errors = resp.get_json()["errors"]["json"]
+    assert errors[str(field.id)] == ["Hair length is required."]

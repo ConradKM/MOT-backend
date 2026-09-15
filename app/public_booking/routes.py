@@ -16,14 +16,13 @@ from app.booking_requests.reference import unique_booking_reference
 from app.booking_requests.service import resolve_customer_and_vehicle
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
-from app.garages.logo import logo_public_url
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.garage import Garage
-from app.storage.images import image_url
 
 from .availability import availability_range, single_day, validate_slot
 from .captcha import verify_captcha
+from .payload import public_garage_payload
 from .schemas import (
     AvailabilityQueryArgsSchema,
     AvailabilityRangeSchema,
@@ -70,38 +69,7 @@ def _get_active_appointment_type(garage, appointment_type_id):
 class PublicGarageBySlug(MethodView):
     @public_booking_blp.response(200, PublicGarageDetailSchema)
     def get(self, slug):
-        garage = _get_garage_by_slug(slug)
-
-        active = sorted(
-            (t for t in garage.appointment_types if t.status == "ACTIVE"),
-            key=lambda t: (t.order, t.name),
-        )
-        # Only groups that still have something active in them - an empty
-        # group is a configuration leftover, and rendering it would give the
-        # customer a heading to click that leads nowhere.
-        grouped_ids = {t.group_id for t in active if t.group_id is not None}
-
-        return {
-            "id": garage.id,
-            "name": garage.name,
-            "slug": garage.slug,
-            "logo_url": logo_public_url(garage),
-            "booking_display_mode": garage.booking_display_mode,
-            "appointment_type_groups": [
-                {
-                    "id": g.id,
-                    "name": g.name,
-                    "description": g.description,
-                    "order": g.order,
-                    # Resolve NULL-inherits here so no client reimplements it.
-                    "display_mode": g.display_mode or garage.booking_display_mode,
-                    "image_url": image_url(g.image_storage_key),
-                }
-                for g in garage.appointment_type_groups
-                if g.id in grouped_ids
-            ],
-            "appointment_types": active,
-        }
+        return public_garage_payload(_get_garage_by_slug(slug))
 
 
 @public_booking_blp.route("/<slug>/availability")
