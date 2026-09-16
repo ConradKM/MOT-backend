@@ -56,6 +56,7 @@ from .schemas import (
     MessageTemplateListResponseSchema,
     MessageTemplateSchema,
     OverviewSchema,
+    SendSmsSchema,
     SendWhatsAppSchema,
     TemplatePreviewResultSchema,
     TemplatePreviewSchema,
@@ -64,7 +65,7 @@ from .schemas import (
     VoiceTokenSchema,
 )
 from .security import validate_twilio_request
-from .service import find_customer_by_phone, send_whatsapp_message
+from .service import find_customer_by_phone, send_sms_message, send_whatsapp_message
 from .voice_calling import (
     parse_client_identity,
 )
@@ -126,7 +127,10 @@ class UnreadCount(MethodView):
     @communications_blp.response(200, UnreadCountSchema)
     def get(self):
         garage = get_current_employee().garage
-        return {"whatsapp_unread": queries.unread_whatsapp_count(garage)}
+        return {
+            "whatsapp_unread": queries.unread_whatsapp_count(garage),
+            "sms_unread": queries.unread_sms_count(garage),
+        }
 
 
 @communications_blp.route("/calls")
@@ -374,6 +378,74 @@ class WhatsAppSend(MethodView):
             customer = find_customer_by_phone(garage, to)
 
         return send_whatsapp_message(garage=garage, to=to, body=data["body"], customer=customer)
+
+
+# --------------------------------------------------------------------------
+# SMS - a first-class channel alongside Voice/WhatsApp, deliberately mirrored
+# rather than made channel-generic with the WhatsApp conversation routes
+# above: SMS has no WhatsAppConversationState-equivalent archive/delete
+# table yet, and address storage differs (plain E.164, no "whatsapp:"
+# prefix) - see app/communications/queries.py's SMS section.
+# --------------------------------------------------------------------------
+
+
+@communications_blp.route("/sms/conversations")
+class SmsConversationList(MethodView):
+    @jwt_required()
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.arguments(ConversationListQueryArgsSchema, location="query")
+    @communications_blp.response(200, ConversationListResponseSchema)
+    def get(self, args):
+        garage = get_current_employee().garage
+        items, total = queries.list_sms_conversations(
+            garage,
+            search=args["search"],
+            limit=args["limit"],
+            offset=args["offset"],
+        )
+        return {"items": items, "total": total}
+
+
+@communications_blp.route("/sms/conversations/<string:phone>/messages")
+class SmsConversationMessages(MethodView):
+    @jwt_required()
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.arguments(ConversationMessagesQueryArgsSchema, location="query")
+    @communications_blp.response(200, ConversationMessagesResponseSchema)
+    def get(self, args, phone):
+        garage = get_current_employee().garage
+        phone_e164 = _normalize_path_phone(phone)
+
+        messages = queries.get_sms_conversation_messages(garage, phone_e164, limit=args["limit"])
+        customer = find_customer_by_phone(garage, phone_e164)
+        return {"phone": phone_e164, "customer": customer, "messages": messages}
+
+
+@communications_blp.route("/sms/conversations/<string:phone>/read")
+class SmsConversationRead(MethodView):
+    @jwt_required()
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.response(200, MarkReadResultSchema)
+    def post(self, phone):
+        garage = get_current_employee().garage
+        phone_e164 = _normalize_path_phone(phone)
+        return {"updated": queries.mark_sms_conversation_read(garage, phone_e164)}
+
+
+@communications_blp.route("/sms/send")
+class SmsSend(MethodView):
+    @jwt_required()
+    @communications_blp.doc(**_AUTH_DOC)
+    @communications_blp.arguments(SendSmsSchema)
+    @communications_blp.response(200, CommunicationLogSchema)
+    def post(self, data):
+        garage = get_current_employee().garage
+        customer = _resolve_target_customer(garage.id, data["customer_id"])
+        to = _resolve_target_phone(customer, data["to"])
+        if customer is None:
+            customer = find_customer_by_phone(garage, to)
+
+        return send_sms_message(garage=garage, to=to, body=data["body"], customer=customer)
 
 
 # --------------------------------------------------------------------------

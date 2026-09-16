@@ -171,3 +171,29 @@ class TwilioSMSProvider:
             return SendResult(message.sid, message.status)
         except Exception as exc:
             raise failure(exc) from exc
+
+    def normalise_inbound(self, payload) -> InboundEvent:
+        # Twilio's inbound-SMS webhook uses the same field names as WhatsApp
+        # (MessageSid/From/To/Body), just without the "whatsapp:" prefix.
+        return InboundEvent(
+            self.name,
+            "SMS",
+            payload.get("MessageSid"),
+            payload.get("From", ""),
+            payload.get("To", ""),
+            body=payload.get("Body", ""),
+        )
+
+    def normalise_status(self, payload) -> StatusEvent:
+        status = payload.get("MessageStatus") or "unknown"
+        code = payload.get("ErrorCode") or None
+        return StatusEvent(
+            self.name,
+            "SMS",
+            payload.get("MessageSid"),
+            status,
+            error_code=code,
+            error_message=describe_delivery_failure(code, status)
+            or payload.get("ErrorMessage")
+            or None,
+        )

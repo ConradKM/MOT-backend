@@ -41,6 +41,23 @@ def resolve_garage_by_whatsapp_sender(to_number: str) -> Garage | None:
     return settings.garage if settings else None
 
 
+def resolve_garage_by_sms_sender(to_number: str) -> Garage | None:
+    """The garage an inbound SMS's Twilio ``To`` field belongs to.
+
+    SMS has no sender field of its own (see TwilioSMSProvider) - it reuses
+    whichever of ``messaging_service_sid``/``voice_phone_number`` a garage
+    configured for outbound SMS, so an inbound SMS is matched against either
+    column, not a dedicated one."""
+    if not to_number:
+        return None
+    settings = GarageCommunicationSettings.query.filter_by(voice_phone_number=to_number).first()
+    if settings is None:
+        settings = GarageCommunicationSettings.query.filter_by(
+            messaging_service_sid=to_number
+        ).first()
+    return settings.garage if settings else None
+
+
 def resolve_twilio_resources(garage: Garage) -> dict[str, str | None]:
     """The chain business -> subaccount SID -> phone number -> WhatsApp
     sender, for anything that needs to display or reason about a garage's

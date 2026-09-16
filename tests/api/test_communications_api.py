@@ -1061,3 +1061,175 @@ def test_automation_still_replies_after_a_thread_was_deleted(session, garage, au
 
     inbox, _ = queries.list_conversations(garage, conversation_filter="needs_attention")
     assert any(c["phone"] == PHONE and c["unread_count"] == 1 for c in inbox)
+
+
+# --------------------------------------------------------------------------
+# SMS - a first-class channel alongside Voice/WhatsApp. Addresses are plain
+# E.164 (no "whatsapp:" prefix - see app/communications/service.py::
+# send_sms_message), unlike the WhatsApp fixtures above.
+# --------------------------------------------------------------------------
+
+SMS_NUMBER = "+441111111111"
+
+
+def _sms(session, garage, **overrides):
+    fields = {
+        "garage_id": garage.id,
+        "channel": "SMS",
+        "direction": "INBOUND",
+        "external_provider": "twilio",
+        "status": "received",
+        "from_address": "+447123400900",
+        "to_address": SMS_NUMBER,
+        "body": "hi",
+    }
+    fields.update(overrides)
+    return _log(session, garage, **fields)
+
+
+def test_overview_reports_sms_unread_and_configured_capability(
+    session, garage, authenticated_client
+):
+    from app.models.communications.garage_communication_settings import (
+        GarageCommunicationSettings,
+    )
+
+    session.add(GarageCommunicationSettings(garage_id=garage.id, voice_phone_number=SMS_NUMBER))
+    session.commit()
+    _sms(session, garage, read_at=None)
+
+    resp = authenticated_client.get("/api/communications/overview")
+    body = resp.get_json()
+    assert body["sms_unread"] == 1
+    assert body["capabilities"]["sms_configured"] is True
+    assert any(row["channel"] == "SMS" for row in body["recent"])
+
+
+def test_unread_count_includes_sms(session, garage, authenticated_client):
+    _sms(session, garage, read_at=None)
+
+    resp = authenticated_client.get("/api/communications/unread-count")
+    assert resp.get_json()["sms_unread"] == 1
+
+
+def test_sms_conversations_group_by_counterpart(session, garage, authenticated_client):
+    _sms(session, garage, from_address="+447123400001", body="first")
+    _sms(session, garage, from_address="+447123400001", body="second")
+    _sms(session, garage, from_address="+447123400002", body="other thread")
+
+    resp = authenticated_client.get("/api/communications/sms/conversations")
+    body = resp.get_json()
+    assert body["total"] == 2
+    phones = {item["phone"] for item in body["items"]}
+    assert phones == {"+447123400001", "+447123400002"}
+
+
+def test_sms_conversations_never_merge_across_tenants(
+    session, garage, second_garage, authenticated_client
+):
+    _sms(session, garage, from_address="+447123400003")
+    _sms(session, second_garage, from_address="+447123400003")
+
+    resp = authenticated_client.get("/api/communications/sms/conversations")
+    assert resp.get_json()["total"] == 1
+
+
+def test_sms_conversation_messages_are_chronological(session, garage, authenticated_client):
+    addr = "+447123400004"
+    now = datetime.now(UTC)
+    _sms(session, garage, from_address=addr, body="first", created_at=now - timedelta(minutes=10))
+    _sms(
+        session,
+        garage,
+        direction="OUTBOUND",
+        from_address=SMS_NUMBER,
+        to_address=addr,
+        body="second",
+        created_at=now - timedelta(minutes=5),
+    )
+    _sms(session, garage, from_address=addr, body="third", created_at=now)
+
+    resp = authenticated_client.get(f"/api/communications/sms/conversations/{addr}/messages")
+    bodies = [m["body"] for m in resp.get_json()["messages"]]
+    assert bodies == ["first", "second", "third"]
+
+
+def test_mark_sms_conversation_read_updates_only_that_threads_inbound_rows(
+    session, garage, authenticated_client
+):
+    unread = _sms(session, garage, from_address="+447123400005", read_at=None)
+    other_thread_unread = _sms(session, garage, from_address="+447123400006", read_at=None)
+
+    resp = authenticated_client.post("/api/communications/sms/conversations/+447123400005/read")
+    assert resp.status_code == 200
+    assert resp.get_json()["updated"] == 1
+
+    session.refresh(unread)
+    session.refresh(other_thread_unread)
+    assert unread.read_at is not None
+    assert other_thread_unread.read_at is None
+
+
+def test_send_sms_by_raw_number(authenticated_client):
+    resp = authenticated_client.post(
+        "/api/communications/sms/send",
+        json={"to": "07123 400321", "body": "Hi, following up on your enquiry."},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["channel"] == "SMS"
+    assert body["status"] == "SKIPPED_NOT_CONFIGURED"
+    assert body["to_address"] == "+447123400321"  # no "whatsapp:" prefix
+
+
+def test_send_sms_requires_customer_id_or_to(authenticated_client):
+    resp = authenticated_client.post("/api/communications/sms/send", json={"body": "hi"})
+    assert resp.status_code == 422
+
+
+def test_send_sms_404s_for_other_tenants_customer(authenticated_client, second_customer):
+    resp = authenticated_client.post(
+        "/api/communications/sms/send",
+        json={"customer_id": str(second_customer.id), "body": "hi"},
+    )
+    assert resp.status_code == 404
+
+
+def test_automated_booking_sms_appears_in_sms_conversation_history(
+    app, session, garage, authenticated_client
+):
+    """The same history a manual send lands in - not a separate system. See
+    app/communications/sms_automation.py.
+
+    Deliberately does *not* touch app.communications.events' handler
+    registry (no _reset_handlers_for_tests()/register_*_handlers() calls):
+    that registry is a module-level global populated once for the whole
+    session (the Flask app fixture is session-scoped - see conftest.py), so
+    clearing it here without restoring every handler afterward would starve
+    every later test in the suite that depends on the real
+    default/email/sms handlers already being registered.
+    """
+    app.config["SMS_NOTIFICATIONS_ENABLED"] = True
+
+    from app.communications import events as comms_events
+
+    # id=None (rather than a random uuid) - a fake, non-persisted
+    # booking_request_id would violate the FK on CommunicationLog.
+    booking_request = type(
+        "BR",
+        (),
+        {
+            "id": None,
+            "customer_first_name": "Alex",
+            "customer_phone": "+447123456789",
+            "booking_reference": "BK1",
+        },
+    )()
+    comms_events.emit_event(
+        comms_events.BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request
+    )
+
+    resp = authenticated_client.get("/api/communications/sms/conversations")
+    body = resp.get_json()
+    assert body["total"] == 1
+    assert "BK1" in body["items"][0]["last_message"]["body"]

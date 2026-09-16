@@ -195,6 +195,7 @@ def create_app(config_class=Config):
     from .booking_flow.routes import booking_flow_blp
     from .booking_requests.routes import booking_requests_blp
     from .communications.routes import communications_blp
+    from .communications.sms_webhooks import twilio_sms_blp
     from .communications.voice_webhooks import twilio_voice_blp
     from .communications.whatsapp_webhooks import twilio_whatsapp_blp
     from .conversation.routes import conversation_blp
@@ -216,6 +217,7 @@ def create_app(config_class=Config):
     api.register_blueprint(health_blp)
     api.register_blueprint(twilio_voice_blp)
     api.register_blueprint(twilio_whatsapp_blp)
+    api.register_blueprint(twilio_sms_blp)
     api.register_blueprint(payment_webhooks_blp)
     api.register_blueprint(auth_blp)
     api.register_blueprint(customer_auth_blp)
