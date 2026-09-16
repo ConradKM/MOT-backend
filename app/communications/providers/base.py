@@ -24,6 +24,7 @@ class Capabilities:
     outbound_voice: bool = False
     browser_calling: bool = False
     whatsapp: bool = False
+    sms: bool = False
 
     def require(self, capability: str) -> None:
         if not getattr(self, capability, False):
@@ -76,3 +77,19 @@ class MessagingProvider(Protocol):
     def is_configured(self) -> bool: ...
     def configuration_error(self, garage) -> str | None: ...
     def send_message(self, garage, *, to: str, body: str) -> SendResult: ...
+
+
+class SMSProvider(Protocol):
+    """Plain-SMS transport - deliberately its own Protocol rather than reused
+    from MessagingProvider (which is WhatsApp-shaped: 'whatsapp:'-prefixed
+    addresses, a WhatsApp sender). Twilio can back both today from the same
+    account, but a future SMS-only/SIP provider must be swappable here
+    without touching WhatsApp at all - see app/communications/service.py::
+    send_sms_message and docs/SMS_PROVIDERS.md."""
+
+    name: str
+    capabilities: Capabilities
+
+    def is_configured(self) -> bool: ...
+    def configuration_error(self, garage) -> str | None: ...
+    def send_sms(self, garage, *, to: str, body: str) -> SendResult: ...

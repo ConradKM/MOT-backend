@@ -41,6 +41,24 @@ def test_stripe_adapter_reports_unconfigured_without_keys(app):
     assert StripePaymentProvider().is_configured() is False
 
 
+def test_stripe_declares_wallet_support_skeletons_declare_none():
+    assert StripePaymentProvider().capabilities.supported_wallets == ("apple_pay", "google_pay")
+    assert PayPalPaymentProvider().capabilities.supported_wallets == ()
+    assert SquarePaymentProvider().capabilities.supported_wallets == ()
+    assert FakePaymentProvider().capabilities.supported_wallets == ()
+
+
+def test_capabilities_default_to_no_wallets():
+    assert Capabilities().supported_wallets == ()
+
+
+def test_stripe_client_data_reports_available_wallets(app):
+    from app.payments.providers.stripe_provider import _client_data
+
+    data = _client_data("secret_123")
+    assert data["available_wallets"] == ["apple_pay", "google_pay"]
+
+
 def test_get_provider_rejects_an_unknown_name():
     with pytest.raises(ValueError):
         get_provider("venmo")

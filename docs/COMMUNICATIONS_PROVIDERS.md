@@ -42,6 +42,23 @@ and engine workflows are deliberately retained. Core automation imports no Twili
 SDK types. Twilio parsing stays at the adapter/webhook edge; events contain only
 the fields currently consumed, with no raw payload passed to services.
 
+## SMS
+
+A third, independent channel alongside Voice and WhatsApp: its own
+`SMSProvider` protocol (`providers/base.py`), its own `TwilioSMSProvider`
+adapter, its own `send_sms_message` in `service.py`, and its own
+`SMS_PROVIDER_DEFAULT` (`twilio`). It reuses a garage's existing
+`messaging_service_sid`/`voice_phone_number` - a standard Twilio number is
+SMS-capable already, so no new per-garage sender field or migration was
+needed.
+
+Booking-event SMS (request received/confirmed/rejected/changed/cancelled,
+MOT reminders - see `sms_automation.py`) sits behind a second, explicit
+gate: `SMS_NOTIFICATIONS_ENABLED` (default `false`). A deployment with a
+fully working Twilio account for Voice/WhatsApp still sends zero SMS until
+this is turned on - shipping the SMS infrastructure itself never starts
+texting an existing tenant's customers.
+
 ## Selection without a migration
 
 Defaults are `VOICE_PROVIDER_DEFAULT=twilio` and

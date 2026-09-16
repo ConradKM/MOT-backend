@@ -18,6 +18,22 @@ is about the architecture, not activation steps.
 | Square | Architecture skeleton only (`app/payments/providers/square.py`) - not connected, never fakes success |
 | Fake | In-process test double (`app/payments/providers/fake.py`) - what CI/dev run against by default |
 
+## Wallets (Apple Pay / Google Pay)
+
+`Capabilities.supported_wallets` (a tuple of wallet names, e.g.
+`("apple_pay", "google_pay")`) is purely descriptive - it never itself
+enables a wallet, and PayPal/Square's skeletons correctly report `()` since
+they're unconfigured. Stripe's Payment Element auto-detects and renders a
+wallet button when the browser/device supports it and the account is set
+up for it; the backend's job is only to tell the frontend which wallets are
+plausible via `available_wallets` inside `provider_data` (see
+`stripe_provider.py::_client_data`), never to build a button itself.
+
+**Manual, account-level step required for Apple Pay**: verify your domain
+in the Stripe Dashboard (Settings -> Payment methods -> Apple Pay) before
+Apple Pay will actually appear - this is not something any amount of code
+here can do for you. Google Pay needs no separate verification.
+
 ## The call chain
 
 ```
