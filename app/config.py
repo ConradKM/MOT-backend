@@ -288,6 +288,29 @@ class Config:
     CONVERSATIONRELAY_TTS_PROVIDER = os.getenv("CONVERSATIONRELAY_TTS_PROVIDER", "")
     CONVERSATIONRELAY_VOICE = os.getenv("CONVERSATIONRELAY_VOICE", "")
 
+    # --- OpenAI Realtime voice assistant (app/ai_voice/, app/ws/openai_voice.py)
+    # An alternative to ConversationRelay above, not layered on top of it: when
+    # both are enabled for a deployment, this one takes priority (see
+    # app/communications/voice_webhooks.py). Off by default - an inbound call
+    # gets the existing ConversationRelay/static behaviour until this is
+    # switched on. Never hard-code a key here; never commit a real one.
+    OPENAI_VOICE_ENABLED = os.getenv("OPENAI_VOICE_ENABLED", "false").lower() == "true"
+    # Backend-only - never sent to any frontend, never logged.
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    # "gpt-realtime" is OpenAI's current GA Realtime model as of writing; pin
+    # an exact dated snapshot in production once one is chosen (see
+    # docs/OPENAI_VOICE.md) rather than always floating to the newest.
+    OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
+    OPENAI_REALTIME_VOICE = os.getenv("OPENAI_REALTIME_VOICE", "marin")
+    # Matches Twilio Media Streams' own native codec (8kHz mu-law) so no audio
+    # transcoding/resampling happens anywhere in this codebase - both sides
+    # exchange the same bytes. UNVERIFIED against OpenAI's current GA nested
+    # session.audio format as of writing (see docs/OPENAI_VOICE.md's "must
+    # verify before go-live" note) - overridable here without a code change if
+    # OpenAI's accepted value differs.
+    OPENAI_REALTIME_AUDIO_FORMAT = os.getenv("OPENAI_REALTIME_AUDIO_FORMAT", "g711_ulaw")
+    OPENAI_REALTIME_WS_URL = os.getenv("OPENAI_REALTIME_WS_URL", "wss://api.openai.com/v1/realtime")
+
     # --- Conversation engine (see app/conversation) -----------------------
     # The development conversation simulator (POST /api/conversation/simulate)
     # runs real customer messages through the real booking engine without
