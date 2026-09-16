@@ -326,7 +326,20 @@ class Config:
     # committed. See docs/PAYMENTS_SETUP.md for where real ones come from.
     STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
     STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    # Verifies ordinary platform-level events (payment_intent.* for a garage
+    # with no Connect account yet, if any ever existed - in practice, today,
+    # nothing charges through the platform account itself; see
+    # docs/PAYMENTS_PROVIDERS.md). Distinct from STRIPE_CONNECT_WEBHOOK_SECRET
+    # below - Stripe issues a separate secret per webhook endpoint, and Connect
+    # events (account.updated, and payment events on connected accounts) must
+    # be sent to their own endpoint to be signed with their own secret.
     STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    # The webhook endpoint configured in the Stripe Dashboard as a *Connect*
+    # endpoint (Developers -> Webhooks -> "Listen to Connect events"),
+    # subscribed to account.updated plus the same payment_intent.*/charge.
+    # refunded/refund.updated events as the platform endpoint - see
+    # app/payments/webhooks.py::stripe_connect_webhook.
+    STRIPE_CONNECT_WEBHOOK_SECRET = os.getenv("STRIPE_CONNECT_WEBHOOK_SECRET", "")
     # Reserved for when app/payments/providers/paypal.py gets a real
     # implementation - unused today (the adapter is a skeleton that never
     # reads these). Named now so a future PR only has to fill in the

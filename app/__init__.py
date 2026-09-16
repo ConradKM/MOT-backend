@@ -209,6 +209,7 @@ def create_app(config_class=Config):
     from .health.routes import health_blp
     from .mot_records.routes import mot_records_blp
     from .mot_reminders.routes import mot_reminders_blp
+    from .payments.routes import payments_blp
     from .payments.webhooks import payment_webhooks_blp
     from .platform_admin.routes import PLATFORM_ADMIN_BLUEPRINTS
     from .public_booking.routes import public_booking_blp
@@ -220,6 +221,7 @@ def create_app(config_class=Config):
     api.register_blueprint(twilio_whatsapp_blp)
     api.register_blueprint(twilio_sms_blp)
     api.register_blueprint(payment_webhooks_blp)
+    api.register_blueprint(payments_blp)
     api.register_blueprint(auth_blp)
     api.register_blueprint(customer_auth_blp)
     api.register_blueprint(customer_portal_blp)

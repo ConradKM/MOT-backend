@@ -1,5 +1,10 @@
 # Payments setup: connecting a real Stripe account
 
+> This document describes the pre-Connect, single-merchant integration and
+> is retained for historical context only. The active CoMaz implementation is
+> Stripe Connect Direct Charges; use [STRIPE_CONNECT_SETUP.md](STRIPE_CONNECT_SETUP.md)
+> for all new test and live setup.
+
 The deposit infrastructure (deposit config, payment records, capacity holds,
 refunds, webhooks) is fully built and merged **dormant** - it ships disabled
 by default and cannot break the existing booking flow. This document is the

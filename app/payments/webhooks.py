@@ -62,3 +62,42 @@ def provider_webhook(provider):
         raise
 
     return {"received": True}, 200
+
+
+@payment_webhooks_blp.route("/stripe/connect", methods=["POST"])
+def stripe_connect_webhook():
+    """Stripe Connect's own webhook endpoint - a *different* endpoint/secret
+    from ``/stripe`` above, configured in the Dashboard as a Connect
+    endpoint (see docs/PAYMENTS_SETUP.md). Carries both ``account.updated``
+    (a connected account's own status changed - see
+    app/payments/connect.py::sync_account_from_webhook) and the same
+    payment_intent.*/charge.refunded/refund.updated events as the platform
+    endpoint, for a payment that was a Direct Charge against a connected
+    account. Both go through the exact same idempotent process_webhook -
+    only the verification secret differs.
+    """
+    if not current_app.config.get("STRIPE_CONNECT_WEBHOOK_SECRET"):
+        return {"error": "Stripe Connect is not configured for this deployment."}, 503
+
+    payload = request.get_data()
+    headers = {"Stripe-Signature": request.headers.get("Stripe-Signature", "")}
+
+    try:
+        process_webhook(
+            "stripe",
+            payload,
+            headers,
+            webhook_secret=current_app.config["STRIPE_CONNECT_WEBHOOK_SECRET"],
+        )
+    except WebhookVerificationError:
+        db.session.rollback()
+        current_app.logger.warning(
+            "Rejected Stripe Connect webhook: signature verification failed."
+        )
+        return {"error": "Invalid signature."}, 400
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Unhandled error processing Stripe Connect webhook.")
+        raise
+
+    return {"received": True}, 200

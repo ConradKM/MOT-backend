@@ -66,5 +66,5 @@ class PayPalPaymentProvider(PaymentProvider):
     def refund_payment(self, provider_payment_id, *, amount_minor, idempotency_key):
         raise ProviderNotConfigured(_NOT_IMPLEMENTED)
 
-    def verify_webhook(self, payload, headers):
+    def verify_webhook(self, payload, headers, *, webhook_secret=None):
         raise ProviderNotConfigured(_NOT_IMPLEMENTED)

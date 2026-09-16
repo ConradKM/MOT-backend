@@ -34,8 +34,9 @@ from app.models.payments.webhook_event import PaymentWebhookEvent
 from app.payments.audit import record_payment_event
 from app.payments.config import is_payments_configured
 from app.payments.money import calculate_deposit_minor, minor_to_decimal
-from app.payments.providers import get_provider
+from app.payments.providers import get_provider, get_provider_for_garage
 from app.payments.providers.base import (
+    WEBHOOK_ACCOUNT_UPDATED,
     WEBHOOK_PAYMENT_CANCELLED,
     WEBHOOK_PAYMENT_FAILED,
     WEBHOOK_PAYMENT_SUCCEEDED,
@@ -44,7 +45,11 @@ from app.payments.providers.base import (
     PaymentSessionResult,
     ProviderWebhookEvent,
 )
-from app.payments.settings import payments_enabled_for_garage, resolve_provider_name
+from app.payments.settings import (
+    payments_enabled_for_garage,
+    resolve_connected_account_id,
+    resolve_provider_name,
+)
 
 
 class PaymentUnavailableError(RuntimeError):
@@ -80,7 +85,9 @@ def create_deposit_hold(
     AWAITING_PAYMENT hold with no way to ever pay it.
     """
     provider_name = resolve_provider_name(garage)
-    if not payments_enabled_for_garage(garage) or not is_payments_configured(provider_name):
+    if not payments_enabled_for_garage(garage) or not is_payments_configured(
+        provider_name, garage=garage
+    ):
         raise PaymentUnavailableError("Payments are not configured for this business yet.")
 
     # Guaranteed by validate_deposit_config at configuration time (see
@@ -102,6 +109,9 @@ def create_deposit_hold(
         garage_id=garage.id,
         booking_request_id=booking_request.id,
         provider=provider_name,
+        # Snapshotted now, not re-resolved later - see BookingPayment.
+        # provider_account_id's own docstring.
+        provider_account_id=resolve_connected_account_id(garage, provider_name),
         payment_type=PAYMENT_TYPE_DEPOSIT,
         currency=appointment_type.deposit_currency or "GBP",
         amount_minor=amount_minor,
@@ -110,7 +120,7 @@ def create_deposit_hold(
     db.session.add(payment)
     db.session.flush()
 
-    provider = get_provider(provider_name)
+    provider = get_provider_for_garage(garage)
     try:
         session = provider.create_payment(
             amount_minor=amount_minor,
@@ -172,10 +182,14 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
         if payment is not None and payment.status in ("REQUIRES_PAYMENT", "PENDING"):
             if payment.provider_payment_id:
                 try:
-                    # Whichever adapter actually created this session - a
-                    # garage's provider setting could in principle have
-                    # changed since, so this must not re-resolve it fresh.
-                    get_provider(payment.provider).cancel_payment(payment.provider_payment_id)
+                    # Whichever adapter (and, for Stripe, whichever connected
+                    # account) actually created this session - a garage's
+                    # provider/Connect account could in principle have
+                    # changed since, so this must not re-resolve either
+                    # fresh; both are snapshotted on the payment row itself.
+                    get_provider(
+                        payment.provider, connected_account_id=payment.provider_account_id
+                    ).cancel_payment(payment.provider_payment_id)
                 except PaymentProviderError:
                     current_app.logger.warning(
                         "Failed to cancel expired payment intent %s",
@@ -214,9 +228,9 @@ def refund_deposit(
         # attempt rather than double-refund.
         return payment
 
-    # Whichever adapter actually created this payment - see the same note in
-    # expire_stale_payment_holds above.
-    provider = get_provider(payment.provider)
+    # Whichever adapter (and connected account) actually created this
+    # payment - see the same note in expire_stale_payment_holds above.
+    provider = get_provider(payment.provider, connected_account_id=payment.provider_account_id)
     payment.status = "REFUND_PENDING"
     payment.refund_requested_at = datetime.now(UTC)
     record_payment_event(
@@ -278,7 +292,9 @@ def refund_deposit(
 # --- webhooks --------------------------------------------------------------
 
 
-def process_webhook(provider_name: str, raw_payload: bytes, headers: dict) -> None:
+def process_webhook(
+    provider_name: str, raw_payload: bytes, headers: dict, *, webhook_secret: str | None = None
+) -> None:
     """Verify + apply one provider webhook delivery. Idempotent: a
     redelivered event (same provider event id) is a no-op, enforced at the
     database level (PaymentWebhookEvent.id is the provider's own event id, a
@@ -289,9 +305,14 @@ def process_webhook(provider_name: str, raw_payload: bytes, headers: dict) -> No
     since a webhook delivery carries no garage/business context until *after*
     its payload has been parsed - unlike every other call in this module,
     which resolves the provider from a specific garage or payment row.
+
+    ``webhook_secret`` is passed through unchanged to the adapter - Stripe
+    Connect events arrive on a separate endpoint/secret from ordinary
+    platform events (see app/payments/webhooks.py::stripe_connect_webhook);
+    every other adapter ignores it.
     """
     provider = get_provider(provider_name)
-    event = provider.verify_webhook(raw_payload, headers)
+    event = provider.verify_webhook(raw_payload, headers, webhook_secret=webhook_secret)
 
     record = PaymentWebhookEvent(
         id=event.event_id,
@@ -331,21 +352,45 @@ def _dispatch(event: ProviderWebhookEvent) -> None:
         _handle_payment_cancelled(event)
     elif event.kind == WEBHOOK_REFUND_UPDATED:
         _handle_refund_updated(event)
+    elif event.kind == WEBHOOK_ACCOUNT_UPDATED:
+        _handle_account_updated(event)
     # Anything else (WEBHOOK_UNHANDLED - e.g. Stripe's payment_intent.created/
     # processing) is recorded in PaymentWebhookEvent for audit but needs no
     # state change.
 
 
-def _find_payment(provider_payment_id: str | None) -> BookingPayment | None:
+def _handle_account_updated(event: ProviderWebhookEvent) -> None:
+    """A connected account's own status changed - not a payment. See
+    app/payments/connect.py::sync_account_from_webhook, which owns the
+    actual field-syncing logic (also called from the onboarding-return
+    status refresh, so both paths share one implementation)."""
+    if event.account is None:
+        return
+    from app.payments.connect import sync_account_from_webhook
+
+    sync_account_from_webhook(event.account)
+
+
+def _find_payment(
+    provider_payment_id: str | None, provider_account_id: str | None = None
+) -> BookingPayment | None:
     if not provider_payment_id:
         return None
-    return BookingPayment.query.filter_by(  # type: ignore[no-any-return]
+    payment = BookingPayment.query.filter_by(  # type: ignore[no-any-return]
         provider_payment_id=provider_payment_id
     ).first()
+    # A verified Connect delivery can still only change a payment made on the
+    # account named in that delivery.  This is deliberately not imposed on
+    # fake/legacy platform events, which carry no account id.
+    if provider_account_id is not None and (
+        payment is None or payment.provider_account_id != provider_account_id
+    ):
+        return None
+    return payment
 
 
 def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
-    payment = _find_payment(event.provider_payment_id)
+    payment = _find_payment(event.provider_payment_id, event.provider_account_id)
     if payment is None or payment.status == "SUCCEEDED":
         return  # unknown intent, or already handled (duplicate/out-of-order)
 
@@ -373,7 +418,7 @@ def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
 
 
 def _handle_payment_failed(event: ProviderWebhookEvent) -> None:
-    payment = _find_payment(event.provider_payment_id)
+    payment = _find_payment(event.provider_payment_id, event.provider_account_id)
     if payment is None or payment.status in ("SUCCEEDED", "CANCELLED"):
         return
 
@@ -393,7 +438,7 @@ def _handle_payment_failed(event: ProviderWebhookEvent) -> None:
 
 
 def _handle_payment_cancelled(event: ProviderWebhookEvent) -> None:
-    payment = _find_payment(event.provider_payment_id)
+    payment = _find_payment(event.provider_payment_id, event.provider_account_id)
     if payment is None or payment.status in ("SUCCEEDED", "CANCELLED"):
         return
 
@@ -409,7 +454,7 @@ def _handle_payment_cancelled(event: ProviderWebhookEvent) -> None:
 
 
 def _handle_refund_updated(event: ProviderWebhookEvent) -> None:
-    payment = _find_payment(event.provider_payment_id)
+    payment = _find_payment(event.provider_payment_id, event.provider_account_id)
     if payment is None or payment.status == "REFUNDED":
         return
 

@@ -5,9 +5,9 @@ provider independently, and the booking/deposit/refund/capacity-hold logic
 never knows or cares which one it's talking to. This document explains that
 architecture and exactly what's involved in adding a new provider for real.
 
-For connecting the currently-implemented Stripe adapter to a real merchant
-account, see [PAYMENTS_SETUP.md](PAYMENTS_SETUP.md) instead - this document
-is about the architecture, not activation steps.
+For Stripe Connect activation and payment-method-domain registration, see
+[STRIPE_CONNECT_SETUP.md](STRIPE_CONNECT_SETUP.md) instead - this document is
+about the architecture, not activation steps.
 
 ## Current state
 
@@ -23,7 +23,7 @@ is about the architecture, not activation steps.
 `Capabilities.supported_wallets` (a tuple of wallet names, e.g.
 `("apple_pay", "google_pay")`) is purely descriptive - it never itself
 enables a wallet, and PayPal/Square's skeletons correctly report `()` since
-they're unconfigured. Stripe's Payment Element auto-detects and renders a
+they're unconfigured. Stripe's Express Checkout Element and Payment Element auto-detect and render a
 wallet button when the browser/device supports it and the account is set
 up for it; the backend's job is only to tell the frontend which wallets are
 plausible via `available_wallets` inside `provider_data` (see
@@ -174,7 +174,8 @@ authorise a charge on our backend's behalf). The frontend branches on
 ## Business-specific provider selection
 
 `GaragePaymentSettings` (`app/models/payments/garage_payment_settings.py`) -
-one optional row per garage:
+one optional row per garage. Stripe rows additionally store the non-secret
+connected-account ID and Stripe-synchronised onboarding/readiness fields:
 
 | Column | Meaning |
 |---|---|
@@ -194,10 +195,10 @@ separate follow-up once a second provider is actually implemented.
 
 ### Credentials: today vs. later
 
-Today, every implemented provider (just Stripe) is configured **per
-deployment**, via plain env vars (`STRIPE_SECRET_KEY`, etc.) - one CoMaz-
-managed merchant account serves every business using that provider. This is
-"Model A" (CoMaz-managed account).
+Stripe is configured per deployment with CoMaz's platform keys, while each
+garage's Direct Charges run in its own Stripe Connect Express account. The
+platform key creates/manages those accounts; no garage secret is stored by
+CoMaz.
 
 `GaragePaymentSettings.merchant_account_reference` exists so a later "Model
 B" (each business has its own merchant account/credentials) doesn't need a
