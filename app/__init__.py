@@ -203,6 +203,7 @@ def create_app(config_class=Config):
     from .customer_portal.routes import customer_portal_blp
     from .customers.routes import customers_blp
     from .employees.routes import employees_blp
+    from .feedback.routes import feedback_blp
     from .garages.routes import garages_blp, public_garages_blp
     from .garages.schedule.routes import garage_schedule_blp
     from .health.routes import health_blp
@@ -232,6 +233,7 @@ def create_app(config_class=Config):
     api.register_blueprint(conversation_blp)
     api.register_blueprint(customers_blp)
     api.register_blueprint(employees_blp)
+    api.register_blueprint(feedback_blp)
     api.register_blueprint(roles_blp)
     api.register_blueprint(vehicles_blp)
     api.register_blueprint(mot_records_blp)
@@ -261,6 +263,7 @@ def create_app(config_class=Config):
         booking_request,
         customer,
         employee,
+        feedback,
         garage,
         garage_schedule,
         mot_record,

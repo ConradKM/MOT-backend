@@ -173,6 +173,12 @@ class Config:
     RESEND_API_KEY = os.getenv("RESEND_API_KEY", os.getenv("EMAIL_API_KEY", ""))
     RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", EMAIL_FROM)
 
+    # --- Business feedback (see app/feedback) ---------------------------
+    # Where the "New Business Feedback" notification is sent after a feedback
+    # row is saved. The DB write is the source of truth and always succeeds
+    # independently of this - see app/feedback/routes.py.
+    FEEDBACK_NOTIFICATION_EMAIL = os.getenv("FEEDBACK_NOTIFICATION_EMAIL", "support@comaz.co.uk")
+
     # --- Twilio communications (see app/communications) ------------------
     # CoMaz OS's own (master) Twilio account. Both unset (the default) is a
     # fully supported, permanent state for a deployment that hasn't turned on
