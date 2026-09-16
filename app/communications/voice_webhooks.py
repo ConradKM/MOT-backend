@@ -16,6 +16,8 @@ from flask import Response, current_app, request
 from flask_smorest import Blueprint, abort
 from twilio.twiml.voice_response import VoiceResponse
 
+from app.ai_voice.config import openai_configured, openai_voice_enabled
+from app.ai_voice.twiml import build_openai_voice_twiml
 from app.models.communications.communication_log import DIRECTION_INBOUND
 
 from .config import is_twilio_configured
@@ -65,10 +67,31 @@ def incoming_call():
 
     record_inbound_event(garage, event)
 
-    # The automated assistant, when it's switched on for this deployment. Any
-    # failure building the TwiML falls through to the escalation/static
-    # greeting below - a broken ConversationRelay config must never drop the
-    # call.
+    # The OpenAI Realtime voice assistant, when switched on for this
+    # deployment - takes priority over ConversationRelay below (the two are
+    # alternatives, not layered). Same fall-through contract: any failure
+    # building the TwiML degrades to ConversationRelay/static, never drops
+    # the call. record_inbound_event above must run first regardless of which
+    # path is taken - the WS bridge (app/ws/openai_voice.py) requires that
+    # CommunicationLog row to exist before it will accept the connection.
+    if openai_voice_enabled() and openai_configured():
+        try:
+            twiml = build_openai_voice_twiml(garage)
+            current_app.logger.info(
+                "VOICE_INCOMING callSid=%r garage=%s twiml=openai-realtime bytes=%d",
+                call_sid,
+                garage.id,
+                len(twiml),
+            )
+            return Response(twiml, mimetype="text/xml")
+        except Exception:
+            current_app.logger.exception(
+                "VOICE_INCOMING callSid=%r garage=%s twiml=openai-build-failed - "
+                "falling back to conversationrelay/static",
+                call_sid,
+                garage.id,
+            )
+
     if conversationrelay_enabled():
         try:
             twiml = build_incoming_call_twiml(garage)

@@ -22,5 +22,10 @@ twilio>=9,<10
 cryptography>=43,<47
 # Payments provider adapter (app/payments/providers/stripe_provider.py).
 stripe>=11,<16
+# Outbound WebSocket client from our own backend to OpenAI's Realtime API
+# (app/ai_voice/realtime_bridge.py) - a synchronous client, not asyncio-based,
+# so it cooperates correctly under gunicorn's gevent worker (same reasoning as
+# Flask-Sock itself - see app/ws/__init__.py).
+websocket-client>=1.8,<2
 pytest>=8.3,<9
 pytest-cov>=6,<7
