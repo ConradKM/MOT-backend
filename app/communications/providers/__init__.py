@@ -6,13 +6,13 @@ request input. No provisioning or tenant data writes occur here.
 
 from flask import current_app
 
-from .base import MessagingProvider, ProviderNotConfigured, VoiceProvider
+from .base import MessagingProvider, ProviderNotConfigured, SMSProvider, VoiceProvider
 from .sip import SipVoiceProvider
-from .twilio import TwilioMessagingProvider, TwilioVoiceProvider
+from .twilio import TwilioMessagingProvider, TwilioSMSProvider, TwilioVoiceProvider
 
 
 def provider_name(garage, channel: str) -> str:
-    if channel not in {"voice", "whatsapp"}:
+    if channel not in {"voice", "whatsapp", "sms"}:
         raise ValueError(f"Unknown communications channel: {channel}")
     cfg = current_app.config
     override = cfg.get("COMMUNICATIONS_PROVIDER_OVERRIDES", {}).get(str(garage.id), {})
@@ -33,3 +33,10 @@ def get_messaging_provider(garage) -> MessagingProvider:
     if name == "twilio":
         return TwilioMessagingProvider()
     raise ProviderNotConfigured(f"Unknown WhatsApp provider: {name}")
+
+
+def get_sms_provider(garage) -> SMSProvider:
+    name = provider_name(garage, "sms")
+    if name == "twilio":
+        return TwilioSMSProvider()
+    raise ProviderNotConfigured(f"Unknown SMS provider: {name}")

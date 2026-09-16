@@ -136,3 +136,38 @@ class TwilioMessagingProvider:
             or payload.get("ErrorMessage")
             or None,
         )
+
+
+class TwilioSMSProvider:
+    """Plain SMS via the same Twilio account/number used for voice - a
+    standard Twilio number is SMS-capable without any separate onboarding, so
+    this needs no new per-garage sender field: it reuses
+    ``messaging_service_sid`` (if set) or ``voice_phone_number``."""
+
+    name = "twilio"
+    capabilities = Capabilities(sms=True)
+    is_configured = staticmethod(is_twilio_configured)
+
+    def configuration_error(self, garage) -> str | None:
+        error = _configuration_error(garage)
+        if error:
+            return error
+        settings = garage.communication_settings
+        if not (settings.messaging_service_sid or settings.voice_phone_number):
+            return "No SMS-capable number configured for this business."
+        return None
+
+    def send_sms(self, garage, *, to: str, body: str) -> SendResult:
+        settings = garage.communication_settings
+        client = get_twilio_client_for_garage(garage)
+        assert client is not None
+        send_kwargs: dict = {"to": to, "body": body}
+        if settings.messaging_service_sid:
+            send_kwargs["messaging_service_sid"] = settings.messaging_service_sid
+        else:
+            send_kwargs["from_"] = settings.voice_phone_number
+        try:
+            message = client.messages.create(**send_kwargs)
+            return SendResult(message.sid, message.status)
+        except Exception as exc:
+            raise failure(exc) from exc

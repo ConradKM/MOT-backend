@@ -252,6 +252,7 @@ def create_app(config_class=Config):
     # init'd above (served only under a WebSocket-capable server - gunicorn's
     # gevent worker in production).
     from . import ws  # noqa: F401
+    from .communications.sms_automation import register_sms_handlers
     from .conversation.automation import register_default_handlers
     from .email.automation import register_email_handlers
     from .models import (  # noqa: F401
@@ -299,5 +300,6 @@ def create_app(config_class=Config):
 
     register_default_handlers()
     register_email_handlers()
+    register_sms_handlers()
 
     return app

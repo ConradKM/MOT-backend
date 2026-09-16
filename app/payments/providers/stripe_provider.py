@@ -77,10 +77,15 @@ def _client():
 def _client_data(client_secret: str | None) -> dict:
     """The only Stripe-specific fields ever safe to send a browser - the
     Payment Element needs both to initialise (see
-    src/components/customer/payments/StripeCheckout.tsx)."""
+    src/components/customer/payments/StripeCheckout.tsx). ``available_wallets``
+    tells the frontend which wallet buttons the Payment Element may surface -
+    it does not itself turn them on; Apple Pay additionally needs its domain
+    verified in the Stripe Dashboard (see docs/PAYMENTS_PROVIDERS.md), which
+    is an account-level, non-code step."""
     return {
         "client_secret": client_secret,
         "publishable_key": current_app.config.get("STRIPE_PUBLISHABLE_KEY") or None,
+        "available_wallets": list(StripePaymentProvider.capabilities.supported_wallets),
     }
 
 
@@ -94,6 +99,10 @@ class StripePaymentProvider(PaymentProvider):
         supports_webhooks=True,
         supports_idempotency=True,
         supports_saved_payment_methods=True,
+        # Stripe's Payment Element auto-detects and offers these when the
+        # browser/device supports them and (for Apple Pay) the deployment's
+        # domain is verified with Stripe - see docs/PAYMENTS_PROVIDERS.md.
+        supported_wallets=("apple_pay", "google_pay"),
     )
 
     def is_configured(self) -> bool:

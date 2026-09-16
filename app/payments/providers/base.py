@@ -75,6 +75,12 @@ class Capabilities:
     supports_webhooks: bool = False
     supports_idempotency: bool = False
     supports_saved_payment_methods: bool = False
+    # Wallet payment methods (e.g. "apple_pay", "google_pay") this provider
+    # can surface inside its own checkout - purely descriptive, like every
+    # other field here: it does not itself enable anything. A provider that
+    # is not configured (PayPal/Square skeletons) must always report an
+    # empty tuple, never a wallet it cannot actually process.
+    supported_wallets: tuple[str, ...] = ()
 
     def require(self, capability: str) -> None:
         if not getattr(self, capability, False):

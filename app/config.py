@@ -180,9 +180,16 @@ class Config:
     # Never hard-code these; never commit real values.
     VOICE_PROVIDER_DEFAULT = os.getenv("VOICE_PROVIDER_DEFAULT", "twilio")
     WHATSAPP_PROVIDER_DEFAULT = os.getenv("WHATSAPP_PROVIDER_DEFAULT", "twilio")
+    SMS_PROVIDER_DEFAULT = os.getenv("SMS_PROVIDER_DEFAULT", "twilio")
     COMMUNICATIONS_PROVIDER_OVERRIDES = json.loads(
         os.getenv("COMMUNICATIONS_PROVIDER_OVERRIDES", "{}")
     )
+    # A second, independent gate on top of provider configuration: even a
+    # deployment with a fully working Twilio account sends no booking-event
+    # SMS at all until this is explicitly turned on. Keeps "SMS infra now
+    # exists" from silently starting to text every existing tenant's
+    # customers the moment this ships - see app/communications/sms_automation.py.
+    SMS_NOTIFICATIONS_ENABLED = os.getenv("SMS_NOTIFICATIONS_ENABLED", "false").lower() == "true"
 
     TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
     TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")

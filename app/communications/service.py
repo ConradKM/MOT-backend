@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from app.extensions import db
 from app.models.communications.communication_log import (
+    CHANNEL_SMS,
     CHANNEL_VOICE,
     CHANNEL_WHATSAPP,
     DIRECTION_INBOUND,
@@ -23,7 +24,7 @@ from app.models.communications.communication_log import (
 )
 from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
 
-from .providers import get_messaging_provider, get_voice_provider, provider_name
+from .providers import get_messaging_provider, get_sms_provider, get_voice_provider, provider_name
 from .providers.base import InboundEvent, ProviderFailure, StatusEvent
 
 if TYPE_CHECKING:
@@ -192,6 +193,97 @@ def send_whatsapp_message(
         external_id=message.interaction_id,
         from_address=settings.whatsapp_sender,
         to_address=to_address,
+        status=message.status,
+        trigger_event=trigger_event,
+        body=body,
+        **_related_ids(customer, appointment, booking_request),
+    )
+
+
+def send_sms_message(
+    *,
+    garage,
+    to: str,
+    body: str,
+    customer=None,
+    appointment=None,
+    booking_request=None,
+    trigger_event: str | None = None,
+) -> CommunicationLog:
+    """Send a plain SMS from ``garage``'s configured Twilio number. Same
+    skip/error/success recording contract as :func:`send_whatsapp_message` -
+    always returns a :class:`CommunicationLog`, never raises for a
+    provider-side failure. Callers (see app/communications/sms_automation.py)
+    are additionally expected to check ``SMS_NOTIFICATIONS_ENABLED`` before
+    calling this at all; this function itself only gates on provider/garage
+    configuration, exactly like every other channel here.
+    """
+    settings = garage.communication_settings
+    provider = get_sms_provider(garage)
+
+    try:
+        to_e164 = normalize_uk_mobile(to)
+    except InvalidPhoneNumberError as exc:
+        return _skip(
+            garage=garage,
+            channel=CHANNEL_SMS,
+            direction=DIRECTION_OUTBOUND,
+            to_address=to,
+            body=body,
+            trigger_event=trigger_event,
+            customer=customer,
+            appointment=appointment,
+            booking_request=booking_request,
+            reason=f"Invalid destination number: {exc}",
+        )
+
+    skip_kwargs = {
+        "garage": garage,
+        "channel": CHANNEL_SMS,
+        "direction": DIRECTION_OUTBOUND,
+        "to_address": to_e164,
+        "body": body,
+        "trigger_event": trigger_event,
+        "customer": customer,
+        "appointment": appointment,
+        "booking_request": booking_request,
+    }
+
+    reason = provider.configuration_error(garage)
+    if reason:
+        return _skip(**skip_kwargs, reason=reason)
+
+    from_address = settings.messaging_service_sid or settings.voice_phone_number
+
+    try:
+        provider.capabilities.require("sms")
+        message = provider.send_sms(garage, to=to_e164, body=body)
+    except Exception as exc:  # noqa: BLE001 - a send must never raise; recorded as FAILED below
+        error_code, error_message = _failure_fields(exc)
+        return _create_log(
+            garage_id=garage.id,
+            channel=CHANNEL_SMS,
+            direction=DIRECTION_OUTBOUND,
+            external_provider=provider.name,
+            external_id=None,
+            from_address=from_address,
+            to_address=to_e164,
+            status="FAILED",
+            trigger_event=trigger_event,
+            body=body,
+            error_code=error_code,
+            error_message=error_message,
+            **_related_ids(customer, appointment, booking_request),
+        )
+
+    return _create_log(
+        garage_id=garage.id,
+        channel=CHANNEL_SMS,
+        direction=DIRECTION_OUTBOUND,
+        external_provider=provider.name,
+        external_id=message.interaction_id,
+        from_address=from_address,
+        to_address=to_e164,
         status=message.status,
         trigger_event=trigger_event,
         body=body,
