@@ -76,7 +76,7 @@ def create_connected_account(garage: Garage) -> str:
 
     settings.stripe_account_id = account.id
     db.session.commit()
-    return account.id
+    return str(account.id)
 
 
 def create_account_link(garage: Garage, *, return_url: str, refresh_url: str) -> str:
@@ -100,7 +100,7 @@ def create_account_link(garage: Garage, *, return_url: str, refresh_url: str) ->
         )
     except stripe.error.StripeError as exc:  # pragma: no cover - real API only
         raise ConnectError(str(exc), code=getattr(exc, "code", None)) from exc
-    return link.url
+    return str(link.url)
 
 
 def _apply_account_fields(settings: GaragePaymentSettings, account: dict) -> None:

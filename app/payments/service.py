@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from flask import current_app
 from sqlalchemy.exc import IntegrityError
@@ -376,9 +377,10 @@ def _find_payment(
 ) -> BookingPayment | None:
     if not provider_payment_id:
         return None
-    payment = BookingPayment.query.filter_by(  # type: ignore[no-any-return]
-        provider_payment_id=provider_payment_id
-    ).first()
+    payment = cast(
+        BookingPayment | None,
+        BookingPayment.query.filter_by(provider_payment_id=provider_payment_id).first(),
+    )
     # A verified Connect delivery can still only change a payment made on the
     # account named in that delivery.  This is deliberately not imposed on
     # fake/legacy platform events, which carry no account id.

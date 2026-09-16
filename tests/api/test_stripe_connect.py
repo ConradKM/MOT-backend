@@ -95,7 +95,8 @@ def test_connect_routes_are_owner_only_and_tenant_scoped(
 ):
     monkeypatch.setattr("app.payments.routes.create_connected_account", lambda garage: "acct_owner")
     monkeypatch.setattr(
-        "app.payments.routes.create_account_link", lambda garage, **kwargs: "https://connect.test/link"
+        "app.payments.routes.create_account_link",
+        lambda garage, **kwargs: "https://connect.test/link",
     )
 
     assert client.post("/api/payments/stripe/connect").status_code == 401
@@ -187,20 +188,54 @@ def test_connect_account_webhook_and_payment_event_are_account_bound(session, ga
     session.add(payment)
     session.commit()
 
-    events = iter((
-        ProviderWebhookEvent("evt_account", WEBHOOK_ACCOUNT_UPDATED, None, None, None, None, {}, account={
-            "account_id": "acct_connect_a", "charges_enabled": True, "payouts_enabled": True,
-            "details_submitted": True,
-        }),
-        ProviderWebhookEvent("evt_wrong_account", WEBHOOK_PAYMENT_SUCCEEDED, "pi_connect_1", None, None, None, {}, provider_account_id="acct_other"),
-        ProviderWebhookEvent("evt_right_account", WEBHOOK_PAYMENT_SUCCEEDED, "pi_connect_1", None, None, None, {}, provider_account_id="acct_connect_a"),
-    ))
+    events = iter(
+        (
+            ProviderWebhookEvent(
+                "evt_account",
+                WEBHOOK_ACCOUNT_UPDATED,
+                None,
+                None,
+                None,
+                None,
+                {},
+                account={
+                    "account_id": "acct_connect_a",
+                    "charges_enabled": True,
+                    "payouts_enabled": True,
+                    "details_submitted": True,
+                },
+            ),
+            ProviderWebhookEvent(
+                "evt_wrong_account",
+                WEBHOOK_PAYMENT_SUCCEEDED,
+                "pi_connect_1",
+                None,
+                None,
+                None,
+                {},
+                provider_account_id="acct_other",
+            ),
+            ProviderWebhookEvent(
+                "evt_right_account",
+                WEBHOOK_PAYMENT_SUCCEEDED,
+                "pi_connect_1",
+                None,
+                None,
+                None,
+                {},
+                provider_account_id="acct_connect_a",
+            ),
+        )
+    )
 
     class Provider:
         name = "stripe"
-        def verify_webhook(self, *_args, **_kwargs): return next(events)
+
+        def verify_webhook(self, *_args, **_kwargs):
+            return next(events)
 
     from unittest.mock import patch
+
     with patch("app.payments.service.get_provider", return_value=Provider()):
         process_webhook("stripe", b"{}", {}, webhook_secret="whsec_connect")
         process_webhook("stripe", b"{}", {}, webhook_secret="whsec_connect")
@@ -214,24 +249,45 @@ def test_connect_account_webhook_and_payment_event_are_account_bound(session, ga
 
 def test_refund_uses_the_original_connected_account(session, garage, monkeypatch):
     booking = BookingRequest(
-        garage_id=garage.id, status="PENDING", booking_reference="BKREFUND",
-        customer_first_name="Alex", customer_last_name="Turner", customer_email="alex@example.com",
-        customer_phone="+447123456789", vehicle_registration="CN11REF",
-        preferred_date=datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=7), preferred_time=datetime.time(9, 30),
+        garage_id=garage.id,
+        status="PENDING",
+        booking_reference="BKREFUND",
+        customer_first_name="Alex",
+        customer_last_name="Turner",
+        customer_email="alex@example.com",
+        customer_phone="+447123456789",
+        vehicle_registration="CN11REF",
+        preferred_date=datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=7),
+        preferred_time=datetime.time(9, 30),
     )
-    session.add(booking); session.flush()
-    payment = BookingPayment(garage_id=garage.id, booking_request_id=booking.id, provider="stripe",
-        provider_account_id="acct_original", provider_payment_id="pi_original", amount_minor=2000,
-        currency="GBP", status="SUCCEEDED")
-    session.add(payment); session.commit()
+    session.add(booking)
+    session.flush()
+    payment = BookingPayment(
+        garage_id=garage.id,
+        booking_request_id=booking.id,
+        provider="stripe",
+        provider_account_id="acct_original",
+        provider_payment_id="pi_original",
+        amount_minor=2000,
+        currency="GBP",
+        status="SUCCEEDED",
+    )
+    session.add(payment)
+    session.commit()
     captured = {}
+
     class Provider:
         def refund_payment(self, payment_id, **kwargs):
             captured["payment_id"] = payment_id
             captured.update(kwargs)
             from app.payments.providers.base import RefundResult
+
             return RefundResult("re_1", "REFUNDED", 2000)
-    monkeypatch.setattr("app.payments.service.get_provider", lambda name, **kwargs: (captured.update(kwargs) or Provider()))
+
+    monkeypatch.setattr(
+        "app.payments.service.get_provider",
+        lambda name, **kwargs: captured.update(kwargs) or Provider(),
+    )
     refund_deposit(booking, reason="test")
     assert captured["connected_account_id"] == "acct_original"
     assert captured["payment_id"] == "pi_original"

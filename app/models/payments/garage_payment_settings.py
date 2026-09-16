@@ -75,9 +75,7 @@ class GaragePaymentSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type:
     stripe_account_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     # True once Stripe reports details_submitted on the account - onboarding
     # is done, even if a capability is still pending review.
-    stripe_onboarding_complete: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
+    stripe_onboarding_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Mirrors Stripe Account.charges_enabled/payouts_enabled exactly - synced
     # from account.updated webhooks (app/payments/webhooks.py) and from an
     # explicit status refresh after the onboarding return redirect. A deposit
