@@ -20,6 +20,7 @@ from sqlalchemy import and_, func, or_
 
 from app.extensions import db
 from app.models.communications.communication_log import (
+    CHANNEL_SMS,
     CHANNEL_VOICE,
     CHANNEL_WHATSAPP,
     DIRECTION_INBOUND,
@@ -83,6 +84,11 @@ def capabilities_for(garage) -> dict:
         "whatsapp_configured": bool(
             settings and (settings.whatsapp_sender or settings.messaging_service_sid)
         ),
+        # Reuses the voice number/messaging service - see TwilioSMSProvider's
+        # own identical check (providers/twilio.py).
+        "sms_configured": bool(
+            settings and (settings.messaging_service_sid or settings.voice_phone_number)
+        ),
         # Staff can place a browser (Voice SDK) call: the deployment has an
         # API key + TwiML App (voice_calling.browser_calling_configured), and
         # this business has an outbound number to use as caller ID.
@@ -120,6 +126,12 @@ def overview_summary(garage) -> dict:
         CommunicationLog.read_at.is_(None),
     ).count()
 
+    sms_unread = base.filter(
+        CommunicationLog.channel == CHANNEL_SMS,
+        CommunicationLog.direction == DIRECTION_INBOUND,
+        CommunicationLog.read_at.is_(None),
+    ).count()
+
     outgoing_contacts_today = (
         db.session.query(func.count(func.distinct(CommunicationLog.to_address)))
         .filter(
@@ -133,11 +145,12 @@ def overview_summary(garage) -> dict:
     )
 
     # One entry per voice call (its call-level row), not per transcript turn;
-    # WhatsApp stays message-oriented.
+    # WhatsApp/SMS stay message-oriented.
     recent = (
         base.filter(
             or_(
                 CommunicationLog.channel == CHANNEL_WHATSAPP,
+                CommunicationLog.channel == CHANNEL_SMS,
                 and_(CommunicationLog.channel == CHANNEL_VOICE, _CALL_LEVEL_ROW),
             )
         )
@@ -150,6 +163,7 @@ def overview_summary(garage) -> dict:
         "calls_today": calls_today,
         "missed_calls_today": missed_calls_today,
         "whatsapp_unread": whatsapp_unread,
+        "sms_unread": sms_unread,
         "outgoing_contacts_today": outgoing_contacts_today,
         "recent": recent,
         "capabilities": capabilities_for(garage),
@@ -162,6 +176,16 @@ def unread_whatsapp_count(garage) -> int:
     count: int = CommunicationLog.query.filter_by(
         garage_id=garage.id,
         channel=CHANNEL_WHATSAPP,
+        direction=DIRECTION_INBOUND,
+        read_at=None,
+    ).count()
+    return count
+
+
+def unread_sms_count(garage) -> int:
+    count: int = CommunicationLog.query.filter_by(
+        garage_id=garage.id,
+        channel=CHANNEL_SMS,
         direction=DIRECTION_INBOUND,
         read_at=None,
     ).count()
@@ -454,15 +478,108 @@ def mark_conversation_read(garage, phone_e164: str) -> int:
 def list_customer_communications(
     garage, customer_id, *, limit: int | None = None
 ) -> list[CommunicationLog]:
-    """A customer's calls + WhatsApp messages, most recent first - matched by
-    the FK set at log time (see service.py), not by re-matching phone
-    strings, so this can never accidentally include another customer's rows.
+    """A customer's calls + WhatsApp + SMS messages, most recent first -
+    matched by the FK set at log time (see service.py), not by re-matching
+    phone strings, so this can never accidentally include another
+    customer's rows.
     """
     rows: list[CommunicationLog] = (
         CommunicationLog.query.filter_by(garage_id=garage.id, customer_id=customer_id)
-        .filter(CommunicationLog.channel.in_((CHANNEL_VOICE, CHANNEL_WHATSAPP)))
+        .filter(CommunicationLog.channel.in_((CHANNEL_VOICE, CHANNEL_WHATSAPP, CHANNEL_SMS)))
         .order_by(CommunicationLog.created_at.desc())
         .limit(_clamp_limit(limit))
         .all()
     )
     return rows
+
+
+# --------------------------------------------------------------------------
+# SMS conversations - deliberately simpler than the WhatsApp ones above: no
+# WhatsAppConversationState-equivalent table exists for SMS (no archive/
+# delete yet), so every phone number with at least one SMS row is a thread.
+# Addresses are stored as plain E.164 (no "whatsapp:"-style prefix - see
+# service.py::send_sms_message), so no prefix stripping is needed either.
+# --------------------------------------------------------------------------
+
+
+def list_sms_conversations(
+    garage, *, search: str | None = None, limit: int | None = None, offset: int = 0
+) -> tuple[list[dict], int]:
+    rows = (
+        CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_SMS)
+        .order_by(CommunicationLog.created_at.desc())
+        .all()
+    )
+
+    conversations: dict[str, dict] = {}
+    for row in rows:
+        counterpart = row.from_address if row.direction == DIRECTION_INBOUND else row.to_address
+        if not counterpart:
+            continue
+
+        convo = conversations.get(counterpart)
+        if convo is None:
+            convo = {
+                "phone": counterpart,
+                "customer": row.customer,
+                "last_message": row,
+                "unread_count": 0,
+                "archived": False,
+            }
+            conversations[counterpart] = convo
+        elif convo["customer"] is None and row.customer is not None:
+            convo["customer"] = row.customer
+
+        if row.direction == DIRECTION_INBOUND and row.read_at is None:
+            convo["unread_count"] += 1
+
+    result = list(conversations.values())
+
+    if search:
+        pattern = search.strip().lower()
+
+        def _matches(convo: dict) -> bool:
+            customer = convo["customer"]
+            name = f"{customer.first_name} {customer.last_name}".lower() if customer else ""
+            return pattern in name or pattern in (convo["phone"] or "").lower()
+
+        result = [c for c in result if _matches(c)]
+
+    total = len(result)
+    start = max(0, offset)
+    end = start + _clamp_limit(limit)
+    return result[start:end], total
+
+
+def get_sms_conversation_messages(
+    garage, phone_e164: str, *, limit: int | None = None
+) -> list[CommunicationLog]:
+    """Chronological (oldest first) - the most recent ``limit`` messages,
+    reversed back into reading order. Includes automated booking-event SMS
+    (see app/communications/sms_automation.py) exactly like a manual send -
+    both go through the same send_sms_message/CommunicationLog path."""
+    rows = (
+        CommunicationLog.query.filter_by(garage_id=garage.id, channel=CHANNEL_SMS)
+        .filter(
+            or_(
+                CommunicationLog.from_address == phone_e164,
+                CommunicationLog.to_address == phone_e164,
+            )
+        )
+        .order_by(CommunicationLog.created_at.desc())
+        .limit(_clamp_limit(limit))
+        .all()
+    )
+    return list(reversed(rows))
+
+
+def mark_sms_conversation_read(garage, phone_e164: str) -> int:
+    updated: int = CommunicationLog.query.filter(
+        CommunicationLog.garage_id == garage.id,
+        CommunicationLog.channel == CHANNEL_SMS,
+        CommunicationLog.direction == DIRECTION_INBOUND,
+        CommunicationLog.from_address == phone_e164,
+        CommunicationLog.read_at.is_(None),
+    ).update({"read_at": datetime.now(UTC)}, synchronize_session=False)
+    db.session.commit()
+    return updated

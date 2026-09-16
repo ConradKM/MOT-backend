@@ -457,7 +457,7 @@ def record_inbound_event(garage, event: InboundEvent, *, customer=None) -> Commu
         from_address=event.from_address,
         to_address=event.to_address,
         status=event.status,
-        body=event.body if event.channel == CHANNEL_WHATSAPP else None,
+        body=event.body if event.channel in (CHANNEL_WHATSAPP, CHANNEL_SMS) else None,
         customer=customer,
     )
 

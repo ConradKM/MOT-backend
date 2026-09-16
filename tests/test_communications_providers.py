@@ -162,6 +162,22 @@ def test_voice_duration_normalisation_keeps_legacy_rules(duration):
     assert event.status == "unknown"
 
 
+def test_sms_normalisation_preserves_addresses_and_body():
+    provider = TwilioSMSProvider()
+    event = provider.normalise_inbound(
+        {"MessageSid": "SM123", "From": "+447123456789", "To": "+441234567890", "Body": " Hi "}
+    )
+    assert (event.provider, event.channel, event.interaction_id) == ("twilio", "SMS", "SM123")
+    assert (event.from_address, event.to_address, event.body, event.status) == (
+        "+447123456789",
+        "+441234567890",
+        " Hi ",
+        "received",
+    )
+    status = provider.normalise_status({"MessageSid": "SM123", "MessageStatus": "delivered"})
+    assert (status.channel, status.interaction_id, status.status) == ("SMS", "SM123", "delivered")
+
+
 def test_messaging_normalisation_preserves_addresses_and_body():
     provider = TwilioMessagingProvider()
     event = provider.normalise_inbound(

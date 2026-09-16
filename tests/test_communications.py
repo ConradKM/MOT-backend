@@ -23,6 +23,7 @@ from app.communications.service import (
     update_communication_status,
 )
 from app.communications.tenant_resolution import (
+    resolve_garage_by_sms_sender,
     resolve_garage_by_voice_number,
     resolve_garage_by_whatsapp_sender,
 )
@@ -483,6 +484,30 @@ def test_resolve_garage_by_whatsapp_sender_is_tenant_isolated(session, garage, s
 
     resolved = resolve_garage_by_whatsapp_sender("whatsapp:+10000000002")
     assert resolved.id == second_garage.id
+
+
+def test_resolve_garage_by_sms_sender_matches_voice_number(session, garage):
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111")
+    )
+    session.commit()
+
+    resolved = resolve_garage_by_sms_sender("+441111111111")
+    assert resolved is not None
+    assert resolved.id == garage.id
+
+
+def test_resolve_garage_by_sms_sender_falls_back_to_messaging_service_sid(session, garage):
+    session.add(GarageCommunicationSettings(garage_id=garage.id, messaging_service_sid="MG123"))
+    session.commit()
+
+    resolved = resolve_garage_by_sms_sender("MG123")
+    assert resolved is not None
+    assert resolved.id == garage.id
+
+
+def test_resolve_garage_by_sms_sender_unknown_number_returns_none(garage):
+    assert resolve_garage_by_sms_sender("+449999999999") is None
 
 
 # --------------------------------------------------------------------------

@@ -592,9 +592,170 @@ def test_status_callback_preserves_engine_owned_message_reference(
     assert log.status == "read"
 
 
+# --------------------------------------------------------------------------
+# SMS: /incoming
+# --------------------------------------------------------------------------
+
+
+def test_sms_incoming_resolves_tenant_by_voice_number_and_matches_customer(
+    app, session, client, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111")
+    )
+    known_customer = Customer(
+        garage_id=garage.id,
+        first_name="Sam",
+        last_name="Ridley",
+        email="sam.ridley@example.com",
+        phone="+447123456789",
+    )
+    session.add(known_customer)
+    session.commit()
+
+    path = "/api/webhooks/twilio/sms/incoming"
+    form = {
+        "To": "+441111111111",
+        "From": "+447123456789",
+        "MessageSid": "SM-sms-known-1",
+        "Body": "Can I book an MOT?",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+
+    log = CommunicationLog.query.filter_by(external_id="SM-sms-known-1").one()
+    assert log.garage_id == garage.id
+    assert log.channel == "SMS"
+    assert log.direction == "INBOUND"
+    assert log.body == "Can I book an MOT?"
+    assert log.customer_id == known_customer.id
+
+
+def test_sms_incoming_resolves_tenant_by_messaging_service_sid(
+    app, session, client, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, messaging_service_sid="MG-known-1")
+    )
+    session.commit()
+
+    path = "/api/webhooks/twilio/sms/incoming"
+    form = {
+        "To": "MG-known-1",
+        "From": "+447123456789",
+        "MessageSid": "SM-sms-mg-1",
+        "Body": "hi",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+    log = CommunicationLog.query.filter_by(external_id="SM-sms-mg-1").one()
+    assert log.garage_id == garage.id
+
+
+def test_sms_incoming_unknown_sender_answers_safely_without_logging(
+    app, client, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+
+    path = "/api/webhooks/twilio/sms/incoming"
+    form = {
+        "To": "+449999999999",
+        "From": "+447123456789",
+        "MessageSid": "SM-sms-unknown-1",
+        "Body": "hello?",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+    assert CommunicationLog.query.filter_by(external_id="SM-sms-unknown-1").first() is None
+
+
+def test_sms_incoming_cross_tenant_isolation(
+    app, session, client, garage, second_garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111")
+    )
+    session.add(
+        GarageCommunicationSettings(garage_id=second_garage.id, voice_phone_number="+442222222222")
+    )
+    session.commit()
+
+    path = "/api/webhooks/twilio/sms/incoming"
+    form = {
+        "To": "+442222222222",
+        "From": "+447123456789",
+        "MessageSid": "SM-sms-tenant-b",
+        "Body": "hi",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+    log = CommunicationLog.query.filter_by(external_id="SM-sms-tenant-b").one()
+    assert log.garage_id == second_garage.id
+
+
+def test_sms_incoming_never_auto_replies(app, session, client, garage, monkeypatch):
+    """Unlike WhatsApp, SMS has no auto-ack setting at all - it only ever
+    records the message."""
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        GarageCommunicationSettings(garage_id=garage.id, voice_phone_number="+441111111111")
+    )
+    session.commit()
+
+    path = "/api/webhooks/twilio/sms/incoming"
+    form = {
+        "To": "+441111111111",
+        "From": "+447123456789",
+        "MessageSid": "SM-sms-no-ack",
+        "Body": "hi",
+    }
+    resp = client.post(path, data=form, headers=_signed_headers(path, form))
+
+    assert resp.status_code == 200
+    assert b"<Message>" not in resp.data
+
+
+# --------------------------------------------------------------------------
+# SMS: /status
+# --------------------------------------------------------------------------
+
+
+def test_sms_status_updates_the_matching_log_idempotently(
+    app, session, client, garage, monkeypatch
+):
+    _configure_twilio(app, monkeypatch)
+    session.add(
+        CommunicationLog(
+            garage_id=garage.id,
+            channel="SMS",
+            direction="OUTBOUND",
+            status="queued",
+            external_id="SM-sms-status-1",
+        )
+    )
+    session.commit()
+
+    path = "/api/webhooks/twilio/sms/status"
+    for message_status in ("sent", "delivered"):
+        form = {"MessageSid": "SM-sms-status-1", "MessageStatus": message_status}
+        resp = client.post(path, data=form, headers=_signed_headers(path, form))
+        assert resp.status_code == 204
+
+    matches = CommunicationLog.query.filter_by(external_id="SM-sms-status-1").all()
+    assert len(matches) == 1
+    assert matches[0].status == "delivered"
+
+
 def test_all_webhook_contracts_reject_invalid_signatures(app, client, monkeypatch):
     _configure_twilio(app, monkeypatch)
-    for channel in ("voice", "whatsapp"):
+    for channel in ("voice", "whatsapp", "sms"):
         for operation in ("incoming", "status"):
             response = client.post(
                 f"/api/webhooks/twilio/{channel}/{operation}",

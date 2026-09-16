@@ -147,6 +147,22 @@ class SendWhatsAppSchema(Schema):
             raise ValidationError("Provide either customer_id or to.")
 
 
+class SendSmsSchema(Schema):
+    """Same shape as SendWhatsAppSchema - either `customer_id` or a raw `to`
+    number. A standard SMS segment is 160 characters; 1600 matches the same
+    generous ceiling WhatsApp uses (a long SMS is simply billed as multiple
+    segments by the provider, never rejected here)."""
+
+    customer_id = fields.UUID(load_default=None, allow_none=True)
+    to = fields.Str(load_default=None, allow_none=True, validate=validate.Length(max=40))
+    body = fields.Str(required=True, validate=validate.Length(min=1, max=1600))
+
+    @validates_schema
+    def _require_target(self, data, **kwargs):
+        if not data.get("customer_id") and not data.get("to"):
+            raise ValidationError("Provide either customer_id or to.")
+
+
 class InitiateCallSchema(Schema):
     customer_id = fields.UUID(load_default=None, allow_none=True)
     to = fields.Str(load_default=None, allow_none=True, validate=validate.Length(max=40))
@@ -173,6 +189,7 @@ class OverviewCapabilitiesSchema(Schema):
     communications_enabled = fields.Bool(dump_only=True)
     voice_number_configured = fields.Bool(dump_only=True)
     whatsapp_configured = fields.Bool(dump_only=True)
+    sms_configured = fields.Bool(dump_only=True)
     outbound_calling_supported = fields.Bool(dump_only=True)
 
 
@@ -180,6 +197,7 @@ class OverviewSchema(Schema):
     calls_today = fields.Int(dump_only=True)
     missed_calls_today = fields.Int(dump_only=True)
     whatsapp_unread = fields.Int(dump_only=True)
+    sms_unread = fields.Int(dump_only=True)
     outgoing_contacts_today = fields.Int(dump_only=True)
     recent = fields.List(fields.Nested(CommunicationLogSchema), dump_only=True)
     capabilities = fields.Nested(OverviewCapabilitiesSchema, dump_only=True)
@@ -187,6 +205,7 @@ class OverviewSchema(Schema):
 
 class UnreadCountSchema(Schema):
     whatsapp_unread = fields.Int(dump_only=True)
+    sms_unread = fields.Int(dump_only=True)
 
 
 # --------------------------------------------------------------------------

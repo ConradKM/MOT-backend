@@ -59,6 +59,35 @@ fully working Twilio account for Voice/WhatsApp still sends zero SMS until
 this is turned on - shipping the SMS infrastructure itself never starts
 texting an existing tenant's customers.
 
+SMS is a first-class, visible channel in the garage-facing Communications
+UI/API, not just background automation:
+
+- Inbound: `POST /api/webhooks/twilio/sms/incoming` (`sms_webhooks.py`)
+  mirrors `whatsapp_webhooks.py`'s pattern exactly - tenant resolution via
+  `tenant_resolution.py::resolve_garage_by_sms_sender` (matches a garage's
+  `voice_phone_number` or `messaging_service_sid`, since SMS has no sender
+  field of its own), signature validation, best-effort customer matching,
+  and a logged `CommunicationLog` row (`channel=SMS`). No conversation-
+  automation dispatch - the engine is WhatsApp/voice-only today - so an
+  inbound SMS is simply recorded, never auto-replied to.
+- Status callbacks: `POST /api/webhooks/twilio/sms/status` updates
+  queued/sent/delivered/failed exactly like the WhatsApp equivalent.
+- Garage-facing API (`app/communications/routes.py`, `queries.py`):
+  `GET /api/communications/sms/conversations`,
+  `GET .../sms/conversations/<phone>/messages`,
+  `POST .../sms/conversations/<phone>/read`, `POST .../sms/send` - a
+  deliberately separate (not channel-parametrized) set of endpoints from
+  the WhatsApp ones, since SMS has no archive/delete conversation-state
+  table yet and stores addresses as plain E.164 (no `whatsapp:` prefix).
+  Automated booking-event SMS lands in this same history via the same
+  `send_sms_message`/`CommunicationLog` path a manual send uses - never a
+  separate system.
+- `GET /api/communications/overview` and `/unread-count` both report
+  `sms_unread`; `capabilities.sms_configured` mirrors `whatsapp_configured`
+  (reusing `TwilioSMSProvider.configuration_error`'s own check) so the
+  frontend can show a "not connected" banner without ever naming Twilio to
+  a normal business user.
+
 ## Selection without a migration
 
 Defaults are `VOICE_PROVIDER_DEFAULT=twilio` and
