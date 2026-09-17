@@ -1,6 +1,8 @@
 """Unit tests for the provider abstraction itself - no Flask app/database
 needed except where a provider genuinely requires app.config (Stripe)."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.payments.providers import get_provider
@@ -57,6 +59,37 @@ def test_stripe_client_data_reports_available_wallets(app):
 
     data = _client_data("secret_123")
     assert data["available_wallets"] == ["apple_pay", "google_pay"]
+
+
+def test_stripe_create_payment_accepts_stripe_object_metadata(app, monkeypatch):
+    """The real SDK exposes PaymentIntent.metadata as a StripeObject."""
+    class Metadata:
+        def to_dict(self):
+            return {"booking_payment_id": "payment-1"}
+
+    class PaymentIntent:
+        @staticmethod
+        def create(**_kwargs):
+            return SimpleNamespace(
+                id="pi_test",
+                status="requires_payment_method",
+                client_secret="secret_test",
+                metadata=Metadata(),
+            )
+
+    monkeypatch.setattr(
+        "app.payments.providers.stripe_provider._client",
+        lambda: SimpleNamespace(PaymentIntent=PaymentIntent),
+    )
+
+    session = StripePaymentProvider("acct_test").create_payment(
+        amount_minor=100,
+        currency="GBP",
+        idempotency_key="payment-1",
+        metadata={"booking_payment_id": "payment-1"},
+    )
+
+    assert session.metadata == {"booking_payment_id": "payment-1"}
 
 
 def test_get_provider_rejects_an_unknown_name():
