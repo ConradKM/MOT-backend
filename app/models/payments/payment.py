@@ -85,6 +85,14 @@ class BookingPayment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # nullable only for the instant between row creation and the provider call
     # returning (see app/payments/service.py::create_deposit_hold).
     provider_payment_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    # Snapshotted from the garage's GaragePaymentSettings.stripe_account_id at
+    # creation time (Stripe Connect only - null for every other provider, and
+    # for a Stripe payment made before Connect existed). Never re-resolved
+    # from the garage's *current* settings for a refund/cancel - see
+    # app/payments/service.py::refund_deposit's own note on this - a garage
+    # could in principle reconnect a different account later, and a refund
+    # must still target the account the original charge actually landed on.
+    provider_account_id: Mapped[str | None] = mapped_column(String(255))
 
     payment_type: Mapped[str] = mapped_column(
         String(20), nullable=False, default=PAYMENT_TYPE_DEPOSIT
