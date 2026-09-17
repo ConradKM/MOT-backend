@@ -267,12 +267,33 @@ def _tool_create_booking(
     }
 
 
+def _fallback_transfer_uri(garage) -> str | None:
+    """A business's own nominated human-escalation number, if it's set one -
+    the same fields the ConversationRelay path already uses for this
+    (app/communications/voice_webhooks.py::_escalation_number). Returned as
+    a ``tel:`` URI, the shape OpenAI's SIP REFER call expects (see
+    app/ai_voice/openai_sip.py::refer_call)."""
+    settings = getattr(garage, "communication_settings", None)
+    if settings is None:
+        return None
+    number = settings.voice_escalation_number or settings.voice_fallback_number
+    return f"tel:{number}" if number else None
+
+
 def _tool_request_human_handoff(garage, caller_phone_e164: str, *, reason: str, **_args) -> dict:
     customer = actions.find_customer(garage, caller_phone_e164) if caller_phone_e164 else None
     callback = actions.create_callback_request(
         garage, customer=customer, phone_e164=caller_phone_e164, reason=reason
     )
-    return {"ok": True, "callback_id": str(callback.id)}
+    # Never exposed to the model as a tool result field it could act on -
+    # this is read by app/ai_voice/call_controller.py only, to decide
+    # between a blind SIP transfer and a plain hangup once the model's
+    # closing line has played. The model is never told a transfer number.
+    return {
+        "ok": True,
+        "callback_id": str(callback.id),
+        "_transfer_uri": _fallback_transfer_uri(garage),
+    }
 
 
 _HANDLERS: dict[str, Callable[..., dict]] = {
