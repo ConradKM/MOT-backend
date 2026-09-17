@@ -104,6 +104,12 @@ def create_account_link(garage: Garage, *, return_url: str, refresh_url: str) ->
 
 
 def _apply_account_fields(settings: GaragePaymentSettings, account: dict) -> None:
+    # stripe-python returns a StripeObject, not a dict.  It deliberately
+    # rejects dict helpers such as ``.get()``; normalise it before reading
+    # status fields so the post-onboarding status refresh cannot turn into a
+    # 500 response.
+    if hasattr(account, "to_dict"):
+        account = account.to_dict()
     settings.stripe_charges_enabled = bool(account.get("charges_enabled", False))
     settings.stripe_payouts_enabled = bool(account.get("payouts_enabled", False))
     settings.stripe_details_submitted = bool(account.get("details_submitted", False))

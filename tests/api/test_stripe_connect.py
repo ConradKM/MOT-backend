@@ -90,6 +90,30 @@ def test_connect_account_creation_and_status_refresh(session, garage, monkeypatc
     assert settings.stripe_payouts_enabled is True
 
 
+def test_connect_status_refresh_accepts_stripe_object(session, garage, monkeypatch):
+    """The live stripe SDK returns StripeObject, which has no dict ``get``."""
+    import stripe
+
+    api = _AccountApi()
+    api.record = stripe.Account.construct_from(
+        {
+            "id": "acct_connect_a",
+            "charges_enabled": True,
+            "payouts_enabled": True,
+            "details_submitted": True,
+        },
+        "sk_test_fake",
+    )
+    monkeypatch.setattr("app.payments.connect._client", lambda: type("Stripe", (), {"Account": api})())
+
+    create_connected_account(garage)
+    settings = refresh_connect_status(garage)
+
+    assert settings.stripe_onboarding_complete is True
+    assert settings.stripe_charges_enabled is True
+    assert settings.stripe_payouts_enabled is True
+
+
 def test_connect_routes_are_owner_only_and_tenant_scoped(
     authenticated_client, second_authenticated_client, client, monkeypatch
 ):
