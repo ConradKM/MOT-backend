@@ -103,7 +103,7 @@ class FakePaymentProvider(PaymentProvider):
         data["refunded_minor"] += amount_minor
         return RefundResult(provider_refund_id=rid, status="REFUNDED", amount_minor=amount_minor)
 
-    def verify_webhook(self, payload, headers):
+    def verify_webhook(self, payload, headers, *, webhook_secret=None):
         # Real signature verification is meaningless without a real shared
         # secret - this stands in for it so tests can still exercise the
         # "reject an unsigned/invalid webhook" path (see

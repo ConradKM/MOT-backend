@@ -54,6 +54,10 @@ WEBHOOK_PAYMENT_SUCCEEDED = "payment.succeeded"
 WEBHOOK_PAYMENT_FAILED = "payment.failed"
 WEBHOOK_PAYMENT_CANCELLED = "payment.cancelled"
 WEBHOOK_REFUND_UPDATED = "refund.updated"
+# A Connect connected account's status changed (onboarding progressed,
+# charges_enabled/payouts_enabled flipped, a requirement was added) - not
+# about any one payment. See app/payments/connect.py::sync_account_from_webhook.
+WEBHOOK_ACCOUNT_UPDATED = "account.updated"
 # Recorded (for audit/idempotency) but needs no state transition - e.g.
 # Stripe's payment_intent.created/processing.
 WEBHOOK_UNHANDLED = "unhandled"
@@ -135,6 +139,17 @@ class ProviderWebhookEvent:
     status: str | None  # one of PAYMENT_STATUSES, when kind implies one
     failure_message: str | None
     raw: dict
+    # The provider account which emitted the event when the provider supports
+    # connected accounts (Stripe's top-level event.account).  Domain code uses
+    # this as a second guard in addition to the signed webhook: a Direct
+    # Charge event must only ever mutate a payment created on that same
+    # connected account.
+    provider_account_id: str | None = None
+    # Populated only for kind == WEBHOOK_ACCOUNT_UPDATED - the connected
+    # account's own normalised status, never a raw provider object:
+    # {"account_id": str, "charges_enabled": bool, "payouts_enabled": bool,
+    # "details_submitted": bool}. See app/payments/connect.py.
+    account: dict | None = None
 
 
 class WebhookVerificationError(Exception):
@@ -213,8 +228,15 @@ class PaymentProvider(ABC):
         call from issuing a second refund."""
 
     @abstractmethod
-    def verify_webhook(self, payload: bytes, headers: dict) -> ProviderWebhookEvent:
+    def verify_webhook(
+        self, payload: bytes, headers: dict, *, webhook_secret: str | None = None
+    ) -> ProviderWebhookEvent:
         """Verify the signature on a raw webhook request body, parse it, and
         normalise it into a :class:`ProviderWebhookEvent`. Raises
         WebhookVerificationError on a bad/missing signature - the caller
-        must reject with 400 and process nothing."""
+        must reject with 400 and process nothing.
+
+        ``webhook_secret`` overrides whatever secret the adapter would
+        otherwise use from config - needed because Stripe Connect events
+        arrive on a *different* webhook endpoint (and secret) from ordinary
+        platform events; every other adapter ignores it."""
