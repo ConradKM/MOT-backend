@@ -65,7 +65,14 @@ def verify_webhook(payload: bytes, headers) -> UnwrapWebhookEvent:
     # just needs *a* key, not necessarily a valid one, but this deployment
     # needs a real OPENAI_API_KEY for every other call in this module anyway.
     client = _client()
-    return client.webhooks.unwrap(payload, headers, secret=secret)
+    try:
+        return client.webhooks.unwrap(payload, headers, secret=secret)
+    except ValueError as exc:
+        # The SDK raises a bare ValueError (not its own
+        # InvalidWebhookSignatureError) when a required header is missing
+        # entirely, e.g. a delivery that isn't really from OpenAI at all -
+        # still an authentication failure, not a 500.
+        raise InvalidWebhookSignatureError(str(exc)) from exc
 
 
 # Re-exported so callers only need to import this module, not ``openai``
