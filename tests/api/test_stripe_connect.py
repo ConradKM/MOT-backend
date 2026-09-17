@@ -104,7 +104,9 @@ def test_connect_status_refresh_accepts_stripe_object(session, garage, monkeypat
         },
         "sk_test_fake",
     )
-    monkeypatch.setattr("app.payments.connect._client", lambda: type("Stripe", (), {"Account": api})())
+    monkeypatch.setattr(
+        "app.payments.connect._client", lambda: type("Stripe", (), {"Account": api})()
+    )
 
     create_connected_account(garage)
     settings = refresh_connect_status(garage)
