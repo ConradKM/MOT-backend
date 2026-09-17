@@ -98,6 +98,22 @@ def _client_data(client_secret: str | None, connected_account_id: str | None = N
     }
 
 
+def _metadata_dict(metadata) -> dict:
+    """Return Stripe metadata as an ordinary mapping.
+
+    Current Stripe SDK responses expose metadata as ``StripeObject``.  It
+    looks dictionary-like but deliberately is not iterable, so ``dict()``
+    raises after a successful PaymentIntent API call.  Keep that SDK detail
+    inside the adapter and accept the plain dictionaries used by tests/older
+    SDK versions too.
+    """
+    if metadata is None:
+        return {}
+    if hasattr(metadata, "to_dict"):
+        return dict(metadata.to_dict())
+    return dict(metadata)
+
+
 class StripePaymentProvider(PaymentProvider):
     name = "stripe"
     capabilities = Capabilities(
@@ -151,7 +167,7 @@ class StripePaymentProvider(PaymentProvider):
             status=_map_payment_status(intent.status),
             checkout_mode=CHECKOUT_MODE_EMBEDDED,
             provider_data=_client_data(intent.client_secret, self._connected_account_id),
-            metadata=dict(intent.metadata or {}),
+            metadata=_metadata_dict(intent.metadata),
         )
 
     def get_payment_status(self, provider_payment_id):
@@ -168,7 +184,7 @@ class StripePaymentProvider(PaymentProvider):
             status=_map_payment_status(intent.status),
             checkout_mode=CHECKOUT_MODE_EMBEDDED,
             provider_data=_client_data(intent.client_secret, self._connected_account_id),
-            metadata=dict(intent.metadata or {}),
+            metadata=_metadata_dict(intent.metadata),
         )
 
     def cancel_payment(self, provider_payment_id):

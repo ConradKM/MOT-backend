@@ -204,6 +204,10 @@ class BookingRequestCreateSchema(Schema):
     )
     notes = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=2000))
 
+    # Only the deposit-intent endpoint uses this opaque browser-generated
+    # idempotency token; ordinary no-deposit booking ignores it.
+    payment_attempt_id = fields.UUID(allow_none=True, load_default=None)
+
     # What the customer answered to this business's own configured questions.
     # Validated in the route against the workflow that actually applies to the
     # chosen service - nothing about them can be checked here, since which

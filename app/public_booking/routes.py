@@ -20,6 +20,7 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.garage import Garage
 from app.payments.money import DepositConfigError, minor_to_decimal
+from app.payments.providers import get_provider
 from app.payments.providers.base import PaymentProviderError
 from app.payments.service import (
     PaymentUnavailableError,
@@ -205,6 +206,7 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status, a
         garage_id=garage.id,
         status=status,
         booking_reference=unique_booking_reference(db.session),
+        payment_attempt_id=data.get("payment_attempt_id") if status == "AWAITING_PAYMENT" else None,
         customer_id=customer.id,
         # None when the business tracks no item - the column is nullable for
         # exactly that.
@@ -233,6 +235,53 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status, a
         preferred_employee_note=data.get("preferred_employee_note"),
         notes=data.get("notes"),
     )
+
+
+def _deposit_response(booking_request, payment, session, appt_type):
+    """Build the client-safe deposit envelope for a new or resumed hold."""
+    base_price = appt_type.base_price
+    deposit_amount = minor_to_decimal(payment.amount_minor)
+    remaining_balance = (base_price - deposit_amount) if base_price is not None else None
+    return {
+        "booking_request_id": booking_request.id,
+        "booking_reference": booking_request.booking_reference,
+        "status": booking_request.status,
+        "payment_status": payment.status,
+        "currency": payment.currency,
+        "service_total": base_price,
+        "deposit_amount": deposit_amount,
+        "remaining_balance": remaining_balance,
+        "provider": payment.provider,
+        "checkout_mode": session.checkout_mode,
+        "provider_data": session.provider_data,
+        "hold_expires_at": booking_request.payment_hold_expires_at,
+    }
+
+
+def _existing_deposit_attempt(garage, attempt_id, appt_type):
+    """Resume an active attempt before normal capacity revalidation.
+
+    The caller holds the garage row lock, so an initial request and its retry
+    are serialised.  Other attempt ids still run normal validation and remain
+    blocked by this request's AWAITING_PAYMENT hold.
+    """
+    if attempt_id is None:
+        return None
+    booking_request = BookingRequest.query.filter_by(
+        garage_id=garage.id, payment_attempt_id=attempt_id
+    ).first()
+    if booking_request is None or booking_request.status != "AWAITING_PAYMENT":
+        return None
+    payment = booking_request.active_payment
+    if payment is None or payment.provider_payment_id is None:
+        return None
+    try:
+        session = get_provider(
+            payment.provider, connected_account_id=payment.provider_account_id
+        ).get_payment_status(payment.provider_payment_id)
+    except PaymentProviderError:
+        abort(502, message="Could not resume the deposit payment. Please try again.")
+    return _deposit_response(booking_request, payment, session, appt_type)
 
 
 @public_booking_blp.route("/<slug>/booking-requests")
@@ -310,6 +359,15 @@ class DepositIntentCreate(MethodView):
         # free before this one is validated against it.
         expire_stale_payment_holds(garage_id=garage.id)
 
+        # Serialise lookup/create with the same lock the capacity check uses.
+        # A retried browser request resumes its own active hold instead of
+        # treating it as a competing booking; every different attempt still
+        # receives the ordinary capacity check below.
+        db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
+        existing = _existing_deposit_attempt(garage, data.get("payment_attempt_id"), appt_type)
+        if existing is not None:
+            return existing
+
         preferred_time = _lock_and_validate_slot(garage, data, appt_type)
 
         booking_request = _build_booking_request(
@@ -346,26 +404,7 @@ class DepositIntentCreate(MethodView):
 
         db.session.commit()
 
-        base_price = appt_type.base_price
-        deposit_amount = minor_to_decimal(payment.amount_minor)
-        remaining_balance = (base_price - deposit_amount) if base_price is not None else None
-
-        return {
-            "booking_request_id": booking_request.id,
-            "booking_reference": booking_request.booking_reference,
-            "status": booking_request.status,
-            "payment_status": payment.status,
-            "currency": payment.currency,
-            "service_total": base_price,
-            "deposit_amount": deposit_amount,
-            "remaining_balance": remaining_balance,
-            "provider": payment.provider,
-            "checkout_mode": session.checkout_mode,
-            # Provider-specific, client-safe fields only (e.g. Stripe's
-            # client_secret) - see PaymentSessionResult's docstring.
-            "provider_data": session.provider_data,
-            "hold_expires_at": booking_request.payment_hold_expires_at,
-        }
+        return _deposit_response(booking_request, payment, session, appt_type)
 
 
 @public_booking_blp.route("/<slug>/booking-requests/<reference>/payment-status")

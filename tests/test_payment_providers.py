@@ -59,6 +59,20 @@ def test_stripe_client_data_reports_available_wallets(app):
     assert data["available_wallets"] == ["apple_pay", "google_pay"]
 
 
+def test_stripe_metadata_object_is_converted_without_iterating(app):
+    """StripeObject metadata requires ``to_dict`` in current stripe-python."""
+    from app.payments.providers.stripe_provider import _metadata_dict
+
+    class StripeMetadataLike:
+        def __iter__(self):
+            raise AssertionError("Stripe metadata must not be iterated")
+
+        def to_dict(self):
+            return {"booking_request_id": "request_123"}
+
+    assert _metadata_dict(StripeMetadataLike()) == {"booking_request_id": "request_123"}
+
+
 def test_get_provider_rejects_an_unknown_name():
     with pytest.raises(ValueError):
         get_provider("venmo")
