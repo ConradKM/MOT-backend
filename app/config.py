@@ -288,6 +288,45 @@ class Config:
     CONVERSATIONRELAY_TTS_PROVIDER = os.getenv("CONVERSATIONRELAY_TTS_PROVIDER", "")
     CONVERSATIONRELAY_VOICE = os.getenv("CONVERSATIONRELAY_VOICE", "")
 
+    # --- OpenAI Realtime voice assistant, via direct SIP (app/ai_voice/) ---
+    # A completely separate call path from ConversationRelay above, not
+    # layered on top of it and not reachable through
+    # app/communications/voice_webhooks.py at all: a business using this
+    # answers calls via a Twilio Elastic SIP Trunk whose origination URI
+    # points directly at OpenAI's SIP endpoint
+    # (sip:$OPENAI_PROJECT_ID@sip.api.openai.com;transport=tls) - Twilio's
+    # Programmable Voice webhook is never invoked for that number, so no
+    # audio of any kind passes through this backend. See
+    # docs/OPENAI_VOICE_SETUP.md for the full architecture and the exact
+    # Twilio/OpenAI dashboard steps. Off by default; never hard-code a key
+    # here, never commit a real one.
+    OPENAI_VOICE_ENABLED = os.getenv("OPENAI_VOICE_ENABLED", "false").lower() == "true"
+    # Backend-only - never sent to any frontend, never logged.
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    # Verifies the `realtime.call.incoming` webhook (app/ai_voice/routes.py)
+    # via the openai SDK's client.webhooks.unwrap() - see
+    # https://developers.openai.com/api/docs/guides/webhooks. Configured
+    # against a webhook URL registered in the OpenAI dashboard (Settings ->
+    # Webhooks), not via any API call - there is no code-driven way to
+    # register it.
+    OPENAI_WEBHOOK_SECRET = os.getenv("OPENAI_WEBHOOK_SECRET", "")
+    # The proj_... id that appears in the SIP origination URI Twilio's
+    # Elastic SIP Trunk dials - not a secret (it's part of a URI Twilio's
+    # trunk config carries in plain text), but never guessed/hard-coded:
+    # every business's calls route through the one CoMaz OpenAI project.
+    OPENAI_PROJECT_ID = os.getenv("OPENAI_PROJECT_ID", "")
+    # OpenAI's own current SIP guide samples use gpt-realtime-2.1; kept
+    # configurable so a newer/older snapshot needs no code change.
+    OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1")
+    # OpenAI recommends marin/cedar for quality over the older voice set.
+    OPENAI_REALTIME_VOICE = os.getenv("OPENAI_REALTIME_VOICE", "marin")
+    # Set at call-accept time (session.audio.{input,output}.format.type) -
+    # confirmed current values are "audio/pcm" (24kHz only), "audio/pcmu"
+    # (G.711 mu-law) or "audio/pcma" (G.711 A-law). PCMU matches what a
+    # Twilio SIP trunk's PSTN leg actually carries, so this is the default -
+    # see https://developers.openai.com/api/docs/guides/voice-sip.
+    OPENAI_REALTIME_AUDIO_FORMAT = os.getenv("OPENAI_REALTIME_AUDIO_FORMAT", "audio/pcmu")
+
     # --- Conversation engine (see app/conversation) -----------------------
     # The development conversation simulator (POST /api/conversation/simulate)
     # runs real customer messages through the real booking engine without

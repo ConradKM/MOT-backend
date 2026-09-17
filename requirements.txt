@@ -22,5 +22,12 @@ twilio>=9,<10
 cryptography>=43,<47
 # Payments provider adapter (app/payments/providers/stripe_provider.py).
 stripe>=11,<16
+# OpenAI Realtime SIP voice (app/ai_voice/) - the official SDK's own
+# client.realtime.calls.* (accept/reject/hangup/refer), client.webhooks.
+# unwrap() for webhook signature verification, and client.realtime.connect()
+# (a synchronous WebSocket client, not asyncio-based, so it cooperates
+# correctly under gunicorn's gevent worker) for the call-control connection.
+# No separate WebSocket/HTTP library needed - the SDK provides both.
+openai>=2,<3
 pytest>=8.3,<9
 pytest-cov>=6,<7

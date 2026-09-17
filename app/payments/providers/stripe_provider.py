@@ -98,6 +98,13 @@ def _client_data(client_secret: str | None, connected_account_id: str | None = N
     }
 
 
+def _plain_metadata(metadata) -> dict:
+    """Normalise stripe-python's StripeObject metadata to a plain dict."""
+    if hasattr(metadata, "to_dict"):
+        return metadata.to_dict()
+    return dict(metadata or {})
+
+
 class StripePaymentProvider(PaymentProvider):
     name = "stripe"
     capabilities = Capabilities(
@@ -151,7 +158,7 @@ class StripePaymentProvider(PaymentProvider):
             status=_map_payment_status(intent.status),
             checkout_mode=CHECKOUT_MODE_EMBEDDED,
             provider_data=_client_data(intent.client_secret, self._connected_account_id),
-            metadata=dict(intent.metadata or {}),
+            metadata=_plain_metadata(intent.metadata),
         )
 
     def get_payment_status(self, provider_payment_id):
@@ -168,7 +175,7 @@ class StripePaymentProvider(PaymentProvider):
             status=_map_payment_status(intent.status),
             checkout_mode=CHECKOUT_MODE_EMBEDDED,
             provider_data=_client_data(intent.client_secret, self._connected_account_id),
-            metadata=dict(intent.metadata or {}),
+            metadata=_plain_metadata(intent.metadata),
         )
 
     def cancel_payment(self, provider_payment_id):
