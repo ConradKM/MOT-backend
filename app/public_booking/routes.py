@@ -90,6 +90,14 @@ class PublicGarageAvailability(MethodView):
     @public_booking_blp.response(200, AvailabilityRangeSchema)
     def get(self, args, slug):
         garage = _get_garage_by_slug(slug)
+        # A hold whose 15-minute window has already passed still counts as
+        # AWAITING_PAYMENT (and so still occupies capacity - see
+        # availability.py's module docs) until something flips it to EXPIRED;
+        # otherwise this endpoint would only ever release it once someone
+        # happens to hit the deposit-intent/status-poll endpoints for this
+        # garage, which could be long after this calendar is what a customer
+        # is actually looking at right now.
+        expire_stale_payment_holds(garage_id=garage.id)
         appt_type = _get_active_appointment_type(garage, args.get("appointment_type_id"))
         return availability_range(
             garage,
@@ -107,6 +115,10 @@ class PublicGarageDayAvailability(MethodView):
     @public_booking_blp.response(200, DaySlotsSchema)
     def get(self, args, slug, day):
         garage = _get_garage_by_slug(slug)
+        # See PublicGarageAvailability.get - same reasoning: release a
+        # time-expired hold's capacity before computing what to show, rather
+        # than only ever doing so as a side effect of a deposit attempt.
+        expire_stale_payment_holds(garage_id=garage.id)
         try:
             parsed = date.fromisoformat(day)
         except ValueError:
