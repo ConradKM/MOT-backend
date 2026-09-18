@@ -5,6 +5,7 @@ GET  /api/public/<slug>/booking-requests/<reference>/payment-status
 """
 
 import datetime
+import uuid
 
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
@@ -152,6 +153,41 @@ def test_deposit_hold_reserves_capacity_for_another_customer(client, session, ga
             appointment_type_id=None,
             customer_email="second@example.com",
             vehicle_registration="ZZ99 ZZZ",
+        ),
+    )
+    assert second.status_code == 409
+
+
+def test_retried_deposit_attempt_resumes_its_own_hold(client, session, garage):
+    """A duplicate browser request must not reject its own capacity hold or
+    create another PaymentIntent/BookingPayment."""
+    appt_type = _deposit_type(session, garage)
+    payload = _payload(appt_type, payment_attempt_id=str(uuid.uuid4()))
+
+    first = client.post(f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=payload)
+    second = client.post(f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=payload)
+
+    assert first.status_code == second.status_code == 201
+    assert second.get_json()["booking_reference"] == first.get_json()["booking_reference"]
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+    assert BookingPayment.query.filter_by(garage_id=garage.id).count() == 1
+
+
+def test_different_deposit_attempt_is_blocked_by_active_hold(client, session, garage):
+    appt_type = _deposit_type(session, garage)
+    first = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(appt_type, payment_attempt_id=str(uuid.uuid4())),
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(
+            appt_type,
+            customer_email="second@example.com",
+            vehicle_registration="ZZ99 ZZZ",
+            payment_attempt_id=str(uuid.uuid4()),
         ),
     )
     assert second.status_code == 409
