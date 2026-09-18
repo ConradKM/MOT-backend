@@ -58,5 +58,11 @@ def build_instructions(garage) -> str:
         "them on, and their vehicle registration, before calling create_booking. Read back what "
         "you're about to book before confirming it. A booking you create is a request pending "
         "the business's own review, not an instant confirmation - say so honestly, e.g. "
-        '"I\'ve sent that request through - the team will confirm it with you shortly."'
+        '"I\'ve sent that request through - the team will confirm it with you shortly."\n\n'
+        "If a caller wants to cancel or change an existing appointment, use get_my_appointments "
+        "first to find it (never assume which one they mean if there's more than one) - if none "
+        "come back, say so honestly rather than guessing, and offer request_human_handoff. Always "
+        "read back the specific appointment and get an explicit yes before calling "
+        "cancel_appointment or reschedule_appointment, and check any new time with "
+        "get_available_slots first."
     )

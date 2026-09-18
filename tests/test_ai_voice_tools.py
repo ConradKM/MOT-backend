@@ -23,6 +23,9 @@ def test_tool_schemas_cover_the_required_tools():
         "get_appointment_types",
         "get_available_slots",
         "create_booking",
+        "get_my_appointments",
+        "cancel_appointment",
+        "reschedule_appointment",
         "request_human_handoff",
     }
     for schema in TOOL_SCHEMAS:
@@ -137,6 +140,66 @@ def test_request_human_handoff_creates_a_callback(garage):
     assert callback.garage_id == garage.id
     assert callback.phone_number == "+447123456789"
     assert "insurance" in callback.reason
+
+
+def test_get_my_appointments_lists_the_callers_own_upcoming_appointments(
+    garage, customer, make_appointment
+):
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+    make_appointment(start)
+    result = json.loads(dispatch_tool(garage, customer.phone, "get_my_appointments", "{}"))
+    assert result["ok"] is True
+    assert len(result["appointments"]) == 1
+    assert result["appointments"][0]["service"] == "MOT"
+
+
+def test_get_my_appointments_is_empty_for_an_unknown_number(garage):
+    result = json.loads(dispatch_tool(garage, "+447000000000", "get_my_appointments", "{}"))
+    assert result["ok"] is True
+    assert result["appointments"] == []
+
+
+def test_cancel_appointment_cancels_the_callers_own_appointment(garage, customer, make_appointment):
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+    appt = make_appointment(start)
+    args = json.dumps({"appointment_id": str(appt.id)})
+    result = json.loads(dispatch_tool(garage, customer.phone, "cancel_appointment", args))
+    assert result["ok"] is True
+    assert appt.status == "CANCELLED"
+
+
+def test_cancel_appointment_rejects_another_customers_appointment(
+    session, garage, customer, make_appointment
+):
+    from app.models.customer import Customer
+
+    other = Customer(
+        garage_id=garage.id, first_name="Someone", last_name="Else", phone="+447999999999"
+    )
+    session.add(other)
+    session.commit()
+
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+    appt = make_appointment(start)  # belongs to `customer`, not `other`
+    args = json.dumps({"appointment_id": str(appt.id)})
+    result = json.loads(dispatch_tool(garage, other.phone, "cancel_appointment", args))
+    assert result["ok"] is False
+    assert appt.status == "BOOKED"
+
+
+def test_reschedule_appointment_moves_the_callers_own_appointment(
+    garage, garage_schedule, customer, make_appointment
+):
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+    appt = make_appointment(start)
+    new_day = _future_weekday(days_ahead=10)
+    args = json.dumps(
+        {"appointment_id": str(appt.id), "date": new_day.isoformat(), "time": "10:00"}
+    )
+    result = json.loads(dispatch_tool(garage, customer.phone, "reschedule_appointment", args))
+    assert result["ok"] is True
+    assert appt.start_time.date() == new_day
+    assert appt.start_time.strftime("%H:%M") == "10:00"
 
 
 def test_unknown_tool_name_is_a_clean_error(garage):

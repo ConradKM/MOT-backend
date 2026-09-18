@@ -14,11 +14,14 @@ never *whose* business or *whose* phone number.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from datetime import date as date_cls
 from datetime import time as time_cls
 
 from app.conversation import actions
+
+logger = logging.getLogger(__name__)
 
 # Sent to Twilio as a valid-but-terse function_call_output when a tool raises
 # unexpectedly - the model still gets a turn to react (e.g. apologise and
@@ -103,6 +106,69 @@ TOOL_SCHEMAS: list[dict] = [
                 "last_name",
                 "vehicle_registration",
             ],
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_my_appointments",
+        "description": (
+            "Look up the caller's own upcoming, already-confirmed appointments at this "
+            "business, matched by the number they're calling from (or another mobile number "
+            "they give you). Use this before cancelling or rescheduling anything - you must "
+            "have the appointment's id from this list first."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "phone": {
+                    "type": "string",
+                    "description": (
+                        "The mobile number the appointment was booked under, if different from "
+                        "the number they're calling from."
+                    ),
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "cancel_appointment",
+        "description": (
+            "Cancel one of the caller's own confirmed appointments. Only call this with an "
+            "appointment_id from get_my_appointments, and only after the caller has explicitly "
+            "confirmed which appointment and that they want it cancelled."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "appointment_id": {
+                    "type": "string",
+                    "description": "The id of the appointment, from get_my_appointments.",
+                }
+            },
+            "required": ["appointment_id"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "reschedule_appointment",
+        "description": (
+            "Move one of the caller's own confirmed appointments to a new date/time. Check the "
+            "new time is really free with get_available_slots first, and only call this once "
+            "the caller has confirmed the new date and time."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "appointment_id": {
+                    "type": "string",
+                    "description": "The id of the appointment, from get_my_appointments.",
+                },
+                "date": {"type": "string", "description": "New date, as YYYY-MM-DD."},
+                "time": {"type": "string", "description": "New time, 24-hour HH:MM."},
+            },
+            "required": ["appointment_id", "date", "time"],
         },
     },
     {
@@ -267,6 +333,84 @@ def _tool_create_booking(
     }
 
 
+def _tool_get_my_appointments(
+    garage, caller_phone_e164: str, *, phone: str | None = None, **_args
+) -> dict:
+    contact_phone = (phone or caller_phone_e164 or "").strip()
+    customer = actions.find_customer(garage, contact_phone) if contact_phone else None
+    if customer is None:
+        return {"ok": True, "appointments": []}
+    upcoming = actions.get_upcoming_appointments(garage, customer)
+    return {
+        "ok": True,
+        "appointments": [
+            {
+                "id": str(a.id),
+                "service": a.appointment_type.name if a.appointment_type else None,
+                "date": a.start_time.date().isoformat(),
+                "time": a.start_time.strftime("%H:%M"),
+            }
+            for a in upcoming
+        ],
+    }
+
+
+def _find_own_appointment(garage, caller_phone_e164: str, phone: str | None, appointment_id: str):
+    """The caller's own appointment matching ``appointment_id`` - never any
+    other customer's, even within the same garage (mirrors
+    ``find_customer_vehicle_by_registration``'s ownership check above)."""
+    contact_phone = (phone or caller_phone_e164 or "").strip()
+    if not contact_phone:
+        return None
+    customer = actions.find_customer(garage, contact_phone)
+    if customer is None:
+        return None
+    for appointment in actions.get_upcoming_appointments(garage, customer):
+        if str(appointment.id) == str(appointment_id):
+            return appointment
+    return None
+
+
+def _tool_cancel_appointment(
+    garage, caller_phone_e164: str, *, appointment_id: str, phone: str | None = None, **_args
+) -> dict:
+    appointment = _find_own_appointment(garage, caller_phone_e164, phone, appointment_id)
+    if appointment is None:
+        return {"ok": False, "error": "That appointment couldn't be found on this number."}
+    ok, reason = actions.cancel_appointment(garage, appointment)
+    if not ok:
+        return {"ok": False, "error": f"Couldn't cancel that appointment ({reason})."}
+    return {"ok": True}
+
+
+def _tool_reschedule_appointment(
+    garage,
+    caller_phone_e164: str,
+    *,
+    appointment_id: str,
+    date: str,
+    time: str,
+    phone: str | None = None,
+    **_args,
+) -> dict:
+    appointment = _find_own_appointment(garage, caller_phone_e164, phone, appointment_id)
+    if appointment is None:
+        return {"ok": False, "error": "That appointment couldn't be found on this number."}
+
+    day = _parse_date(date)
+    slot_time = _parse_time(time)
+    if day is None or slot_time is None:
+        return {"ok": False, "error": "date must be YYYY-MM-DD and time must be HH:MM."}
+
+    ok, reason = actions.reschedule_appointment(garage, appointment, day, slot_time)
+    if not ok:
+        return {
+            "ok": False,
+            "error": f"That new time isn't available ({reason}). Offer to check another time.",
+        }
+    return {"ok": True, "date": date, "time": time}
+
+
 def _fallback_transfer_uri(garage) -> str | None:
     """A business's own nominated human-escalation number, if it's set one -
     the same fields the ConversationRelay path already uses for this
@@ -301,13 +445,30 @@ _HANDLERS: dict[str, Callable[..., dict]] = {
     "get_appointment_types": _tool_get_appointment_types,
     "get_available_slots": _tool_get_available_slots,
     "create_booking": _tool_create_booking,
+    "get_my_appointments": _tool_get_my_appointments,
+    "cancel_appointment": _tool_cancel_appointment,
+    "reschedule_appointment": _tool_reschedule_appointment,
     "request_human_handoff": _tool_request_human_handoff,
 }
+
+# Tools that need the live caller's own phone number (to identify them as a
+# customer or default a contact field) rather than just the tenant - kept as
+# an explicit set (like CALL_ENDING_TOOLS above) so a new caller-scoped tool
+# can't silently fall through to the tenant-only call shape below.
+_CALLER_SCOPED_TOOLS = frozenset(
+    {
+        "create_booking",
+        "get_my_appointments",
+        "cancel_appointment",
+        "reschedule_appointment",
+        "request_human_handoff",
+    }
+)
 
 
 def dispatch_tool(garage, caller_phone_e164: str, name: str, arguments_json: str) -> str:
     """Execute one tool call by name, tenant-scoped to ``garage``. Always
-    returns a JSON string (never raises) - the caller (app/ws/openai_voice.py)
+    returns a JSON string (never raises) - the caller (app/ai_voice/call_controller.py)
     sends this straight back to OpenAI as the function_call_output, so a
     tool failure becomes something the model can react to in speech rather
     than a dropped call."""
@@ -321,13 +482,14 @@ def dispatch_tool(garage, caller_phone_e164: str, name: str, arguments_json: str
         return json.dumps({"ok": False, "error": "Malformed tool arguments."})
 
     try:
-        if name in ("create_booking", "request_human_handoff"):
+        if name in _CALLER_SCOPED_TOOLS:
             result = handler(garage, caller_phone_e164, **arguments)
         else:
             result = handler(garage, **arguments)
     except TypeError:
         return json.dumps({"ok": False, "error": "Missing or invalid arguments."})
-    except Exception:  # noqa: BLE001 - a tool failure must never crash the call
+    except Exception:  # a tool failure must never crash the call
+        logger.exception("AI_VOICE_TOOL_FAILED tool=%s", name)
         return json.dumps(_TOOL_ERROR)
 
     return json.dumps(result)
