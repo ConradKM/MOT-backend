@@ -228,14 +228,21 @@ class StripePaymentProvider(PaymentProvider):
         except (ValueError, stripe.error.SignatureVerificationError) as exc:
             raise WebhookVerificationError(str(exc)) from exc
 
-        data_object = event["data"]["object"]
+        # stripe-python returns a Stripe Event object, not a dict.  It supports
+        # subscription but deliberately rejects dict-only methods such as
+        # ``get``.  Normalise once at the provider boundary so all subsequent
+        # webhook parsing is SDK-version-independent.
+        event_data = (
+            event.to_dict_recursive() if hasattr(event, "to_dict_recursive") else dict(event)
+        )
+        data_object = event_data["data"]["object"]
         provider_payment_id = None
         provider_refund_id = None
         failure_message = None
         account = None
-        provider_account_id = event.get("account")
+        provider_account_id = event_data.get("account")
         status = data_object.get("status")
-        if event["type"] == "account.updated":
+        if event_data["type"] == "account.updated":
             # The Account object itself, not a payment - see
             # app/payments/connect.py::sync_account_from_webhook.
             account = {
@@ -245,24 +252,26 @@ class StripePaymentProvider(PaymentProvider):
                 "details_submitted": bool(data_object.get("details_submitted")),
             }
             status = None
-        elif event["type"].startswith("payment_intent."):
+        elif event_data["type"].startswith("payment_intent."):
             provider_payment_id = data_object.get("id")
             status = _map_payment_status(status)
-            if event["type"] == "payment_intent.payment_failed":
+            if event_data["type"] == "payment_intent.payment_failed":
                 failure_message = (data_object.get("last_payment_error") or {}).get("message")
-        elif event["type"].startswith("charge.refund") or event["type"] == "refund.updated":
+        elif (
+            event_data["type"].startswith("charge.refund") or event_data["type"] == "refund.updated"
+        ):
             provider_refund_id = data_object.get("id")
             provider_payment_id = data_object.get("payment_intent")
             status = _map_refund_status(status)
 
         return ProviderWebhookEvent(
-            event_id=event["id"],
-            kind=_EVENT_KIND_MAP.get(event["type"], WEBHOOK_UNHANDLED),
+            event_id=event_data["id"],
+            kind=_EVENT_KIND_MAP.get(event_data["type"], WEBHOOK_UNHANDLED),
             provider_payment_id=provider_payment_id,
             provider_refund_id=provider_refund_id,
             status=status,
             failure_message=failure_message,
-            raw=event.to_dict_recursive() if hasattr(event, "to_dict_recursive") else dict(event),
+            raw=event_data,
             provider_account_id=provider_account_id,
             account=account,
         )

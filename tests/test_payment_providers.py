@@ -73,6 +73,41 @@ def test_stripe_metadata_object_is_converted_without_iterating(app):
     assert _metadata_dict(StripeMetadataLike()) == {"booking_request_id": "request_123"}
 
 
+def test_stripe_webhook_normalises_sdk_event_objects_before_parsing(app, monkeypatch):
+    """Current stripe-python Event objects reject ``.get``; Connect events must parse."""
+    from types import SimpleNamespace
+
+    from app.payments.providers import stripe_provider
+
+    payload = {
+        "id": "evt_connect_1",
+        "type": "payment_intent.succeeded",
+        "account": "acct_connected",
+        "data": {"object": {"id": "pi_1", "status": "succeeded"}},
+    }
+
+    class EventLike:
+        def __getitem__(self, key):
+            return payload[key]
+
+        def get(self, _key):
+            raise AssertionError("Stripe Event.get must not be called")
+
+        def to_dict_recursive(self):
+            return payload
+
+    fake_stripe = SimpleNamespace(
+        Webhook=SimpleNamespace(construct_event=lambda *_args: EventLike())
+    )
+    monkeypatch.setattr(stripe_provider, "_client", lambda: fake_stripe)
+
+    event = StripePaymentProvider().verify_webhook(b"{}", {"Stripe-Signature": "test"})
+    assert event.event_id == "evt_connect_1"
+    assert event.status == "SUCCEEDED"
+    assert event.provider_payment_id == "pi_1"
+    assert event.provider_account_id == "acct_connected"
+
+
 def test_get_provider_rejects_an_unknown_name():
     with pytest.raises(ValueError):
         get_provider("venmo")
