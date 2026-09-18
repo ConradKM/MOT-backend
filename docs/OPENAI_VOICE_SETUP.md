@@ -187,9 +187,9 @@ session in one call - model, voice, audio format, and:
 
 ## Tools
 
-All four reuse existing domain logic (`app/conversation/actions.py`) rather
-than reimplementing booking/availability - the AI layer orchestrates, it
-doesn't become a second booking system.
+All reuse existing domain logic (`app/conversation/actions.py`) rather than
+reimplementing booking/availability - the AI layer orchestrates, it doesn't
+become a second booking system.
 
 | Tool | Purpose | Notes |
 |---|---|---|
@@ -197,6 +197,9 @@ doesn't become a second booking system.
 | `get_appointment_types` | This business's enabled services | Name/duration/description; no internal ids leaked unnecessarily |
 | `get_available_slots` | Real open slots for a date + service | Never fabricated; falls back to "next available days" if the requested date has nothing free |
 | `create_booking` | Submits a `PENDING` `BookingRequest` | Validates the appointment type belongs to the bound garage and the slot is still free before calling `create_booking_request` - never an instant confirmation |
+| `get_my_appointments` | The caller's own upcoming confirmed appointments | Matched by the live caller's number (or one they give); an unknown number returns an empty list, never another customer's bookings |
+| `cancel_appointment` | Cancels one of the caller's own confirmed appointments | Only accepts an `appointment_id` already returned by `get_my_appointments` for that same caller - never any other customer's appointment, even within the same garage |
+| `reschedule_appointment` | Moves one of the caller's own confirmed appointments | Same ownership check as `cancel_appointment`; re-validates the new slot server-side before committing |
 | `request_human_handoff` | Ends the call, optionally with a transfer | Logs a `CallbackRequest`; call-ending (see `CALL_ENDING_TOOLS`) |
 
 Every tool handler validates its own arguments server-side
@@ -354,8 +357,10 @@ these four. `tests/test_ai_voice_call_controller.py` drives
 5. Make a real test call to a **test** number before migrating any live
    business number - confirm: correct business greeting, accurate
    hours/services, a real available slot offered, a booking actually
-   created as `PENDING`, and `request_human_handoff` ending the call
-   gracefully (with or without a configured fallback number).
+   created as `PENDING`, cancelling/rescheduling an existing confirmed
+   appointment only ever touches the caller's own booking, and
+   `request_human_handoff` ending the call gracefully (with or without a
+   configured fallback number).
 6. Check `CommunicationLog` for the test call's row and confirm no other
    tenant's data was ever reachable during the call.
 
