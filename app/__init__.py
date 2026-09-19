@@ -5,6 +5,7 @@ import uuid
 
 from flask import Flask, request
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import Config
 from .extensions import api, db, jwt, limiter, migrate, sock
@@ -135,6 +136,20 @@ def _token_revoked(_jwt_header, jwt_payload) -> bool:
 def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
+
+    # Render terminates TLS and proxies every request through exactly one
+    # internal hop before it reaches this container, so `request.remote_addr`
+    # is otherwise Render's own proxy IP for every request - never the real
+    # client's. That silently made every IP-keyed rate limit (see
+    # PUBLIC_BOOKING_RATELIMIT/PUBLIC_AVAILABILITY_RATELIMIT below) a *global*
+    # limit shared across every customer of every business, not a per-visitor
+    # one - a few real bookings (or one test run) could exhaust it platform-
+    # wide. `X-Forwarded-For`'s first hop is the real client precisely because
+    # there's only the one trusted proxy in front of us (the same assumption
+    # app/platform_admin/audit.py already makes reading this header by hand
+    # for its own audit-log IPs). A request with no such header (local dev,
+    # tests) is left untouched.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
     _configure_logging(app)
     _log_validation_errors(app)
