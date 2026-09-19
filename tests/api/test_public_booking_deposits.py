@@ -224,6 +224,70 @@ def test_full_rejection_logs_diagnostic_capacity_context(client, session, garage
     assert "used=1 capacity=1" in record.message
     assert str(garage.id) in record.message
 
+    # The reason is also machine-readable in the response itself, not just
+    # the server log - see app/public_booking/routes.py::_lock_and_validate_slot.
+    assert second.get_json()["errors"] == {"reason": "full"}
+
+
+def test_adjacent_slots_touching_boundary_both_succeed(client, session, garage):
+    """Regression guard for a production report: a customer saw an
+    advertised slot get rejected as unavailable at Deposit, and suspected an
+    off-by-one at the exact moment one booking ends and the next begins
+    (e.g. 11:00-12:30 then 12:30-14:00 back to back). ``_slot_usage`` uses a
+    strict half-open interval (``start < other_end and end > other_start``),
+    so a slot that starts exactly when the previous one ends must never be
+    treated as occupied by it - confirmed here at the actual deposit-intent
+    validation layer, not just in the advertised calendar."""
+    appt_type = _deposit_type(session, garage, deposit_value="20.00")
+    appt_type.default_duration_minutes = 90
+    session.commit()
+
+    first = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(appt_type, preferred_time="11:00:00"),
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(
+            appt_type,
+            preferred_time="12:30:00",
+            customer_email="second@example.com",
+            vehicle_registration="ZZ99 ZZZ",
+        ),
+    )
+    assert second.status_code == 201
+
+
+def test_slot_starting_one_minute_before_the_previous_ends_genuinely_conflicts(
+    client, session, garage
+):
+    """The mirror image of the boundary test above: a candidate that starts
+    even one minute before the prior booking's end must be rejected as a
+    genuine overlap, proving the boundary is exact and not merely lenient in
+    both directions."""
+    appt_type = _deposit_type(session, garage, deposit_value="20.00")
+    appt_type.default_duration_minutes = 90
+    session.commit()
+
+    first = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(appt_type, preferred_time="11:00:00"),
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(
+            appt_type,
+            preferred_time="12:29:00",
+            customer_email="second@example.com",
+            vehicle_registration="ZZ99 ZZZ",
+        ),
+    )
+    assert second.status_code == 409
+
 
 def test_status_poll_reflects_hold_until_paid(client, session, garage):
     appt_type = _deposit_type(session, garage)

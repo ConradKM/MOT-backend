@@ -400,6 +400,48 @@ def test_a_long_existing_appointment_blocks_every_slot_it_overlaps(
     assert slots["13:30"] == "available"
 
 
+def test_adjacent_appointments_touching_the_boundary_do_not_overlap(
+    client, session, garage, make_appointment
+):
+    """Regression guard matching a production report: a customer saw a
+    calendar-advertised slot rejected as unavailable at Deposit, and
+    suspected the exact touching boundary between two back-to-back bookings
+    (e.g. one ending at 12:30, the next starting at 12:30). ``_slot_usage``
+    is strict (``start < other_end and end > other_start``), so the slot
+    starting exactly when the prior one ends must stay available."""
+    day = _future_weekday()
+    ninety_min_type = _make_type(session, garage, 90)
+    make_appointment(_at(day, 11, 0), minutes=90)  # 11:00-12:30
+
+    slots = {
+        s["start"]: s["status"]
+        for s in client.get(
+            f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+            query_string={"appointment_type_id": str(ninety_min_type.id)},
+        ).get_json()["slots"]
+    }
+    assert slots["11:00"] == "booked"
+    assert slots["12:30"] == "available"
+
+
+def test_near_boundary_appointment_genuinely_overlaps(client, session, garage, make_appointment):
+    """The mirror image: a candidate starting even one interval before the
+    prior booking's end must still show as booked, proving the boundary is
+    exact rather than merely lenient toward "available"."""
+    day = _future_weekday()
+    ninety_min_type = _make_type(session, garage, 90)
+    make_appointment(_at(day, 11, 0), minutes=90)  # 11:00-12:30
+
+    slots = {
+        s["start"]: s["status"]
+        for s in client.get(
+            f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+            query_string={"appointment_type_id": str(ninety_min_type.id)},
+        ).get_json()["slots"]
+    }
+    assert slots["12:00"] == "booked"
+
+
 def test_pending_request_reserves_its_full_duration_not_just_its_start_time(
     client, session, garage
 ):
