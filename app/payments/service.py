@@ -473,6 +473,16 @@ def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
         emit_event(
             BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request
         )
+    elif booking_request.status == "EXPIRED":
+        # A belated success for a hold that had already been expired -
+        # expire_stale_payment_holds re-checks live provider status before
+        # giving up on a hold precisely to avoid this, but can't help a
+        # booking that was already expired before that check existed (or
+        # before this delivery finally arrived/succeeded after retries).
+        # The money is real either way; what's still open is whether the
+        # slot is. Only reinstate the booking if it genuinely still is -
+        # never overwrite a slot someone else has since taken.
+        _reinstate_or_flag_expired_booking(booking_request, payment)
 
     record_payment_event(
         garage_id=payment.garage_id,
@@ -481,6 +491,60 @@ def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
         action="payment.deposit.succeeded",
         summary="Deposit payment succeeded.",
     )
+
+
+def _reinstate_or_flag_expired_booking(
+    booking_request: BookingRequest, payment: BookingPayment
+) -> None:
+    """A payment succeeded for a booking that's already EXPIRED. If its
+    original slot is still genuinely free, reinstate the booking exactly as
+    a normal success would (never assumed - re-validated the same way a
+    fresh submission is); otherwise leave it EXPIRED but log loudly, since a
+    real charge with no booking behind it needs a human (refund or manual
+    rebook), not a silently dropped record."""
+    from app.public_booking.availability import validate_slot
+
+    reason = None
+    if booking_request.preferred_time is not None:
+        reason = validate_slot(
+            booking_request.garage,
+            booking_request.preferred_date,
+            booking_request.preferred_time,
+            datetime.now(UTC),
+            appointment_type=booking_request.appointment_type,
+        )
+
+    if reason is None:
+        booking_request.status = "PENDING"
+        emit_event(
+            BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request
+        )
+        record_payment_event(
+            garage_id=payment.garage_id,
+            booking_request_id=booking_request.id,
+            payment_id=payment.id,
+            action="payment.deposit.reinstated_after_expiry",
+            summary="Deposit succeeded after the hold had already expired; the slot "
+            "was still free, so the booking was reinstated.",
+        )
+    else:
+        current_app.logger.error(
+            "Deposit payment %s succeeded for booking %s, but its hold had already "
+            "expired and the slot is no longer available (%s). The charge is real; "
+            "this booking needs manual review (refund or rebook).",
+            payment.provider_payment_id,
+            booking_request.booking_reference,
+            reason,
+        )
+        record_payment_event(
+            garage_id=payment.garage_id,
+            booking_request_id=booking_request.id,
+            payment_id=payment.id,
+            action="payment.deposit.succeeded_after_expiry",
+            summary=f"Deposit succeeded but the booking had already expired and the "
+            f"slot is no longer available ({reason}) - needs manual follow-up "
+            f"(refund or rebook).",
+        )
 
 
 def _handle_payment_failed(event: ProviderWebhookEvent) -> None:
