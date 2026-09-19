@@ -15,6 +15,8 @@ stripe_provider.py's ``stripe_account`` threading for that part).
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from flask import current_app
 
 from app.extensions import db
@@ -120,6 +122,41 @@ def _apply_account_fields(settings: GaragePaymentSettings, account: dict) -> Non
     settings.stripe_onboarding_complete = settings.stripe_details_submitted
 
 
+def _register_payment_method_domain(stripe, settings: GaragePaymentSettings) -> None:
+    """Apple Pay requires the public booking domain to be registered - per
+    connected account, since Direct Charges make the connected account the
+    merchant of record for Apple Pay's purposes, not just the platform
+    account (see docs/STRIPE_CONNECT_SETUP.md's "Apple Pay, Google Pay, and
+    Link" section, the manual step this used to require). Registering
+    here - every time onboarding status is refreshed, once the account can
+    actually take charges - means a garage never needs anyone to click
+    through the Stripe Dashboard by hand for this.
+
+    Deliberately never raises: a garage's Stripe status refresh (and the
+    onboarding flow it's part of) must not fail because a wallet nicety
+    couldn't be registered. Stripe's own API is idempotent for a domain
+    that's already registered on this account, so this is safe to call on
+    every refresh, not just the first one.
+    """
+    if not settings.stripe_charges_enabled:
+        return
+    domain = urlparse(current_app.config.get("BOOKING_BASE_URL", "")).hostname
+    if not domain:
+        return
+    try:
+        stripe.PaymentMethodDomain.create(
+            domain_name=domain, stripe_account=settings.stripe_account_id
+        )
+    except Exception:  # see docstring: never block onboarding on this
+        current_app.logger.warning(
+            "PAYMENT_METHOD_DOMAIN_REGISTRATION_FAILED garage=%s account=%s domain=%s",
+            settings.garage_id,
+            settings.stripe_account_id,
+            domain,
+            exc_info=True,
+        )
+
+
 def refresh_connect_status(garage: Garage) -> GaragePaymentSettings:
     """Fetch live status from Stripe and sync it onto ``garage``'s settings
     row - called right after the onboarding-return redirect (Stripe's
@@ -136,6 +173,7 @@ def refresh_connect_status(garage: Garage) -> GaragePaymentSettings:
         raise ConnectError(str(exc), code=getattr(exc, "code", None)) from exc
 
     _apply_account_fields(settings, account)
+    _register_payment_method_domain(stripe, settings)
     db.session.commit()
     return settings
 

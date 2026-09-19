@@ -75,9 +75,19 @@ class _AccountApi:
         return self.record
 
 
+class _PaymentMethodDomainApi:
+    def __init__(self):
+        self.created = []
+
+    def create(self, **kwargs):
+        self.created.append(kwargs)
+        return type("PaymentMethodDomain", (), {"id": "pmd_1"})()
+
+
 def test_connect_account_creation_and_status_refresh(session, garage, monkeypatch):
     api = _AccountApi()
-    stripe = type("Stripe", (), {"Account": api})()
+    domains = _PaymentMethodDomainApi()
+    stripe = type("Stripe", (), {"Account": api, "PaymentMethodDomain": domains})()
     monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
 
     assert create_connected_account(garage) == "acct_connect_a"
@@ -89,6 +99,62 @@ def test_connect_account_creation_and_status_refresh(session, garage, monkeypatc
     assert settings.stripe_onboarding_complete is True
     assert settings.stripe_charges_enabled is True
     assert settings.stripe_payouts_enabled is True
+
+    # Apple Pay needs the public booking domain registered per connected
+    # account for Direct Charges - see docs/STRIPE_CONNECT_SETUP.md. This
+    # used to be a manual Dashboard step; refresh_connect_status now does it
+    # automatically once the account can actually take charges.
+    assert len(domains.created) == 1
+    assert domains.created[0]["stripe_account"] == "acct_connect_a"
+    assert domains.created[0]["domain_name"]  # the configured BOOKING_BASE_URL's host
+
+
+def test_backfill_cli_registers_the_domain_for_an_already_onboarded_garage(
+    app, session, garage, monkeypatch
+):
+    """A garage that finished Connect onboarding before automatic domain
+    registration existed must not need its staff to visit Payments settings
+    before Apple Pay can work - `flask backfill-payment-method-domains`
+    catches those up in one pass."""
+    from app.models.payments.garage_payment_settings import GaragePaymentSettings
+
+    api = _AccountApi()
+    domains = _PaymentMethodDomainApi()
+    stripe = type("Stripe", (), {"Account": api, "PaymentMethodDomain": domains})()
+    monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
+
+    settings = GaragePaymentSettings(garage_id=garage.id, provider="stripe")
+    settings.stripe_account_id = "acct_connect_a"
+    session.add(settings)
+    session.commit()
+
+    runner = app.test_cli_runner()
+    result = runner.invoke(args=["backfill-payment-method-domains"])
+
+    assert result.exit_code == 0, result.output
+    assert len(domains.created) == 1
+    assert domains.created[0]["stripe_account"] == "acct_connect_a"
+    assert "checked 1 garage" in result.output
+
+
+def test_status_refresh_survives_domain_registration_failure(session, garage, monkeypatch):
+    """A garage's Stripe status must still refresh correctly even if
+    registering the Apple Pay domain fails for some reason - that's a wallet
+    nicety, never allowed to block onboarding."""
+    api = _AccountApi()
+
+    class _FailingDomainApi:
+        def create(self, **kwargs):
+            raise RuntimeError("boom")
+
+    stripe = type("Stripe", (), {"Account": api, "PaymentMethodDomain": _FailingDomainApi()})()
+    monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
+
+    create_connected_account(garage)
+    settings = refresh_connect_status(garage)
+
+    assert settings.stripe_onboarding_complete is True
+    assert settings.stripe_charges_enabled is True
 
 
 def test_connect_status_refresh_accepts_stripe_object(session, garage, monkeypatch):

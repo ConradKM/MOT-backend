@@ -16,6 +16,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+from flask import current_app, g
 from flask_smorest import abort
 from sqlalchemy import and_, or_
 
@@ -107,10 +108,32 @@ def resolve_customer_and_vehicle(
         db.session.add(vehicle)
         db.session.flush()
     elif vehicle.customer_id != customer.id:
+        # A second, previously-unlogged 409 source in the public deposit-intent
+        # call chain (_build_booking_request -> here), entirely unrelated to
+        # slot/time availability - yet MOT-frontend's DepositStep used to map
+        # every 409 on that endpoint to "This time is no longer available",
+        # and this one never went through app/public_booking/routes.py's
+        # AVAILABILITY_REJECTED logging, so it was invisible to that
+        # diagnostic. Reproduced live: two different customers (emails) each
+        # submitting the same normalised registration at the same garage - one
+        # of the more mundane ways to hit this on a shared demo/test business,
+        # since a placeholder-looking plate ("AB12 CDE") is exactly the kind
+        # of value more than one tester types. No PII here - the registration
+        # itself, names and emails stay out of the log; only ids.
+        current_app.logger.warning(
+            "VEHICLE_REFERENCE_CONFLICT request_id=%s garage=%s existing_customer=%s "
+            "new_customer=%s vehicle=%s",
+            g.get("request_id"),
+            garage_id,
+            vehicle.customer_id,
+            customer.id,
+            vehicle.id,
+        )
         abort(
             409,
             message="An item with this reference already exists for a different "
             "customer - resolve it manually before approving.",
+            errors={"reason": "vehicle_reference_conflict"},
         )
     elif not vehicle.is_active:
         vehicle.is_active = True
