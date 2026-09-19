@@ -194,6 +194,14 @@ def _lock_and_validate_slot(garage, data, appt_type):
                 message=_SLOT_REJECTIONS.get(
                     reason, "This time is no longer available. Please select another time."
                 ),
+                # A machine-readable reason alongside the human message - see
+                # MOT-frontend's DepositStep, which today maps every 409 on
+                # this endpoint to one generic "slot unavailable" string.
+                # That happens to be correct while this is the only 409
+                # source in this call chain, but `errors.reason` lets a
+                # future distinct conflict (or the frontend) tell them apart
+                # without guessing from the message text.
+                errors={"reason": reason},
             )
     return preferred_time
 
