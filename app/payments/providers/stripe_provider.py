@@ -228,13 +228,20 @@ class StripePaymentProvider(PaymentProvider):
         except (ValueError, stripe.error.SignatureVerificationError) as exc:
             raise WebhookVerificationError(str(exc)) from exc
 
-        # stripe-python returns a Stripe Event object, not a dict.  It supports
-        # subscription but deliberately rejects dict-only methods such as
-        # ``get``.  Normalise once at the provider boundary so all subsequent
-        # webhook parsing is SDK-version-independent.
-        event_data = (
-            event.to_dict_recursive() if hasattr(event, "to_dict_recursive") else dict(event)
-        )
+        # stripe-python returns a Stripe Event object, not a dict - it
+        # supports attribute/subscript access but deliberately rejects
+        # dict-only methods such as ``get``, and (as of stripe-python 15)
+        # ``__iter__``/``dict(event)`` too, raising its own TypeError
+        # pointing at ``.to_dict()``. A prior fix here checked for a
+        # ``to_dict_recursive`` method that doesn't exist on this SDK
+        # version's StripeObject (the recursive helper is private,
+        # ``_to_dict_recursive``) and fell through to the now-rejected
+        # ``dict(event)`` - reproduced live via a real webhook delivery
+        # crashing with "Event is not iterable or a mapping". ``to_dict()``
+        # is the public, current, always-present API (recursive by
+        # default) - normalise once at the provider boundary so all
+        # subsequent webhook parsing is SDK-version-independent.
+        event_data = event.to_dict()
         data_object = event_data["data"]["object"]
         provider_payment_id = None
         provider_refund_id = None
