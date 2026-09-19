@@ -21,14 +21,24 @@ from app.models.communications.garage_communication_settings import (
 
 
 def _incoming_event(call_id="rtc_test_1", *, to="+442012345678", from_="+447123456789"):
+    """Mirrors the real Twilio Elastic SIP Trunk shape confirmed live on
+    2026-09-19 (callSid rtc_u0_EPvuUp3oMjxHm4KyxnDpSQVfbHbOEtbS): ``To`` is
+    the fixed OpenAI project origination URI, name-addr form
+    (``<sip:...>;tag=...``) - never the dialled CoMaz number - which only
+    appears in ``Diversion``. See app/ai_voice/tenant.py::
+    resolve_business_for_sip_call."""
     return SimpleNamespace(
         id="evt_1",
         type="realtime.call.incoming",
         data=SimpleNamespace(
             call_id=call_id,
             sip_headers=[
-                {"name": "To", "value": f"sip:{to}@sip.example.com"},
-                {"name": "From", "value": f"sip:{from_}@sip.example.com"},
+                {
+                    "name": "To",
+                    "value": "<sip:proj_J5VIIjPo1zzZGcyouQd4Nsjg@sip.api.openai.com;transport=tls>;tag=abc",
+                },
+                {"name": "From", "value": f"<sip:{from_}@geo.sip.twilio.com>;tag=def"},
+                {"name": "Diversion", "value": f"<sip:{to}@sip.twilio.com>;reason=unconditional"},
             ],
         ),
     )
