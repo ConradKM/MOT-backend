@@ -74,7 +74,15 @@ def test_stripe_metadata_object_is_converted_without_iterating(app):
 
 
 def test_stripe_webhook_normalises_sdk_event_objects_before_parsing(app, monkeypatch):
-    """Current stripe-python Event objects reject ``.get``; Connect events must parse."""
+    """Current stripe-python Event objects reject ``.get`` *and* ``dict()``/
+    iteration (``TypeError: ... call .to_dict() for a plain dict``) - modelled
+    here to match the real SDK's actual current shape, not a plausible-looking
+    guess at it. A prior version of this fake only implemented
+    ``to_dict_recursive`` (a method the real SDK doesn't have - the real
+    recursive helper is private, ``_to_dict_recursive``) and so this test kept
+    passing while production crashed on every real Connect webhook delivery -
+    see app/payments/providers/stripe_provider.py::verify_webhook.
+    """
     from types import SimpleNamespace
 
     from app.payments.providers import stripe_provider
@@ -90,10 +98,13 @@ def test_stripe_webhook_normalises_sdk_event_objects_before_parsing(app, monkeyp
         def __getitem__(self, key):
             return payload[key]
 
+        def __iter__(self):
+            raise TypeError("Event is not iterable or a mapping; call .to_dict() for a plain dict.")
+
         def get(self, _key):
             raise AssertionError("Stripe Event.get must not be called")
 
-        def to_dict_recursive(self):
+        def to_dict(self):
             return payload
 
     fake_stripe = SimpleNamespace(

@@ -135,6 +135,85 @@ def test_payment_succeeded_flips_booking_request_to_pending(client, session, gar
     assert stored.event_type == "payment.succeeded"
 
 
+def test_belated_success_reinstates_an_expired_booking_if_the_slot_is_still_free(
+    client, session, garage
+):
+    """A webhook that only arrives (or only succeeds) after the hold had
+    already expired must not just leave a real charge attached to a dead
+    booking - if nothing else took the slot meanwhile, the booking is
+    reinstated exactly as a normal success would. See
+    app/payments/service.py::_reinstate_or_flag_expired_booking."""
+    appt_type = _deposit_type(session, garage)
+    created = _start_deposit(client, garage, appt_type)
+    booking_request = BookingRequest.query.filter_by(
+        booking_reference=created["booking_reference"]
+    ).one()
+    payment = BookingPayment.query.filter_by(booking_request_id=booking_request.id).one()
+
+    # Simulate the hold having already expired before the webhook arrived.
+    booking_request.status = "EXPIRED"
+    booking_request.payment_hold_expires_at = None
+    session.commit()
+
+    resp = _webhook(
+        client,
+        {
+            "id": "evt_belated_1",
+            "type": "payment.succeeded",
+            "provider_payment_id": payment.provider_payment_id,
+            "status": "SUCCEEDED",
+        },
+    )
+    assert resp.status_code == 200
+
+    session.refresh(booking_request)
+    session.refresh(payment)
+    assert booking_request.status == "PENDING"
+    assert payment.status == "SUCCEEDED"
+
+
+def test_belated_success_leaves_a_taken_slot_expired_but_still_marks_payment_succeeded(
+    client, session, garage, make_appointment
+):
+    """If someone else has genuinely taken the slot by the time a belated
+    success arrives, the booking must not be silently resurrected on top of
+    them - but the payment record must still show the real charge, so staff
+    have something to act on (refund or manual rebook) instead of a payment
+    that just vanishes."""
+    appt_type = _deposit_type(session, garage)
+    created = _start_deposit(client, garage, appt_type)
+    booking_request = BookingRequest.query.filter_by(
+        booking_reference=created["booking_reference"]
+    ).one()
+    payment = BookingPayment.query.filter_by(booking_request_id=booking_request.id).one()
+
+    booking_request.status = "EXPIRED"
+    booking_request.payment_hold_expires_at = None
+    session.commit()
+
+    # Someone else's real, confirmed appointment now occupies that exact slot.
+    start = datetime.datetime.combine(
+        booking_request.preferred_date, booking_request.preferred_time, tzinfo=datetime.UTC
+    )
+    make_appointment(start, minutes=appt_type.default_duration_minutes or 60)
+
+    resp = _webhook(
+        client,
+        {
+            "id": "evt_belated_2",
+            "type": "payment.succeeded",
+            "provider_payment_id": payment.provider_payment_id,
+            "status": "SUCCEEDED",
+        },
+    )
+    assert resp.status_code == 200
+
+    session.refresh(booking_request)
+    session.refresh(payment)
+    assert booking_request.status == "EXPIRED"  # not silently resurrected onto a taken slot
+    assert payment.status == "SUCCEEDED"  # but the real charge is still on record
+
+
 def test_duplicate_webhook_event_is_a_no_op(client, session, garage):
     appt_type = _deposit_type(session, garage)
     created = _start_deposit(client, garage, appt_type)

@@ -242,3 +242,48 @@ def test_expired_hold_releases_capacity_and_cancels_the_intent(app, session, gar
         ),
     )
     assert second.status_code == 201
+
+
+def test_expiry_check_reconciles_a_payment_that_actually_succeeded(app, session, garage, client):
+    """A missed/delayed webhook must never leave a customer who genuinely
+    paid with their booking EXPIRED and their payment CANCELLED - see
+    app/payments/service.py::_reconcile_if_already_succeeded. Simulates the
+    exact split found live in production: the provider's own record of the
+    payment is SUCCEEDED, but nothing has told CoMaz that yet, and the hold
+    then expires before anything does.
+    """
+    from app.payments.providers.fake import FakePaymentProvider
+
+    appt_type = _deposit_type(session, garage)
+    create = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=_payload(appt_type)
+    ).get_json()
+
+    booking_request = BookingRequest.query.filter_by(
+        booking_reference=create["booking_reference"]
+    ).one()
+    payment = BookingPayment.query.filter_by(booking_request_id=booking_request.id).one()
+
+    # The provider genuinely completed the charge - as if Stripe had already
+    # confirmed it, independent of whether CoMaz's webhook has processed it.
+    FakePaymentProvider._sessions[payment.provider_payment_id]["status"] = "SUCCEEDED"
+
+    far_future = datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+    changed = expire_stale_payment_holds(garage_id=garage.id, now=far_future)
+    assert changed == 0  # reconciled as a success, not counted as an expiry
+
+    session.refresh(booking_request)
+    session.refresh(payment)
+    assert booking_request.status == "PENDING"
+    assert booking_request.payment_hold_expires_at is None
+    assert payment.status == "SUCCEEDED"
+    assert payment.paid_at is not None
+
+    # The slot is genuinely taken now - a second customer cannot claim it.
+    second = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(
+            appt_type, customer_email="second@example.com", vehicle_registration="ZZ99 ZZZ"
+        ),
+    )
+    assert second.status_code == 409

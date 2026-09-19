@@ -10,6 +10,7 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.payments.garage_payment_settings import GaragePaymentSettings
 from app.models.payments.payment import BookingPayment
+from app.models.payments.webhook_event import PaymentWebhookEvent
 from app.payments.connect import create_connected_account, refresh_connect_status
 from app.payments.providers.base import (
     WEBHOOK_ACCOUNT_UPDATED,
@@ -317,3 +318,109 @@ def test_refund_uses_the_original_connected_account(session, garage, monkeypatch
     refund_deposit(booking, reason="test")
     assert captured["connected_account_id"] == "acct_original"
     assert captured["payment_id"] == "pi_original"
+
+
+def test_connect_webhook_route_handles_a_real_shaped_event_and_is_idempotent(
+    app, client, session, garage, monkeypatch
+):
+    """End-to-end through the real HTTP route (not process_webhook called
+    directly, and not the fake provider) - the exact path a genuine Stripe
+    Connect delivery takes: POST /api/webhooks/payments/stripe/connect ->
+    stripe_connect_webhook -> process_webhook -> StripePaymentProvider.
+    verify_webhook. Uses a double shaped like the real stripe-python 15
+    SDK's Event (to_dict() only; dict()/`.get()` raise, matching the
+    production crash this was written to catch - see
+    app/payments/providers/stripe_provider.py::verify_webhook and
+    tests/test_payment_providers.py's unit-level equivalent), delivered
+    twice to prove Stripe's own retry-on-slow-or-error behaviour can never
+    double-process a payment.
+    """
+    from app.models.payments.garage_payment_settings import GaragePaymentSettings
+
+    settings = GaragePaymentSettings(
+        garage_id=garage.id, provider="stripe", stripe_account_id="acct_http_1"
+    )
+    booking = BookingRequest(
+        garage_id=garage.id,
+        status="AWAITING_PAYMENT",
+        booking_reference="BKHTTPCON",
+        customer_first_name="Alex",
+        customer_last_name="Turner",
+        customer_email="alex@example.com",
+        customer_phone="+447123456789",
+        vehicle_registration="CN11HTP",
+        preferred_date=datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=7),
+        preferred_time=datetime.time(9, 30),
+        payment_hold_expires_at=datetime.datetime.now(datetime.UTC)
+        + datetime.timedelta(minutes=15),
+    )
+    session.add_all([settings, booking])
+    session.flush()
+    payment = BookingPayment(
+        garage_id=garage.id,
+        booking_request_id=booking.id,
+        provider="stripe",
+        provider_account_id="acct_http_1",
+        provider_payment_id="pi_http_1",
+        amount_minor=100,
+        currency="GBP",
+        status="REQUIRES_PAYMENT",
+    )
+    session.add(payment)
+    session.commit()
+
+    payload = {
+        "id": "evt_http_dup_1",
+        "type": "payment_intent.succeeded",
+        "account": "acct_http_1",
+        "data": {"object": {"id": "pi_http_1", "status": "succeeded"}},
+    }
+
+    class RealShapedEvent:
+        """Models stripe-python 15's StripeObject: subscriptable, but
+        neither ``dict()``/iteration nor ``.get()`` work - only
+        ``.to_dict()`` does (see the production traceback this guards
+        against)."""
+
+        def __getitem__(self, key):
+            return payload[key]
+
+        def __iter__(self):
+            raise TypeError("Event is not iterable or a mapping; call .to_dict() for a plain dict.")
+
+        def get(self, _key):
+            raise AssertionError("Stripe Event.get must not be called")
+
+        def to_dict(self):
+            return payload
+
+    from types import SimpleNamespace
+
+    fake_stripe = SimpleNamespace(
+        Webhook=SimpleNamespace(construct_event=lambda *_args, **_kwargs: RealShapedEvent()),
+        error=SimpleNamespace(SignatureVerificationError=Exception),
+    )
+    monkeypatch.setattr("app.payments.providers.stripe_provider._client", lambda: fake_stripe)
+    app.config["STRIPE_CONNECT_WEBHOOK_SECRET"] = "whsec_test_connect"
+
+    first = client.post(
+        "/api/webhooks/payments/stripe/connect",
+        data=b"{}",
+        headers={"Stripe-Signature": "t=1,v1=fake"},
+        content_type="application/json",
+    )
+    second = client.post(
+        "/api/webhooks/payments/stripe/connect",
+        data=b"{}",
+        headers={"Stripe-Signature": "t=1,v1=fake"},
+        content_type="application/json",
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    session.refresh(booking)
+    session.refresh(payment)
+    assert booking.status == "PENDING"
+    assert payment.status == "SUCCEEDED"
+    assert PaymentWebhookEvent.query.filter_by(id="evt_http_dup_1").count() == 1
