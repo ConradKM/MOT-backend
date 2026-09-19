@@ -233,6 +233,54 @@ def test_pending_booking_request_consumes_capacity(client, session, garage):
     assert slots["10:00"]["status"] == "available"
 
 
+def test_availability_releases_a_time_expired_deposit_hold(client, session, garage):
+    """A regression guard for "advertised slot rejected at deposit": an
+    AWAITING_PAYMENT hold whose payment_hold_expires_at has already passed
+    must not go on occupying capacity just because nothing has called
+    expire_stale_payment_holds for this garage yet - both availability
+    endpoints must release it themselves (see
+    app/public_booking/routes.py::PublicGarageAvailability/
+    PublicGarageDayAvailability), the same way deposit-intent creation
+    already does. Otherwise the calendar can advertise a slot as free that a
+    moment later gets rejected as full, purely because nobody happened to
+    poll/create a deposit for this garage in between.
+    """
+    day = _future_weekday()
+    br = BookingRequest(
+        garage_id=garage.id,
+        status="AWAITING_PAYMENT",
+        customer_first_name="Sam",
+        customer_last_name="Lee",
+        customer_email="sam.lee@example.com",
+        vehicle_registration="PB11 AAA",
+        preferred_date=day,
+        preferred_time=datetime.time(10, 0),
+        payment_hold_expires_at=datetime.datetime.now(UTC) - datetime.timedelta(minutes=1),
+    )
+    session.add(br)
+    session.commit()
+
+    day_slots = {
+        s["start"]: s
+        for s in client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()[
+            "slots"
+        ]
+    }
+    assert day_slots["10:00"]["status"] == "available"
+    assert br.status == "EXPIRED"
+
+    # Same release, via the month-range endpoint.
+    br.status = "AWAITING_PAYMENT"
+    br.payment_hold_expires_at = datetime.datetime.now(UTC) - datetime.timedelta(minutes=1)
+    session.commit()
+
+    body = client.get(
+        f"/api/public/{garage.slug}/availability?from={day.isoformat()}&to={day.isoformat()}"
+    ).get_json()
+    assert body["days"][0]["level"] != "full"
+    assert br.status == "EXPIRED"
+
+
 def test_lead_time_hides_near_slots(client, session, garage, garage_schedule):
     day = _future_weekday()
 
