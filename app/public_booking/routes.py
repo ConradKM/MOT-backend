@@ -29,7 +29,14 @@ from app.payments.service import (
     payment_hold_deadline,
 )
 
-from .availability import availability_range, single_day, validate_slot
+from .availability import _type_duration as _slot_duration_for_type
+from .availability import (
+    availability_range,
+    resolve_settings,
+    single_day,
+    slot_capacity_usage,
+    validate_slot,
+)
 from .captcha import verify_captcha
 from .payload import public_garage_payload
 from .schemas import (
@@ -158,6 +165,30 @@ def _lock_and_validate_slot(garage, data, appt_type):
             appointment_type=appt_type,
         )
         if reason is not None:
+            # Full diagnostic context on every rejection - a byte-count in
+            # the access log can't tell two different reasons apart, and an
+            # advertised-then-rejected report is otherwise nearly
+            # impossible to root-cause after the fact (the exact capacity
+            # snapshot at rejection time is gone by the time anyone looks).
+            extra = ""
+            if reason == "full":
+                duration = _slot_duration_for_type(appt_type, resolve_settings(garage))
+                used, capacity = slot_capacity_usage(
+                    garage,
+                    data["preferred_date"],
+                    datetime.combine(data["preferred_date"], preferred_time, tzinfo=UTC),
+                    duration,
+                )
+                extra = f" used={used} capacity={capacity} duration={duration}"
+            current_app.logger.warning(
+                "AVAILABILITY_REJECTED garage=%s appointment_type=%s date=%s time=%s reason=%s%s",
+                garage.id,
+                appt_type.id if appt_type is not None else None,
+                data["preferred_date"],
+                preferred_time,
+                reason,
+                extra,
+            )
             abort(
                 409,
                 message=_SLOT_REJECTIONS.get(

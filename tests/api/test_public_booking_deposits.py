@@ -193,6 +193,38 @@ def test_different_deposit_attempt_is_blocked_by_active_hold(client, session, ga
     assert second.status_code == 409
 
 
+def test_full_rejection_logs_diagnostic_capacity_context(client, session, garage, caplog):
+    """A genuine capacity rejection must leave enough evidence to root-cause
+    it after the fact - see app/public_booking/routes.py::
+    _lock_and_validate_slot. Byte-counting an access log (what production
+    forensics was reduced to before this existed) can't tell two different
+    409 reasons apart; this makes the exact reason and capacity snapshot
+    explicit in the application log at the moment of rejection."""
+    appt_type = _deposit_type(session, garage)
+    first = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(appt_type, payment_attempt_id=str(uuid.uuid4())),
+    )
+    assert first.status_code == 201
+
+    with caplog.at_level("WARNING"):
+        second = client.post(
+            f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+            json=_payload(
+                appt_type,
+                customer_email="second@example.com",
+                vehicle_registration="ZZ99 ZZZ",
+                payment_attempt_id=str(uuid.uuid4()),
+            ),
+        )
+    assert second.status_code == 409
+
+    [record] = [r for r in caplog.records if "AVAILABILITY_REJECTED" in r.message]
+    assert "reason=full" in record.message
+    assert "used=1 capacity=1" in record.message
+    assert str(garage.id) in record.message
+
+
 def test_status_poll_reflects_hold_until_paid(client, session, garage):
     appt_type = _deposit_type(session, garage)
     create = client.post(
