@@ -1,9 +1,10 @@
+import json
 import logging
 import os
 import sys
 import uuid
 
-from flask import Flask, request
+from flask import Flask, g, request
 from flask_cors import CORS
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -32,6 +33,40 @@ def _configure_logging(app: Flask) -> None:
     app.logger.setLevel(level)
 
 
+def _configure_request_id(app: Flask) -> None:
+    """Give every request a short-lived correlation id (``g.request_id``),
+    echoed back as the ``X-Request-Id`` response header and folded into every
+    JSON error body as ``request_id``.
+
+    Render's own edge already logs a ``requestID``, but that value never
+    reaches our application logs or the response the customer's browser
+    sees - so a report like "my booking failed just now" previously had
+    nothing stable to search our own logs by. This closes that gap: any
+    error response the customer (or their screenshot) can show us carries
+    the same id our structured log lines are tagged with (see
+    AVAILABILITY_REJECTED and the vehicle-reference-conflict log in
+    app/booking_requests/service.py), so the exact request is one log query
+    away without needing DevTools or guesswork from timestamps.
+    """
+
+    @app.before_request
+    def _assign_request_id():
+        g.request_id = str(uuid.uuid4())
+
+    @app.after_request
+    def _echo_request_id(response):
+        request_id = g.get("request_id")
+        if request_id is None:
+            return response
+        response.headers["X-Request-Id"] = request_id
+        if response.status_code >= 400 and response.is_json:
+            body = response.get_json(silent=True)
+            if isinstance(body, dict) and "request_id" not in body:
+                body["request_id"] = request_id
+                response.set_data(json.dumps(body))
+        return response
+
+
 def _log_validation_errors(app: Flask) -> None:
     """Log the field-by-field reason behind every 4xx that carries
     flask-smorest's own ``errors`` body (a raw marshmallow/webargs schema
@@ -54,7 +89,8 @@ def _log_validation_errors(app: Flask) -> None:
             body = response.get_json(silent=True)
             if isinstance(body, dict) and body.get("errors"):
                 app.logger.warning(
-                    "[validation] %s %s -> %s errors=%s",
+                    "[validation] request_id=%s %s %s -> %s errors=%s",
+                    g.get("request_id"),
                     request.method,
                     request.path,
                     response.status_code,
@@ -152,6 +188,7 @@ def create_app(config_class=Config):
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
     _configure_logging(app)
+    _configure_request_id(app)
     _log_validation_errors(app)
 
     db.init_app(app)
@@ -184,6 +221,7 @@ def create_app(config_class=Config):
     )
     from .dev.cli import dev_info_command, seed_dev_command
     from .garages.cli import onboard_garage_command, update_garage_details_command
+    from .payments.cli import backfill_payment_method_domains_command
     from .platform_admin.cli import (
         create_platform_admin_command,
         list_platform_admins_command,
@@ -198,6 +236,7 @@ def create_app(config_class=Config):
     app.cli.add_command(twilio_webhook_urls_command)
     app.cli.add_command(seed_dev_command)
     app.cli.add_command(dev_info_command)
+    app.cli.add_command(backfill_payment_method_domains_command)
 
     from .ai_voice.routes import openai_voice_blp
     from .appointments.checklist_templates.routes import checklist_templates_blp

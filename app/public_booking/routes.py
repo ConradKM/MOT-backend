@@ -1,6 +1,6 @@
 from datetime import UTC, date, datetime
 
-from flask import current_app
+from flask import current_app, g
 from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
@@ -181,7 +181,9 @@ def _lock_and_validate_slot(garage, data, appt_type):
                 )
                 extra = f" used={used} capacity={capacity} duration={duration}"
             current_app.logger.warning(
-                "AVAILABILITY_REJECTED garage=%s appointment_type=%s date=%s time=%s reason=%s%s",
+                "AVAILABILITY_REJECTED request_id=%s garage=%s appointment_type=%s date=%s "
+                "time=%s reason=%s%s",
+                g.get("request_id"),
                 garage.id,
                 appt_type.id if appt_type is not None else None,
                 data["preferred_date"],

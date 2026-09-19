@@ -289,6 +289,94 @@ def test_slot_starting_one_minute_before_the_previous_ends_genuinely_conflicts(
     assert second.status_code == 409
 
 
+def test_vehicle_reference_conflict_is_not_reported_as_slot_unavailable(client, session, garage):
+    """Regression guard for a real production incident: a customer's booking
+    was rejected with a 409 that MOT-frontend's DepositStep unconditionally
+    displayed as "This time is no longer available", even though the actual
+    cause (app/booking_requests/service.py::resolve_customer_and_vehicle)
+    was a different customer already owning a vehicle with the same
+    registration at this garage - unrelated to the slot itself, and not
+    logged by AVAILABILITY_REJECTED since it never goes through
+    app/public_booking/routes.py::_lock_and_validate_slot. Two different
+    customers at two genuinely non-conflicting times, sharing a
+    registration, must 409 with a distinct machine-readable reason - not
+    "full" - so the frontend can tell the two apart."""
+    appt_type = _deposit_type(session, garage)
+
+    first = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(appt_type, preferred_time="09:30:00", vehicle_registration="SH4 RED"),
+    )
+    assert first.status_code == 201
+
+    second = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(
+            appt_type,
+            preferred_time="11:00:00",
+            customer_email="different-customer@example.com",
+            vehicle_registration="SH4 RED",
+        ),
+    )
+    assert second.status_code == 409
+    body = second.get_json()
+    assert body["errors"] == {"reason": "vehicle_reference_conflict"}
+    assert "request_id" in body
+
+
+def test_concurrent_identical_deposit_attempts_both_resolve_without_a_false_conflict(app, garage):
+    """The dangerous sequence the P0 mandate asked us to prove or disprove:
+    request A creates the hold; request B, arriving milliseconds later with
+    the *same* logical attempt (same payment_attempt_id - one browser tab's
+    single click, however many HTTP requests it actually produces), must
+    resume A's hold rather than being told the slot it just reserved is
+    unavailable. app/public_booking/routes.py::DepositIntentCreate.post takes
+    a per-garage row lock (``with_for_update``) before checking for an
+    existing attempt, which serialises the two requests rather than letting
+    them race - this drives two real concurrent HTTP requests through the
+    actual Flask app (a thread each, real threads, not sequential calls) to
+    prove that serialisation holds under genuine concurrency, not just when
+    called one after another in the same test."""
+    import uuid as uuid_mod
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.extensions import db
+
+    with app.app_context():
+        appt_type = _deposit_type(db.session, garage)
+        appt_type_id = str(appt_type.id)
+    attempt_id = str(uuid_mod.uuid4())
+
+    payload = {
+        "customer_first_name": "Alex",
+        "customer_last_name": "Turner",
+        "customer_email": "alex.turner@example.com",
+        "customer_phone": "07123 456789",
+        "vehicle_registration": "PB11 REQ",
+        "preferred_date": FUTURE_DATE,
+        "preferred_time": "09:30:00",
+        "appointment_type_id": appt_type_id,
+        "payment_attempt_id": attempt_id,
+    }
+
+    def _post():
+        with app.test_client() as c:
+            return c.post(
+                f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=payload
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: _post(), range(2)))
+
+    statuses = sorted(r.status_code for r in results)
+    assert statuses == [201, 201], [r.get_json() for r in results]
+    references = {r.get_json()["booking_reference"] for r in results}
+    assert len(references) == 1, "both requests must resolve to the SAME booking, not two"
+
+    with app.app_context():
+        assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+
+
 def test_status_poll_reflects_hold_until_paid(client, session, garage):
     appt_type = _deposit_type(session, garage)
     create = client.post(
