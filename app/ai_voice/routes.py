@@ -55,8 +55,13 @@ def realtime_webhook():
 
     try:
         event = verify_webhook(payload, request.headers)
-    except InvalidWebhookSignatureError:
-        current_app.logger.warning("AI_VOICE_WEBHOOK_REJECTED reason=bad-signature")
+    except InvalidWebhookSignatureError as exc:
+        # The exception message (missing header / expired timestamp / actual
+        # signature mismatch) never includes the secret or payload contents -
+        # only "reason=bad-signature" was logged before, which made a stale
+        # secret, a clock-skewed timestamp, and a genuine mismatch
+        # indistinguishable after the fact.
+        current_app.logger.warning("AI_VOICE_WEBHOOK_REJECTED reason=%s", exc)
         return {"error": "Invalid signature."}, 400
     except OpenAIVoiceError:
         return {"error": "OpenAI voice is not configured for this deployment."}, 503

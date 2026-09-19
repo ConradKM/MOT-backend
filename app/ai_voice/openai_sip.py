@@ -61,6 +61,12 @@ def verify_webhook(payload: bytes, headers) -> UnwrapWebhookEvent:
     secret = current_app.config.get("OPENAI_WEBHOOK_SECRET")
     if not secret:
         raise OpenAIVoiceError("OpenAI webhook verification is not configured.")
+    # A secret pasted into a dashboard env var routinely picks up a trailing
+    # newline/space from the clipboard - invisible in the UI, but it changes
+    # the HMAC key entirely, so every delivery fails signature verification
+    # with no clue why. Strip it defensively; a real secret never contains
+    # leading/trailing whitespace.
+    secret = secret.strip()
     # Verification itself is local (no network call) - client construction
     # just needs *a* key, not necessarily a valid one, but this deployment
     # needs a real OPENAI_API_KEY for every other call in this module anyway.
