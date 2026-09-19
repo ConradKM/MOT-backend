@@ -110,15 +110,30 @@ This is the security boundary the whole integration rests on - see
 `app/ai_voice/tenant.py` and `app/ai_voice/routes.py`.
 
 1. **The dialled number, not the caller's claim, decides the tenant.**
-   `resolve_business_for_sip_call` reads the SIP `To` header from
-   `event.data.sip_headers` (a list of `{name, value}` pairs per OpenAI's
-   webhook payload, not a dict), extracts the phone number from the
-   `sip:`/`tel:` URI, normalises it to E.164
+   `resolve_business_for_sip_call` reads the SIP `Diversion` header (falling
+   back to `To` if absent) from `event.data.sip_headers` (a list of
+   `{name, value}` pairs per OpenAI's webhook payload, not a dict), extracts
+   the phone number from the `sip:`/`tel:` URI - handling both the bare-URI
+   form and the RFC 3261 name-addr form real headers actually arrive in
+   (`<sip:...>;tag=...`) - normalises it to E.164
    (`app.phone.normalize_uk_phone`), and looks it up via the same
    `resolve_garage_by_voice_number` every other voice path uses. Every SIP
    header is untrusted caller/network-supplied metadata per OpenAI's own
    guidance - it is only ever used to look a business up, never to
    authorize one directly.
+
+   **`Diversion`, not `To`, for a Twilio Elastic SIP Trunk.** For this
+   integration's only supported inbound path (a Twilio number's Origination
+   call to OpenAI), Twilio's own SIP Trunking docs guarantee "the Twilio
+   number dialled will always be conveyed in a SIP Diversion header" - `To`
+   is the fixed Origination URI (`sip:$OPENAI_PROJECT_ID@sip.api.openai.com`),
+   identical for every call on the trunk regardless of which CoMaz number
+   was actually dialled, so it can never identify the tenant by itself. This
+   was found live: the first test call to +443330382135 on 2026-09-19 was
+   rejected (`AI_VOICE_TENANT_UNRESOLVED`) because tenant resolution only
+   read `To`. Fixed in `app/ai_voice/tenant.py` - `To` is kept as a fallback
+   for any other SIP source reaching this webhook without a Diversion
+   header, not removed.
 2. **An ambiguous or unrecognised number fails closed.** A number that
    doesn't parse, doesn't match a business, or matches a business with
    `communications_enabled=False` results in `reject_call` and no
@@ -370,8 +385,10 @@ these four. `tests/test_ai_voice_call_controller.py` drives
   is deployment-wide).
 - Warm/attended transfer is not supported by OpenAI's Realtime Calls API as
   documented - only blind transfer (SIP `REFER`) is implemented.
-- `voice_escalation_number` is not yet consulted by this integration (see
-  "Fallback / human handoff" above).
+- Per-business voice selection and warm/attended transfer are the only
+  remaining gaps (see above) - `voice_escalation_number` **is** consulted,
+  as a fallback before `voice_fallback_number`
+  (`app/ai_voice/tools.py::_fallback_transfer_uri`).
 - No production deploy, live Twilio routing change, or real phone call has
   been made as part of this work - see the manual test plan given
   separately for exactly how to validate this before turning it on for a

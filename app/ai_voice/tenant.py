@@ -38,10 +38,21 @@ def phone_from_sip_uri(value: str | None) -> str | None:
     """The phone-number portion of a ``sip:+18005551212@host`` / ``tel:...``
     URI. This (and every SIP header) is untrusted caller-supplied metadata
     per OpenAI's own guidance - it only ever drives a business lookup below,
-    never an authorization decision by itself."""
+    never an authorization decision by itself.
+
+    Real SIP headers (unlike the bare-URI shape it's easy to test with) are
+    routinely the RFC 3261 name-addr form - the URI wrapped in ``<...>``,
+    with header parameters like ``;tag=`` or ``;reason=`` *outside* the
+    brackets, e.g. ``<sip:+441234567890@host>;tag=abc``. Strip that wrapper
+    first; a real Diversion/To header parsed without doing this yields
+    garbage (see the ``;tag=``/``;reason=`` suffix ending up glued onto the
+    "number" otherwise)."""
     if not value:
         return None
     value = value.strip()
+    if value.startswith("<"):
+        end = value.find(">")
+        value = value[1:end] if end != -1 else value[1:]
     for prefix in ("sips:", "sip:", "tel:"):
         if value.lower().startswith(prefix):
             value = value[len(prefix) :]
@@ -51,12 +62,29 @@ def phone_from_sip_uri(value: str | None) -> str | None:
 
 
 def resolve_business_for_sip_call(sip_headers: list) -> Garage | None:
-    """The garage this inbound SIP call's dialled (``To``) number belongs
+    """The garage this inbound SIP call's originally-dialled number belongs
     to, or ``None`` if it doesn't unambiguously map to a business CoMaz
     knows about (an unrecognised number, or one that fails to parse as a
     real UK number) - the caller (app/ai_voice/routes.py) must reject the
-    call in that case, never guess or fall back to any default business."""
-    to_number = phone_from_sip_uri(sip_header(sip_headers, "To"))
+    call in that case, never guess or fall back to any default business.
+
+    Prefers the ``Diversion`` header over ``To``: for a Twilio Elastic SIP
+    Trunk's Origination call (this integration's only supported inbound
+    path - see docs/OPENAI_VOICE_SETUP.md), Twilio's own SIP Trunking docs
+    guarantee "the Twilio number dialled will always be conveyed in a SIP
+    Diversion header" - the ``To``/Request-URI Twilio actually sends is the
+    fixed Origination URI itself (``sip:$OPENAI_PROJECT_ID@sip.api.openai.com``),
+    the same for every call on the trunk regardless of which CoMaz number
+    was dialled, so resolving off ``To`` alone can never identify the
+    tenant for this call path (confirmed live: callSid
+    rtc_u0_EPvuUp3oMjxHm4KyxnDpSQVfbHbOEtbS on 2026-09-19 rejected with
+    AI_VOICE_TENANT_UNRESOLVED because ``To`` was that fixed project URI,
+    not the dialled +443330382135). ``To`` is kept as a fallback for any
+    other SIP source that might reach this webhook without a Diversion
+    header, rather than dropped outright."""
+    to_number = phone_from_sip_uri(sip_header(sip_headers, "Diversion")) or phone_from_sip_uri(
+        sip_header(sip_headers, "To")
+    )
     if not to_number:
         return None
     try:

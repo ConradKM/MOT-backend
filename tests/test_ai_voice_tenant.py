@@ -18,12 +18,14 @@ from app.models.communications.garage_communication_settings import (
 )
 
 
-def _headers_dict(to=None, from_=None):
+def _headers_dict(to=None, from_=None, diversion=None):
     headers = []
     if to is not None:
         headers.append({"name": "To", "value": to})
     if from_ is not None:
         headers.append({"name": "From", "value": from_})
+    if diversion is not None:
+        headers.append({"name": "Diversion", "value": diversion})
     return headers
 
 
@@ -53,6 +55,13 @@ def test_sip_header_reads_dict_and_object_headers():
         ("sip:+442012345678@sip.example.com", "+442012345678"),
         ("tel:+442012345678", "+442012345678"),
         ("sips:+442012345678@sip.example.com;user=phone", "+442012345678"),
+        # RFC 3261 name-addr form - the shape real Twilio/OpenAI SIP headers
+        # actually arrive in (angle brackets, params outside them), not the
+        # bare-URI shape above. Regression coverage for the live incident
+        # where this wasn't stripped: rtc_u0_EPvuUp3oMjxHm4KyxnDpSQVfbHbOEtbS
+        # on 2026-09-19, AI_VOICE_TENANT_UNRESOLVED.
+        ("<sip:+442012345678@sip.example.com>;tag=abc123", "+442012345678"),
+        ("<sip:+443330382135@sip.twilio.com>;reason=unconditional", "+443330382135"),
         (None, None),
         ("", None),
     ],
@@ -133,6 +142,17 @@ def test_caller_number_for_sip_call_normalises_when_possible(garage):
     assert caller_number_for_sip_call(_headers_dict(from_="sip:07123456789@x")) == "+447123456789"
 
 
+def test_caller_number_for_sip_call_normalises_bracketed_from_header(garage):
+    """Real Twilio From headers are name-addr form too, e.g.
+    ``<sip:+447123456789@geo.sip.twilio.com>;tag=abc``."""
+    assert (
+        caller_number_for_sip_call(
+            _headers_dict(from_="<sip:+447123456789@geo.sip.twilio.com>;tag=abc")
+        )
+        == "+447123456789"
+    )
+
+
 def test_caller_number_for_sip_call_falls_back_to_raw_value(garage):
     # Not a parseable UK number - still returned as-is rather than dropped,
     # since it's only ever used for logging/contact defaults, never auth.
@@ -141,6 +161,46 @@ def test_caller_number_for_sip_call_falls_back_to_raw_value(garage):
 
 def test_caller_number_for_sip_call_empty_when_absent(garage):
     assert caller_number_for_sip_call([]) == ""
+
+
+def test_resolve_business_for_sip_call_prefers_diversion_over_fixed_to_uri(session, garage):
+    """The real Twilio Elastic SIP Trunk shape: ``To`` is the fixed OpenAI
+    project origination URI (the same for every call on the trunk), and the
+    actual dialled CoMaz number only appears in ``Diversion`` - see
+    resolve_business_for_sip_call's docstring for the live incident this
+    reproduces."""
+    session.add(
+        GarageCommunicationSettings(
+            garage_id=garage.id, communications_enabled=True, voice_phone_number="+443330382135"
+        )
+    )
+    session.commit()
+
+    headers = _headers_dict(
+        to="<sip:proj_J5VIIjPo1zzZGcyouQd4Nsjg@sip.api.openai.com;transport=tls>;tag=abc",
+        diversion="<sip:+443330382135@sip.twilio.com>;reason=unconditional",
+    )
+    resolved = resolve_business_for_sip_call(headers)
+    assert resolved is not None
+    assert resolved.id == garage.id
+
+
+def test_resolve_business_for_sip_call_falls_back_to_to_header_without_diversion(session, garage):
+    """A Diversion header is Twilio-Elastic-SIP-Trunk-specific - some other
+    SIP source reaching this webhook without one should still resolve off
+    ``To`` exactly as before, not fail closed unnecessarily."""
+    session.add(
+        GarageCommunicationSettings(
+            garage_id=garage.id, communications_enabled=True, voice_phone_number="+442012345678"
+        )
+    )
+    session.commit()
+
+    resolved = resolve_business_for_sip_call(
+        _headers_dict(to="<sip:+442012345678@sip.example.com>;tag=xyz")
+    )
+    assert resolved is not None
+    assert resolved.id == garage.id
 
 
 def test_cross_tenant_number_cannot_resolve_another_business(session, garage, second_garage):
