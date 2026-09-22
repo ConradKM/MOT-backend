@@ -28,8 +28,6 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from flask import current_app
-from flask import current_app
 from sqlalchemy import func, or_, select
 
 from app.communications.provisioning import states
@@ -566,8 +564,8 @@ def platform_readiness() -> dict:
     from app.communications.config import is_twilio_configured
     from app.communications.provisioning.voice import webhooks_reachable
     from app.payments.config import payments_prerequisites
+    from app.tasks.config import background_jobs_prerequisites
 
-    cfg = current_app.config
     return {
         "twilio_configured": is_twilio_configured(),
         "secrets_configured": secrets_configured(),
@@ -577,7 +575,7 @@ def platform_readiness() -> dict:
         "whatsapp_webhooks": whatsapp_webhook_urls(),
         "payments": payments_prerequisites(),
         "openai_voice": openai_voice_prerequisites(),
-        "celery_broker_configured": bool(cfg.get("CELERY_BROKER_URL")),
+        "background_jobs": background_jobs_prerequisites(),
     }
 
 

@@ -917,7 +917,7 @@ class PlatformReadinessSchema(Schema):
     whatsapp_webhooks = fields.Nested(WebhookUrlsSchema, dump_only=True)
     payments = fields.List(fields.Nested(PrerequisiteSchema), dump_only=True)
     openai_voice = fields.List(fields.Nested(PrerequisiteSchema), dump_only=True)
-    celery_broker_configured = fields.Bool(dump_only=True)
+    background_jobs = fields.List(fields.Nested(PrerequisiteSchema), dump_only=True)
 
 
 class VoiceSetupSchema(Schema):
