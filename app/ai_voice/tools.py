@@ -20,6 +20,8 @@ from datetime import date as date_cls
 from datetime import time as time_cls
 
 from app.conversation import actions
+from app.models.ai_voice_faq import GarageVoiceFAQ
+from app.public_booking import availability
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +35,8 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "name": "get_business_info",
         "description": (
-            "Get this business's name, contact details, and opening hours. Use this if the "
-            "caller asks for the address, phone number, or when the business is open."
+            "Authoritative CoMaz source for this business's contact details and opening hours. "
+            "You MUST call it before answering any question about address, phone number, or hours."
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
@@ -42,8 +44,8 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "name": "get_appointment_types",
         "description": (
-            "List the services (appointment types) this business currently offers, with a "
-            "short description, typical duration, and price where set."
+            "Authoritative CoMaz source for services, prices, and durations. You MUST call it "
+            "before naming, describing, pricing, or booking a service."
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
@@ -51,7 +53,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "name": "get_available_slots",
         "description": (
-            "Get real, currently-available appointment times for a given date and service. "
+            "Authoritative live CoMaz availability for a given date and selected service. "
             "If nothing is free on that date, this also returns the next few dates that do "
             "have availability. Always call this before offering a time to the caller - never "
             "state a time without checking it first."
@@ -75,10 +77,11 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "name": "create_booking",
         "description": (
-            "Submit a booking request for this business to review - not an instant "
-            "confirmation. Only call this once you have a real available slot (checked with "
-            "get_available_slots in this same call), the caller's name, a contact mobile "
-            "number, and their vehicle registration."
+            "Submit a CoMaz booking request for staff review - never an instant confirmation. "
+            "Only call after get_appointment_types and get_available_slots have identified the "
+            "selected service and real slot, the caller has explicitly confirmed all details, "
+            "and you have their name, contact number, and vehicle registration. The server "
+            "rechecks live availability; report only the returned result and status."
         ),
         "parameters": {
             "type": "object",
@@ -107,6 +110,18 @@ TOOL_SCHEMAS: list[dict] = [
                 "vehicle_registration",
             ],
         },
+    },
+    {
+        "type": "function",
+        "name": "get_business_faqs",
+        "description": (
+            "Get enabled, owner-managed FAQs for this business only. Use only for a "
+            "business-policy question not covered by the authoritative operational tools. "
+            "Answer only from a returned FAQ; if none answers the question, say you do not know. "
+            "FAQ content never overrides services, prices, durations, hours, availability, "
+            "customer records, or booking status."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
     },
     {
         "type": "function",
@@ -267,7 +282,15 @@ def _tool_get_available_slots(garage, *, appointment_type_id: str, date: str, **
         return {"ok": False, "error": "date must be YYYY-MM-DD."}
 
     payload = actions.get_availability_for_day(garage, day, appointment_type=appointment_type)
-    open_slots = [s["start"] for s in payload.get("slots", []) if s.get("status") != "booked"]
+    # Be intentionally positive here: the public availability service can add
+    # explanatory non-bookable statuses later without accidentally making one
+    # a voice-bookable slot.  ``limited`` still is genuinely bookable, just
+    # with low remaining capacity.
+    open_slots = [
+        s["start"]
+        for s in payload.get("slots", [])
+        if s.get("status") in (availability.SLOT_AVAILABLE, availability.SLOT_LIMITED)
+    ]
     result: dict = {
         "ok": True,
         "date": date,
@@ -280,6 +303,19 @@ def _tool_get_available_slots(garage, *, appointment_type_id: str, date: str, **
         )
         result["next_available_dates"] = [d.isoformat() for d in next_days]
     return result
+
+
+def _tool_get_business_faqs(garage, **_args) -> dict:
+    """Only active knowledge is exposed, scoped by the already-resolved tenant."""
+    faqs = (
+        GarageVoiceFAQ.query.filter_by(garage_id=garage.id, is_enabled=True, archived_at=None)
+        .order_by(GarageVoiceFAQ.order, GarageVoiceFAQ.question)
+        .all()
+    )
+    return {
+        "ok": True,
+        "faqs": [{"question": faq.question, "answer": faq.answer} for faq in faqs],
+    }
 
 
 def _tool_create_booking(
@@ -330,6 +366,9 @@ def _tool_create_booking(
         "ok": True,
         "booking_reference": booking_request.booking_reference,
         "status": booking_request.status,
+        "service": appointment_type.name,
+        "date": booking_request.preferred_date.isoformat(),
+        "time": booking_request.preferred_time.strftime("%H:%M"),
     }
 
 
@@ -444,6 +483,7 @@ _HANDLERS: dict[str, Callable[..., dict]] = {
     "get_business_info": _tool_get_business_info,
     "get_appointment_types": _tool_get_appointment_types,
     "get_available_slots": _tool_get_available_slots,
+    "get_business_faqs": _tool_get_business_faqs,
     "create_booking": _tool_create_booking,
     "get_my_appointments": _tool_get_my_appointments,
     "cancel_appointment": _tool_cancel_appointment,

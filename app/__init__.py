@@ -238,6 +238,7 @@ def create_app(config_class=Config):
     app.cli.add_command(dev_info_command)
     app.cli.add_command(backfill_payment_method_domains_command)
 
+    from .ai_voice.faqs.routes import voice_faqs_blp
     from .ai_voice.routes import openai_voice_blp
     from .appointments.checklist_templates.routes import checklist_templates_blp
     from .appointments.checklists.routes import appointment_checklists_blp
@@ -278,6 +279,7 @@ def create_app(config_class=Config):
     api.register_blueprint(payment_webhooks_blp)
     api.register_blueprint(payments_blp)
     api.register_blueprint(openai_voice_blp)
+    api.register_blueprint(voice_faqs_blp)
     api.register_blueprint(auth_blp)
     api.register_blueprint(customer_auth_blp)
     api.register_blueprint(customer_portal_blp)

@@ -5,7 +5,9 @@ OpenAI Realtime model calls during a phone call.
 import json
 from datetime import UTC, datetime, timedelta
 
+from app.ai_voice.instructions import build_instructions
 from app.ai_voice.tools import TOOL_SCHEMAS, dispatch_tool
+from app.models.ai_voice_faq import GarageVoiceFAQ
 from app.models.booking_request import BookingRequest
 
 
@@ -22,6 +24,7 @@ def test_tool_schemas_cover_the_required_tools():
         "get_business_info",
         "get_appointment_types",
         "get_available_slots",
+        "get_business_faqs",
         "create_booking",
         "get_my_appointments",
         "cancel_appointment",
@@ -63,6 +66,38 @@ def test_get_available_slots_reports_real_open_times(garage, garage_schedule, ap
     assert result["ok"] is True
     assert result["is_open"] is True
     assert "09:00" in result["available_times"]
+
+
+def test_get_available_slots_never_claims_a_full_slot_is_available(
+    garage, garage_schedule, appointment_type, make_appointment
+):
+    day = _future_weekday()
+    # One employee is the fixture's real capacity. A real appointment fills
+    # 09:00, so the voice payload must not offer it merely because the garage
+    # is open that day.
+    start = datetime.combine(day, datetime.min.time(), tzinfo=UTC).replace(hour=9)
+    make_appointment(start)
+    args = json.dumps({"appointment_type_id": str(appointment_type.id), "date": day.isoformat()})
+    result = json.loads(dispatch_tool(garage, "+447123456789", "get_available_slots", args))
+    assert "09:00" not in result["available_times"]
+
+
+def test_create_booking_records_the_selected_real_slot(garage, garage_schedule, appointment_type):
+    day = _future_weekday()
+    args = json.dumps(
+        {
+            "appointment_type_id": str(appointment_type.id),
+            "date": day.isoformat(),
+            "time": "09:00",
+            "first_name": "Alex",
+            "last_name": "Turner",
+            "vehicle_registration": "PB11 REQ",
+        }
+    )
+    result = json.loads(dispatch_tool(garage, "+447123456789", "create_booking", args))
+    booking = BookingRequest.query.filter_by(booking_reference=result["booking_reference"]).one()
+    assert result["status"] == "PENDING"
+    assert (booking.preferred_date, booking.preferred_time.strftime("%H:%M")) == (day, "09:00")
 
 
 def test_get_available_slots_unknown_type_is_a_clean_error(garage):
@@ -126,6 +161,34 @@ def test_create_booking_rejects_a_slot_that_is_no_longer_available(
     )
     result = json.loads(dispatch_tool(garage, "+447123456789", "create_booking", args))
     assert result["ok"] is False
+
+
+def test_business_faqs_are_tenant_scoped_and_exclude_disabled_and_archived(
+    session, garage, second_garage
+):
+    session.add_all(
+        [
+            GarageVoiceFAQ(garage_id=garage.id, question="Can I wait?", answer="Yes."),
+            GarageVoiceFAQ(
+                garage_id=garage.id, question="Disabled", answer="No.", is_enabled=False
+            ),
+            GarageVoiceFAQ(garage_id=second_garage.id, question="Other tenant", answer="Leak."),
+        ]
+    )
+    session.commit()
+    result = json.loads(dispatch_tool(garage, "+447123456789", "get_business_faqs", "{}"))
+    assert result == {"ok": True, "faqs": [{"question": "Can I wait?", "answer": "Yes."}]}
+
+
+def test_voice_instructions_require_tools_for_unknown_and_authoritative_answers(garage):
+    instructions = build_instructions(garage)
+    # This is the guardrail against a model treating arbitrary FAQ prose as a
+    # source for a price, a slot, or a made-up policy answer.
+    assert "Call the matching tool immediately before answering" in instructions
+    assert "FAQs are not operational data and must never override" in instructions
+    assert (
+        "If no authoritative tool result or FAQ answers the question, say clearly" in instructions
+    )
 
 
 def test_request_human_handoff_creates_a_callback(garage):
