@@ -168,6 +168,51 @@ def test_run_call_controller_exits_cleanly_when_the_connection_closes(monkeypatc
     assert connection.sent == []
 
 
+def test_repeated_function_event_replays_output_without_repeating_a_booking_action(
+    monkeypatch, garage
+):
+    event = SimpleNamespace(
+        type="response.function_call_arguments.done",
+        call_id="tool_once",
+        name="create_booking",
+        arguments="{}",
+    )
+    connection = _FakeConnection([event, event])
+    _patch_connection(monkeypatch, connection)
+    dispatch = Mock(return_value=json.dumps({"ok": False, "error": "missing details"}))
+    monkeypatch.setattr(call_controller, "dispatch_tool", dispatch)
+
+    run_call_controller(api_key="sk-test", call_id="rtc_once", garage=garage, caller_phone="")
+
+    dispatch.assert_called_once()
+    assert len(connection.sent) == 4
+    assert connection.sent[0]["item"]["output"] == connection.sent[2]["item"]["output"]
+
+
+def test_failed_handoff_does_not_end_the_call(monkeypatch, garage):
+    event = SimpleNamespace(
+        type="response.function_call_arguments.done",
+        call_id="handoff_failed",
+        name="request_human_handoff",
+        arguments="{}",
+    )
+    connection = _FakeConnection([event, SimpleNamespace(type="response.done")])
+    _patch_connection(monkeypatch, connection)
+    monkeypatch.setattr(
+        call_controller,
+        "dispatch_tool",
+        Mock(return_value=json.dumps({"ok": False, "error": "unavailable"})),
+    )
+    hangup_mock = Mock()
+    monkeypatch.setattr(call_controller, "hangup_call", hangup_mock)
+
+    run_call_controller(
+        api_key="sk-test", call_id="rtc_handoff_failed", garage=garage, caller_phone=""
+    )
+
+    hangup_mock.assert_not_called()
+
+
 def test_run_call_controller_never_raises_on_an_unexpected_crash(monkeypatch, garage):
     fake_client = Mock()
     fake_client.realtime.connect.side_effect = RuntimeError("network blip")

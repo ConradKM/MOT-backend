@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from app.ai_voice.instructions import build_instructions
-from app.ai_voice.tools import TOOL_SCHEMAS, dispatch_tool
+from app.ai_voice.tools import TOOL_SCHEMAS, VoiceToolState, dispatch_tool
 from app.models.ai_voice_faq import GarageVoiceFAQ
 from app.models.booking_request import BookingRequest
 
@@ -98,6 +98,72 @@ def test_create_booking_records_the_selected_real_slot(garage, garage_schedule, 
     booking = BookingRequest.query.filter_by(booking_reference=result["booking_reference"]).one()
     assert result["status"] == "PENDING"
     assert (booking.preferred_date, booking.preferred_time.strftime("%H:%M")) == (day, "09:00")
+
+
+def test_production_voice_booking_requires_a_slot_from_this_calls_live_lookup(
+    garage, garage_schedule, appointment_type
+):
+    day = _future_weekday()
+    create_args = json.dumps(
+        {
+            "appointment_type_id": str(appointment_type.id),
+            "date": day.isoformat(),
+            "time": "09:00",
+            "first_name": "Alex",
+            "last_name": "Turner",
+            "vehicle_registration": "PB11 REQ",
+        }
+    )
+    state = VoiceToolState()
+    rejected = json.loads(
+        dispatch_tool(garage, "+447123456789", "create_booking", create_args, state=state)
+    )
+    assert rejected["ok"] is False
+    assert BookingRequest.query.count() == 0
+
+    lookup_args = json.dumps(
+        {"appointment_type_id": str(appointment_type.id), "date": day.isoformat()}
+    )
+    lookup = json.loads(
+        dispatch_tool(garage, "+447123456789", "get_available_slots", lookup_args, state=state)
+    )
+    assert "09:00" in lookup["available_times"]
+    created = json.loads(
+        dispatch_tool(garage, "+447123456789", "create_booking", create_args, state=state)
+    )
+    assert created["ok"] is True
+
+
+def test_live_slot_proof_cannot_be_reused_for_a_different_service_or_date(
+    session, garage, garage_schedule, appointment_type
+):
+    from app.models.appointments.appointment_type import GarageAppointmentType
+
+    other = GarageAppointmentType(garage_id=garage.id, name="Long service", status="ACTIVE")
+    session.add(other)
+    session.commit()
+    day = _future_weekday()
+    state = VoiceToolState()
+    lookup_args = json.dumps(
+        {"appointment_type_id": str(appointment_type.id), "date": day.isoformat()}
+    )
+    dispatch_tool(garage, "+447123456789", "get_available_slots", lookup_args, state=state)
+    args = json.dumps(
+        {
+            "appointment_type_id": str(other.id),
+            "date": day.isoformat(),
+            "time": "09:00",
+            "first_name": "Alex",
+            "last_name": "Turner",
+            "vehicle_registration": "PB11 REQ",
+        }
+    )
+    assert (
+        json.loads(dispatch_tool(garage, "+447123456789", "create_booking", args, state=state))[
+            "ok"
+        ]
+        is False
+    )
 
 
 def test_get_available_slots_unknown_type_is_a_clean_error(garage):
@@ -220,6 +286,64 @@ def test_get_my_appointments_is_empty_for_an_unknown_number(garage):
     result = json.loads(dispatch_tool(garage, "+447000000000", "get_my_appointments", "{}"))
     assert result["ok"] is True
     assert result["appointments"] == []
+
+
+def test_appointment_lookup_cannot_be_redirected_to_another_callers_number(
+    garage, customer, make_appointment
+):
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+    make_appointment(start)
+    # Prompt injection or a caller simply supplying somebody else's number
+    # must not turn the caller-scoped lookup into an account lookup.
+    result = json.loads(
+        dispatch_tool(
+            garage,
+            "+447000000000",
+            "get_my_appointments",
+            json.dumps({"phone": customer.phone}),
+        )
+    )
+    assert result == {"ok": True, "appointments": []}
+
+
+def test_appointment_cancellation_cannot_be_redirected_to_another_number(
+    garage, customer, make_appointment
+):
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+    appointment = make_appointment(start)
+    result = json.loads(
+        dispatch_tool(
+            garage,
+            "+447000000000",
+            "cancel_appointment",
+            json.dumps({"appointment_id": str(appointment.id), "phone": customer.phone}),
+        )
+    )
+    assert result["ok"] is False
+    assert appointment.status == "BOOKED"
+
+
+def test_booking_contact_number_does_not_link_another_customers_record(
+    session, garage, garage_schedule, appointment_type, customer
+):
+    customer.phone = "+447123456789"
+    session.commit()
+    day = _future_weekday()
+    args = json.dumps(
+        {
+            "appointment_type_id": str(appointment_type.id),
+            "date": day.isoformat(),
+            "time": "09:00",
+            "first_name": "Alex",
+            "last_name": "Turner",
+            "phone": customer.phone,
+            "vehicle_registration": "PB11 REQ",
+        }
+    )
+    result = json.loads(dispatch_tool(garage, "+447000000000", "create_booking", args))
+    booking = BookingRequest.query.filter_by(booking_reference=result["booking_reference"]).one()
+    assert booking.customer_id is None
+    assert booking.customer_phone == customer.phone
 
 
 def test_cancel_appointment_cancels_the_callers_own_appointment(garage, customer, make_appointment):

@@ -16,11 +16,13 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date as date_cls
 from datetime import time as time_cls
 
 from app.conversation import actions
 from app.models.ai_voice_faq import GarageVoiceFAQ
+from app.phone import InvalidPhoneNumberError, normalize_uk_phone
 from app.public_booking import availability
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,38 @@ logger = logging.getLogger(__name__)
 # unexpectedly - the model still gets a turn to react (e.g. apologise and
 # hand off) rather than the whole bridge crashing mid-call.
 _TOOL_ERROR = {"ok": False, "error": "That couldn't be completed right now."}
+
+
+@dataclass
+class VoiceToolState:
+    """Per-call proof of the live slots the agent was allowed to offer.
+
+    Prompts can ask the model to follow a booking sequence; this small state
+    machine enforces the non-negotiable part.  It is intentionally short
+    lived: availability must be checked in *this* phone call, and CoMaz
+    revalidates it again when the request is committed.
+    """
+
+    offered_slots: set[tuple[str, str, str]] = field(default_factory=set)
+
+    def record_availability(self, arguments: dict, result: dict) -> None:
+        if not result.get("ok"):
+            return
+        appointment_type_id = str(arguments.get("appointment_type_id", ""))
+        day = str(arguments.get("date", ""))
+        for slot in result.get("available_times", []):
+            self.offered_slots.add((appointment_type_id, day, str(slot)))
+
+    def includes_slot(self, arguments: dict) -> bool:
+        parsed_time = _parse_time(arguments.get("time", ""))
+        if parsed_time is None:
+            return False
+        return (
+            str(arguments.get("appointment_type_id", "")),
+            str(arguments.get("date", "")),
+            parsed_time.strftime("%H:%M"),
+        ) in self.offered_slots
+
 
 TOOL_SCHEMAS: list[dict] = [
     {
@@ -128,21 +162,13 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "get_my_appointments",
         "description": (
             "Look up the caller's own upcoming, already-confirmed appointments at this "
-            "business, matched by the number they're calling from (or another mobile number "
-            "they give you). Use this before cancelling or rescheduling anything - you must "
-            "have the appointment's id from this list first."
+            "business, matched only by the number they are calling from. Use this before "
+            "cancelling or rescheduling anything - you must have the appointment's id from "
+            "this list first."
         ),
         "parameters": {
             "type": "object",
-            "properties": {
-                "phone": {
-                    "type": "string",
-                    "description": (
-                        "The mobile number the appointment was booked under, if different from "
-                        "the number they're calling from."
-                    ),
-                }
-            },
+            "properties": {},
             "required": [],
         },
     },
@@ -341,8 +367,14 @@ def _tool_create_booking(
     if day is None or slot_time is None:
         return {"ok": False, "error": "date must be YYYY-MM-DD and time must be HH:MM."}
 
-    contact_phone = (phone or caller_phone_e164 or "").strip()
-    customer = actions.find_customer(garage, contact_phone) if contact_phone else None
+    try:
+        contact_phone = normalize_uk_phone((phone or caller_phone_e164 or "").strip())
+    except InvalidPhoneNumberError:
+        return {"ok": False, "error": "A valid UK mobile contact number is required."}
+    # A supplied contact number is useful for a new request but is not proof
+    # that this caller owns an existing customer record. Only the number from
+    # the SIP call is trusted for customer linkage.
+    customer = actions.find_customer(garage, caller_phone_e164) if caller_phone_e164 else None
 
     booking_request, reason = actions.create_booking_request(
         garage,
@@ -372,11 +404,8 @@ def _tool_create_booking(
     }
 
 
-def _tool_get_my_appointments(
-    garage, caller_phone_e164: str, *, phone: str | None = None, **_args
-) -> dict:
-    contact_phone = (phone or caller_phone_e164 or "").strip()
-    customer = actions.find_customer(garage, contact_phone) if contact_phone else None
+def _tool_get_my_appointments(garage, caller_phone_e164: str, **_args) -> dict:
+    customer = actions.find_customer(garage, caller_phone_e164) if caller_phone_e164 else None
     if customer is None:
         return {"ok": True, "appointments": []}
     upcoming = actions.get_upcoming_appointments(garage, customer)
@@ -394,14 +423,13 @@ def _tool_get_my_appointments(
     }
 
 
-def _find_own_appointment(garage, caller_phone_e164: str, phone: str | None, appointment_id: str):
+def _find_own_appointment(garage, caller_phone_e164: str, appointment_id: str):
     """The caller's own appointment matching ``appointment_id`` - never any
     other customer's, even within the same garage (mirrors
     ``find_customer_vehicle_by_registration``'s ownership check above)."""
-    contact_phone = (phone or caller_phone_e164 or "").strip()
-    if not contact_phone:
+    if not caller_phone_e164:
         return None
-    customer = actions.find_customer(garage, contact_phone)
+    customer = actions.find_customer(garage, caller_phone_e164)
     if customer is None:
         return None
     for appointment in actions.get_upcoming_appointments(garage, customer):
@@ -411,9 +439,9 @@ def _find_own_appointment(garage, caller_phone_e164: str, phone: str | None, app
 
 
 def _tool_cancel_appointment(
-    garage, caller_phone_e164: str, *, appointment_id: str, phone: str | None = None, **_args
+    garage, caller_phone_e164: str, *, appointment_id: str, **_args
 ) -> dict:
-    appointment = _find_own_appointment(garage, caller_phone_e164, phone, appointment_id)
+    appointment = _find_own_appointment(garage, caller_phone_e164, appointment_id)
     if appointment is None:
         return {"ok": False, "error": "That appointment couldn't be found on this number."}
     ok, reason = actions.cancel_appointment(garage, appointment)
@@ -429,10 +457,9 @@ def _tool_reschedule_appointment(
     appointment_id: str,
     date: str,
     time: str,
-    phone: str | None = None,
     **_args,
 ) -> dict:
-    appointment = _find_own_appointment(garage, caller_phone_e164, phone, appointment_id)
+    appointment = _find_own_appointment(garage, caller_phone_e164, appointment_id)
     if appointment is None:
         return {"ok": False, "error": "That appointment couldn't be found on this number."}
 
@@ -506,7 +533,14 @@ _CALLER_SCOPED_TOOLS = frozenset(
 )
 
 
-def dispatch_tool(garage, caller_phone_e164: str, name: str, arguments_json: str) -> str:
+def dispatch_tool(
+    garage,
+    caller_phone_e164: str,
+    name: str,
+    arguments_json: str,
+    *,
+    state: VoiceToolState | None = None,
+) -> str:
     """Execute one tool call by name, tenant-scoped to ``garage``. Always
     returns a JSON string (never raises) - the caller (app/ai_voice/call_controller.py)
     sends this straight back to OpenAI as the function_call_output, so a
@@ -521,6 +555,24 @@ def dispatch_tool(garage, caller_phone_e164: str, name: str, arguments_json: str
     except (ValueError, TypeError):
         return json.dumps({"ok": False, "error": "Malformed tool arguments."})
 
+    if not isinstance(arguments, dict):
+        return json.dumps({"ok": False, "error": "Tool arguments must be an object."})
+
+    # Only the live controller passes state. Keeping it optional preserves
+    # other explicitly-tested internal callers while making the production
+    # voice path unable to create a request for a slot it has not actually
+    # obtained from CoMaz during this call.
+    if name == "create_booking" and state is not None and not state.includes_slot(arguments):
+        return json.dumps(
+            {
+                "ok": False,
+                "error": (
+                    "That slot has not been returned by live availability in this call. "
+                    "Use get_available_slots and offer a returned time first."
+                ),
+            }
+        )
+
     try:
         if name in _CALLER_SCOPED_TOOLS:
             result = handler(garage, caller_phone_e164, **arguments)
@@ -532,4 +584,6 @@ def dispatch_tool(garage, caller_phone_e164: str, name: str, arguments_json: str
         logger.exception("AI_VOICE_TOOL_FAILED tool=%s", name)
         return json.dumps(_TOOL_ERROR)
 
+    if name == "get_available_slots" and state is not None:
+        state.record_availability(arguments, result)
     return json.dumps(result)

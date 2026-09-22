@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import json
 import logging
+from time import monotonic
 
 from openai import OpenAI
 
 from .openai_sip import OpenAIVoiceError, hangup_call, refer_call
-from .tools import CALL_ENDING_TOOLS, dispatch_tool
+from .tools import CALL_ENDING_TOOLS, VoiceToolState, dispatch_tool
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,11 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
     client = OpenAI(api_key=api_key)
     end_after_response = False
     transfer_uri: str | None = None
+    tool_state = VoiceToolState()
+    # OpenAI can redeliver a completed function-call event after a transport
+    # hiccup. Replaying its original output is safe; executing a mutating
+    # tool again is not.
+    completed_tool_outputs: dict[str, str] = {}
 
     try:
         with client.realtime.connect(call_id=call_id) as connection:
@@ -60,8 +66,37 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                     name = getattr(event, "name", "")
                     arguments = getattr(event, "arguments", "{}")
                     tool_call_id = getattr(event, "call_id", None)
-                    logger.info("AI_VOICE_TOOL_CALL callSid=%s tool=%s", call_id, name)
-                    output = dispatch_tool(garage, caller_phone, name, arguments)
+                    cache_key = str(tool_call_id) if tool_call_id else None
+                    started = monotonic()
+                    if cache_key and cache_key in completed_tool_outputs:
+                        output = completed_tool_outputs[cache_key]
+                        logger.info(
+                            "AI_VOICE_TOOL_REPLAY callSid=%s garage=%s tool=%s",
+                            call_id,
+                            garage.id,
+                            name,
+                        )
+                    else:
+                        logger.info(
+                            "AI_VOICE_TOOL_CALL callSid=%s garage=%s tool=%s",
+                            call_id,
+                            garage.id,
+                            name,
+                        )
+                        output = dispatch_tool(
+                            garage, caller_phone, name, arguments, state=tool_state
+                        )
+                        if cache_key:
+                            completed_tool_outputs[cache_key] = output
+                    tool_ok = _tool_succeeded(output)
+                    logger.info(
+                        "AI_VOICE_TOOL_RESULT callSid=%s garage=%s tool=%s ok=%s latency_ms=%d",
+                        call_id,
+                        garage.id,
+                        name,
+                        tool_ok,
+                        (monotonic() - started) * 1000,
+                    )
                     model_output, transfer_uri = _extract_transfer_uri(output)
                     connection.send_raw(
                         json.dumps(
@@ -76,7 +111,7 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                         )
                     )
                     connection.send_raw(json.dumps({"type": "response.create"}))
-                    if name in CALL_ENDING_TOOLS:
+                    if name in CALL_ENDING_TOOLS and tool_ok:
                         end_after_response = True
 
                 elif etype == "response.done":
@@ -114,6 +149,14 @@ def _extract_transfer_uri(output_json: str) -> tuple[str, str | None]:
         return output_json, None
     transfer_uri = payload.pop(_TRANSFER_URI_FIELD)
     return json.dumps(payload), transfer_uri
+
+
+def _tool_succeeded(output_json: str) -> bool:
+    try:
+        payload = json.loads(output_json)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(payload, dict) and payload.get("ok") is True
 
 
 def _safe_hangup(call_id: str) -> None:
