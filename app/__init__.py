@@ -240,6 +240,7 @@ def create_app(config_class=Config):
     app.cli.add_command(backfill_payment_method_domains_command)
     app.cli.add_command(send_due_reminders_command)
 
+    from .ai_voice.faqs.routes import voice_faqs_blp
     from .ai_voice.routes import openai_voice_blp
     from .appointment_reminders.routes import reminders_blp
     from .appointments.checklist_templates.routes import checklist_templates_blp
@@ -281,6 +282,7 @@ def create_app(config_class=Config):
     api.register_blueprint(payment_webhooks_blp)
     api.register_blueprint(payments_blp)
     api.register_blueprint(openai_voice_blp)
+    api.register_blueprint(voice_faqs_blp)
     api.register_blueprint(auth_blp)
     api.register_blueprint(customer_auth_blp)
     api.register_blueprint(customer_portal_blp)

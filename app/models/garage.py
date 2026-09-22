@@ -9,6 +9,7 @@ from app.extensions import db
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.ai_voice_faq import GarageVoiceFAQ
     from app.models.appointment_reminder_settings import AppointmentReminderSettings
     from app.models.appointments.appointment import Appointment
     from app.models.appointments.appointment_type import GarageAppointmentType
@@ -221,4 +222,7 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
         "GarageFeatureFlag",
         back_populates="garage",
         cascade="all, delete-orphan",
+    )
+    voice_faqs: Mapped[list["GarageVoiceFAQ"]] = relationship(
+        "GarageVoiceFAQ", back_populates="garage", cascade="all, delete-orphan"
     )

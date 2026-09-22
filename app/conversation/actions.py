@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
 
+from sqlalchemy.exc import IntegrityError
+
 from app.booking_requests.reference import unique_booking_reference
 from app.communications.events import (
     APPOINTMENT_CANCELLED,
@@ -177,6 +179,8 @@ def create_booking_request(
     preferred_time: time | None,
     notes: str | None = None,
     now: datetime | None = None,
+    voice_tool_call_id: str | None = None,
+    voice_call_id: str | None = None,
 ) -> tuple[BookingRequest | None, str | None]:
     """Create the exact same kind of PENDING booking request the public web
     form creates (app/public_booking/routes.py) - the conversation engine
@@ -187,6 +191,18 @@ def create_booking_request(
     workflow can apologise and re-offer real alternatives, exactly as if two
     customers had raced for the same slot over the public booking page.
     """
+    # A controller reconnect can redeliver the same OpenAI function call
+    # after CoMaz has committed it but before OpenAI received the output.
+    # Return the original request rather than reserving a second slot.
+    if voice_tool_call_id:
+        existing = BookingRequest.query.filter_by(voice_tool_call_id=voice_tool_call_id).first()
+        if existing is not None:
+            return existing, None
+    if voice_call_id:
+        existing = BookingRequest.query.filter_by(voice_call_id=voice_call_id).first()
+        if existing is not None:
+            return existing, None
+
     if preferred_time is not None:
         reason = revalidate_slot(
             garage,
@@ -207,6 +223,8 @@ def create_booking_request(
         source=BOOKING_REQUEST_SOURCE_CONVERSATION,
         status="PENDING",
         booking_reference=unique_booking_reference(db.session),
+        voice_tool_call_id=voice_tool_call_id,
+        voice_call_id=voice_call_id,
         # Pre-linked when the customer is already known (e.g. identified by
         # phone - see app/communications/service.py::find_customer_by_phone).
         # Unlike the public web form (app/public_booking/routes.py), this
@@ -234,7 +252,24 @@ def create_booking_request(
         notes=notes,
     )
     db.session.add(booking_request)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # The pre-insert lookup above covers ordinary retries.  A reconnect
+        # can still race in a second worker between that lookup and commit;
+        # the database unique constraint is the final idempotency boundary.
+        # Recover the request that won that race instead of treating the
+        # caller to a false failure (or ever creating a second request).
+        db.session.rollback()
+        if voice_tool_call_id:
+            existing = BookingRequest.query.filter_by(voice_tool_call_id=voice_tool_call_id).first()
+            if existing is not None:
+                return existing, None
+        if voice_call_id:
+            existing = BookingRequest.query.filter_by(voice_call_id=voice_call_id).first()
+            if existing is not None:
+                return existing, None
+        raise
 
     emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
     return booking_request, None

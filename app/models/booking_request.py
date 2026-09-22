@@ -99,6 +99,11 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # Opaque browser-generated token used to resume this exact deposit
     # attempt without mistaking its own active hold for another customer.
     payment_attempt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True, index=True)
+    # Opaque OpenAI function-call id for a voice-created request. It makes a
+    # retry after a controller/network failure idempotent without storing any
+    # caller speech or customer data.
+    voice_tool_call_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    voice_call_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
 
     # --- what the public form submitted -------------------------------------
     customer_first_name: Mapped[str] = mapped_column(String(100), nullable=False)

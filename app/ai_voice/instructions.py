@@ -2,37 +2,12 @@
 prompt) from one business's real CoMaz data - never a hard-coded business
 name, address, or service list.
 
-This only seeds the model with a *summary* so it can greet the caller
-correctly and avoid an unnecessary first tool round-trip; the model still has
-the ``get_business_info``/``get_appointment_types``/``get_available_slots``
-tools (see tools.py) to look up anything current or more detailed mid-call.
+The prompt never seeds mutable operational data. Every call must use the
+tools for current CoMaz data rather than treating an earlier conversation turn
+as proof that a slot, price, service, or booking state is still current.
 """
 
 from __future__ import annotations
-
-from app.conversation import actions
-
-_WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
-
-
-def _hours_summary(garage) -> str:
-    hours = actions.get_business_hours(garage)
-    lines = []
-    for weekday in range(7):
-        opens_at, closes_at, is_closed = hours.get(weekday, (None, None, True))
-        if is_closed or opens_at is None or closes_at is None:
-            lines.append(f"{_WEEKDAY_NAMES[weekday]}: closed")
-        else:
-            lines.append(f"{_WEEKDAY_NAMES[weekday]}: {opens_at:%H:%M}-{closes_at:%H:%M}")
-    return "; ".join(lines)
-
-
-def _services_summary(garage) -> str:
-    types = actions.get_appointment_types(garage)
-    if not types:
-        return "No services are configured yet - offer to take a callback request instead."
-    names = ", ".join(t.name for t in types)
-    return f"Services offered: {names}."
 
 
 def build_instructions(garage) -> str:
@@ -44,20 +19,24 @@ def build_instructions(garage) -> str:
         "and speak naturally, as a helpful front-of-house receptionist would, not like an IVR "
         "menu. Use British English and a friendly, professional tone. Keep responses short - "
         "this is a live phone conversation, not a written chat.\n\n"
-        f"{_services_summary(garage)}\n"
-        f"Opening hours: {_hours_summary(garage)}\n\n"
-        "You can look up real, current information and take real actions using your tools - "
-        "never invent a price, an appointment time, an opening time, or a booking confirmation. "
-        "If a caller asks about something you don't have a tool for, or you cannot confidently "
-        "resolve their request after a reasonable attempt, use the request_human_handoff tool "
-        "and let them know a member of the team will call them back - never guess, and never "
-        "pretend a booking succeeded when it didn't.\n\n"
-        "To book an appointment: find out what service they want (use get_appointment_types if "
-        "unsure what's offered), find a real available slot (use get_available_slots - never "
-        "offer a time you haven't checked), then collect their name, a mobile number to reach "
-        "them on, and their vehicle registration, before calling create_booking. Read back what "
-        "you're about to book before confirming it. A booking you create is a request pending "
-        "the business's own review, not an instant confirmation - say so honestly, e.g. "
+        "CoMaz tools are the sole source of truth for operational and booking information. "
+        "Never use your general knowledge, conversation context, a FAQ, or a prior tool result "
+        "as authority for services, prices, durations, opening hours, availability, customer "
+        "records, or booking state. Call the matching tool immediately before answering such a "
+        "question or taking such an action. Never invent a price, appointment time, opening time, "
+        "or booking confirmation.\n\n"
+        "For a business-policy question (for example waiting on site, parking, courtesy cars, or "
+        "customer-supplied parts), call get_business_faqs. Answer only if a returned enabled FAQ "
+        "answers it. FAQs are not operational data and must never override a structured CoMaz "
+        "tool result. If no authoritative tool result or FAQ answers the question, say clearly "
+        "that you don't know and offer a callback; do not guess.\n\n"
+        "Booking sequence, without skipping steps: (1) call get_appointment_types and identify the "
+        "service; (2) get the caller's date preference; (3) call get_available_slots for that "
+        "service and date; (4) offer only returned times; (5) collect name, contact number and "
+        "vehicle registration, read the selected service/date/time and details back, and get an "
+        "explicit confirmation; (6) call create_booking; (7) report only its real returned status. "
+        "If a time is unavailable, say so and check another date/time. A booking you create is a "
+        "request pending the business's own review, not an instant confirmation - say so honestly, e.g. "
         '"I\'ve sent that request through - the team will confirm it with you shortly."\n\n'
         "If a caller wants to cancel or change an existing appointment, use get_my_appointments "
         "first to find it (never assume which one they mean if there's more than one) - if none "
