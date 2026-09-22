@@ -45,6 +45,7 @@ class VoiceToolState:
     """
 
     offered_slots: set[tuple[str, str, str]] = field(default_factory=set)
+    looked_up_appointment_ids: set[str] = field(default_factory=set)
 
     def record_availability(self, arguments: dict, result: dict) -> None:
         if not result.get("ok"):
@@ -63,6 +64,32 @@ class VoiceToolState:
             str(arguments.get("date", "")),
             parsed_time.strftime("%H:%M"),
         ) in self.offered_slots
+
+    def includes_time(self, arguments: dict) -> bool:
+        """Whether a live availability lookup returned this date/time.
+
+        Rescheduling derives the service from the existing appointment, so
+        this is deliberately a date/time proof only; the action layer still
+        revalidates the slot against that appointment's real service.
+        """
+        parsed_time = _parse_time(arguments.get("time", ""))
+        if parsed_time is None:
+            return False
+        day = str(arguments.get("date", ""))
+        formatted_time = parsed_time.strftime("%H:%M")
+        return any(
+            offered_day == day and offered_time == formatted_time
+            for _appointment_type_id, offered_day, offered_time in self.offered_slots
+        )
+
+    def record_appointments(self, result: dict) -> None:
+        if not result.get("ok"):
+            return
+        self.looked_up_appointment_ids.update(
+            str(appointment["id"])
+            for appointment in result.get("appointments", [])
+            if isinstance(appointment, dict) and appointment.get("id")
+        )
 
 
 TOOL_SCHEMAS: list[dict] = [
@@ -187,9 +214,13 @@ TOOL_SCHEMAS: list[dict] = [
                 "appointment_id": {
                     "type": "string",
                     "description": "The id of the appointment, from get_my_appointments.",
-                }
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "True only after the caller explicitly confirmed cancellation.",
+                },
             },
-            "required": ["appointment_id"],
+            "required": ["appointment_id", "confirmed"],
         },
     },
     {
@@ -209,8 +240,12 @@ TOOL_SCHEMAS: list[dict] = [
                 },
                 "date": {"type": "string", "description": "New date, as YYYY-MM-DD."},
                 "time": {"type": "string", "description": "New time, 24-hour HH:MM."},
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "True only after the caller explicitly confirmed the new date and time.",
+                },
             },
-            "required": ["appointment_id", "date", "time"],
+            "required": ["appointment_id", "date", "time", "confirmed"],
         },
     },
     {
@@ -405,7 +440,11 @@ def _tool_create_booking(
         "status": booking_request.status,
         "service": appointment_type.name,
         "date": booking_request.preferred_date.isoformat(),
-        "time": booking_request.preferred_time.strftime("%H:%M"),
+        "time": (
+            booking_request.preferred_time.strftime("%H:%M")
+            if booking_request.preferred_time is not None
+            else None
+        ),
     }
 
 
@@ -444,7 +483,7 @@ def _find_own_appointment(garage, caller_phone_e164: str, appointment_id: str):
 
 
 def _tool_cancel_appointment(
-    garage, caller_phone_e164: str, *, appointment_id: str, **_args
+    garage, caller_phone_e164: str, *, appointment_id: str, confirmed: bool, **_args
 ) -> dict:
     appointment = _find_own_appointment(garage, caller_phone_e164, appointment_id)
     if appointment is None:
@@ -462,6 +501,7 @@ def _tool_reschedule_appointment(
     appointment_id: str,
     date: str,
     time: str,
+    confirmed: bool,
     **_args,
 ) -> dict:
     appointment = _find_own_appointment(garage, caller_phone_e164, appointment_id)
@@ -565,16 +605,53 @@ def dispatch_tool(
     if not isinstance(arguments, dict):
         return json.dumps({"ok": False, "error": "Tool arguments must be an object."})
 
+    if name in {"cancel_appointment", "reschedule_appointment"}:
+        if arguments.get("confirmed") is not True:
+            return json.dumps(
+                {"ok": False, "error": "The caller must explicitly confirm this change first."}
+            )
+        if (
+            state is not None
+            and str(arguments.get("appointment_id", "")) not in state.looked_up_appointment_ids
+        ):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "Use get_my_appointments in this call before changing an appointment.",
+                }
+            )
+        if (
+            name == "reschedule_appointment"
+            and state is not None
+            and not state.includes_time(arguments)
+        ):
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": "That new time has not been returned by live availability in this call.",
+                }
+            )
+
     # Only the live controller passes state. Keeping it optional preserves
     # other explicitly-tested internal callers while making the production
     # voice path unable to create a request for a slot it has not actually
     # obtained from CoMaz during this call.
     is_idempotent_retry = bool(
         name == "create_booking"
-        and tool_call_id
-        and BookingRequest.query.filter_by(
-            garage_id=garage.id, voice_tool_call_id=tool_call_id
-        ).first()
+        and (
+            (
+                tool_call_id
+                and BookingRequest.query.filter_by(
+                    garage_id=garage.id, voice_tool_call_id=tool_call_id
+                ).first()
+            )
+            or (
+                call_id
+                and BookingRequest.query.filter_by(
+                    garage_id=garage.id, voice_call_id=call_id
+                ).first()
+            )
+        )
     )
     if (
         name == "create_booking"
@@ -612,4 +689,6 @@ def dispatch_tool(
 
     if name == "get_available_slots" and state is not None:
         state.record_availability(arguments, result)
+    if name == "get_my_appointments" and state is not None:
+        state.record_appointments(result)
     return json.dumps(result)

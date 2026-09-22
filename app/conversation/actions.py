@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
 
+from sqlalchemy.exc import IntegrityError
+
 from app.booking_requests.reference import unique_booking_reference
 from app.communications.events import (
     APPOINTMENT_CANCELLED,
@@ -250,7 +252,24 @@ def create_booking_request(
         notes=notes,
     )
     db.session.add(booking_request)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # The pre-insert lookup above covers ordinary retries.  A reconnect
+        # can still race in a second worker between that lookup and commit;
+        # the database unique constraint is the final idempotency boundary.
+        # Recover the request that won that race instead of treating the
+        # caller to a false failure (or ever creating a second request).
+        db.session.rollback()
+        if voice_tool_call_id:
+            existing = BookingRequest.query.filter_by(voice_tool_call_id=voice_tool_call_id).first()
+            if existing is not None:
+                return existing, None
+        if voice_call_id:
+            existing = BookingRequest.query.filter_by(voice_call_id=voice_call_id).first()
+            if existing is not None:
+                return existing, None
+        raise
 
     emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
     return booking_request, None

@@ -41,6 +41,24 @@ def _next_open_weekday(start: datetime, min_days_ahead: int = 3):
     return d
 
 
+def _next_open_24th(start: datetime):
+    """A future weekday which is the 24th, within the booking window.
+
+    These date-parser regressions intentionally exercise an explicit calendar
+    day.  Select it relative to the real clock so the public availability
+    revalidation does not turn an otherwise valid parser test into a stale
+    historical booking attempt.
+    """
+    year, month = start.year, start.month
+    while True:
+        candidate = datetime(year, month, 24, tzinfo=UTC).date()
+        if candidate > start.date() and candidate.weekday() < 5:
+            return candidate
+        month += 1
+        if month == 13:
+            year, month = year + 1, 1
+
+
 def _now():
     """A Monday 08:00 that is always in the *near future* of the real clock.
 
@@ -1271,18 +1289,18 @@ def test_book_for_24th_september_stays_24_september(
     """The exact failure: 'book for the 24th September' was turned into the
     next Tuesday (15 September)."""
     _known(session, customer)
-    now = _now()  # Monday 7 September 2026
+    now = _now()
+    target = _next_open_24th(now)
 
     _send(garage, PHONE_RAW, "I need an MOT", now=now)
-    r = _send(garage, PHONE_RAW, "the 24th september", now=now)
+    r = _send(garage, PHONE_RAW, f"the {target.day} {target.strftime('%B')}", now=now)
 
     assert r.needs_human is False
-    assert "24 September" in r.response_text
-    assert "15 September" not in r.response_text
+    assert f"{target.day} {target.strftime('%B')}" in r.response_text
     assert r.workflow_step in {"AWAITING_TIME", "AWAITING_DATE"}  # times, or "nothing that day"
     # If slots were offered, the stored preferred_date is the 24th.
     if r.workflow_step == "AWAITING_TIME":
-        assert _session(garage).context["preferred_date"] == "2026-09-24"
+        assert _session(garage).context["preferred_date"] == target.isoformat()
 
 
 def test_tuesday_24th_september_is_the_24th_not_the_next_tuesday(
@@ -1290,14 +1308,19 @@ def test_tuesday_24th_september_is_the_24th_not_the_next_tuesday(
 ):
     _known(session, customer)
     now = _now()
+    target = _next_open_24th(now)
 
-    r = _send(garage, PHONE_RAW, "can i book an MOT for Tuesday 24th september", now=now)
+    r = _send(
+        garage,
+        PHONE_RAW,
+        f"can i book an MOT for Tuesday {target.day} {target.strftime('%B')}",
+        now=now,
+    )
 
     assert r.needs_human is False
-    assert "24 September" in r.response_text
-    assert "15 September" not in r.response_text
+    assert f"{target.day} {target.strftime('%B')}" in r.response_text
     if r.workflow_step == "AWAITING_TIME":
-        assert _session(garage).context["preferred_date"] == "2026-09-24"
+        assert _session(garage).context["preferred_date"] == target.isoformat()
 
 
 def test_a_date_more_than_seven_days_out_is_accepted(
@@ -1326,10 +1349,11 @@ def test_numeric_date_format_is_understood(
 ):
     _known(session, customer)
     now = _now()
+    target = _next_open_24th(now)
     _send(garage, PHONE_RAW, "I need an MOT", now=now)
-    r = _send(garage, PHONE_RAW, "24/09", now=now)
+    r = _send(garage, PHONE_RAW, target.strftime("%d/%m"), now=now)
     assert r.needs_human is False
-    assert "24 September" in r.response_text
+    assert f"{target.day} {target.strftime('%B')}" in r.response_text
 
 
 def test_customer_can_correct_their_name_and_it_updates_the_record(

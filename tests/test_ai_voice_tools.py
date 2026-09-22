@@ -439,7 +439,7 @@ def test_booking_contact_number_does_not_link_another_customers_record(
 def test_cancel_appointment_cancels_the_callers_own_appointment(garage, customer, make_appointment):
     start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
     appt = make_appointment(start)
-    args = json.dumps({"appointment_id": str(appt.id)})
+    args = json.dumps({"appointment_id": str(appt.id), "confirmed": True})
     result = json.loads(dispatch_tool(garage, customer.phone, "cancel_appointment", args))
     assert result["ok"] is True
     assert appt.status == "CANCELLED"
@@ -458,7 +458,7 @@ def test_cancel_appointment_rejects_another_customers_appointment(
 
     start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
     appt = make_appointment(start)  # belongs to `customer`, not `other`
-    args = json.dumps({"appointment_id": str(appt.id)})
+    args = json.dumps({"appointment_id": str(appt.id), "confirmed": True})
     result = json.loads(dispatch_tool(garage, other.phone, "cancel_appointment", args))
     assert result["ok"] is False
     assert appt.status == "BOOKED"
@@ -471,12 +471,81 @@ def test_reschedule_appointment_moves_the_callers_own_appointment(
     appt = make_appointment(start)
     new_day = _future_weekday(days_ahead=10)
     args = json.dumps(
-        {"appointment_id": str(appt.id), "date": new_day.isoformat(), "time": "10:00"}
+        {
+            "appointment_id": str(appt.id),
+            "date": new_day.isoformat(),
+            "time": "10:00",
+            "confirmed": True,
+        }
     )
     result = json.loads(dispatch_tool(garage, customer.phone, "reschedule_appointment", args))
     assert result["ok"] is True
     assert appt.start_time.date() == new_day
     assert appt.start_time.strftime("%H:%M") == "10:00"
+
+
+def test_live_voice_appointment_mutation_requires_lookup_and_confirmation(
+    garage, garage_schedule, customer, make_appointment, appointment_type
+):
+    appt = make_appointment(datetime.now(UTC).replace(microsecond=0) + timedelta(days=3))
+    state = VoiceToolState()
+    cancel_args = json.dumps({"appointment_id": str(appt.id), "confirmed": True})
+    not_looked_up = json.loads(
+        dispatch_tool(garage, customer.phone, "cancel_appointment", cancel_args, state=state)
+    )
+    assert not_looked_up["ok"] is False
+    assert appt.status == "BOOKED"
+
+    lookup = json.loads(
+        dispatch_tool(garage, customer.phone, "get_my_appointments", "{}", state=state)
+    )
+    assert str(appt.id) in {item["id"] for item in lookup["appointments"]}
+    not_confirmed = json.loads(
+        dispatch_tool(
+            garage,
+            customer.phone,
+            "cancel_appointment",
+            json.dumps({"appointment_id": str(appt.id), "confirmed": False}),
+            state=state,
+        )
+    )
+    assert not_confirmed["ok"] is False
+    confirmed = json.loads(
+        dispatch_tool(garage, customer.phone, "cancel_appointment", cancel_args, state=state)
+    )
+    assert confirmed["ok"] is True
+
+
+def test_live_voice_reschedule_requires_live_lookup_and_returned_slot(
+    garage, garage_schedule, customer, make_appointment, appointment_type
+):
+    appt = make_appointment(datetime.now(UTC).replace(microsecond=0) + timedelta(days=3))
+    day = _future_weekday(days_ahead=10)
+    state = VoiceToolState()
+    dispatch_tool(garage, customer.phone, "get_my_appointments", "{}", state=state)
+    args = json.dumps(
+        {
+            "appointment_id": str(appt.id),
+            "date": day.isoformat(),
+            "time": "10:00",
+            "confirmed": True,
+        }
+    )
+    unchecked = json.loads(
+        dispatch_tool(garage, customer.phone, "reschedule_appointment", args, state=state)
+    )
+    assert unchecked["ok"] is False
+    dispatch_tool(
+        garage,
+        customer.phone,
+        "get_available_slots",
+        json.dumps({"appointment_type_id": str(appointment_type.id), "date": day.isoformat()}),
+        state=state,
+    )
+    moved = json.loads(
+        dispatch_tool(garage, customer.phone, "reschedule_appointment", args, state=state)
+    )
+    assert moved["ok"] is True
 
 
 def test_unknown_tool_name_is_a_clean_error(garage):
