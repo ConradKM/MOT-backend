@@ -8,6 +8,7 @@ orchestration around it.
 """
 
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -211,6 +212,36 @@ def test_failed_handoff_does_not_end_the_call(monkeypatch, garage):
     )
 
     hangup_mock.assert_not_called()
+
+
+def test_booking_tool_logs_only_a_compact_authoritative_outcome(monkeypatch, garage, caplog):
+    caplog.set_level(logging.INFO, logger="app.ai_voice.call_controller")
+    event = SimpleNamespace(
+        type="response.function_call_arguments.done",
+        call_id="booking_result",
+        name="create_booking",
+        arguments="{}",
+    )
+    connection = _FakeConnection([event])
+    _patch_connection(monkeypatch, connection)
+    monkeypatch.setattr(
+        call_controller,
+        "dispatch_tool",
+        Mock(
+            return_value=json.dumps(
+                {"ok": True, "status": "PENDING", "booking_reference": "BKSECRET"}
+            )
+        ),
+    )
+
+    run_call_controller(api_key="sk-test", call_id="rtc_observe", garage=garage, caller_phone="")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "AI_VOICE_BOOKING_RESULT" in message and "outcome=PENDING" in message
+        for message in messages
+    )
+    assert not any("BKSECRET" in message for message in messages)
 
 
 def test_run_call_controller_never_raises_on_an_unexpected_crash(monkeypatch, garage):

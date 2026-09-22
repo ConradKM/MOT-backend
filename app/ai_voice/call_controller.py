@@ -94,14 +94,23 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                         if cache_key:
                             completed_tool_outputs[cache_key] = output
                     tool_ok = _tool_succeeded(output)
+                    outcome = _tool_outcome(output)
                     logger.info(
-                        "AI_VOICE_TOOL_RESULT callSid=%s garage=%s tool=%s ok=%s latency_ms=%d",
+                        "AI_VOICE_TOOL_RESULT callSid=%s garage=%s tool=%s ok=%s outcome=%s latency_ms=%d",
                         call_id,
                         garage.id,
                         name,
                         tool_ok,
+                        outcome,
                         (monotonic() - started) * 1000,
                     )
+                    if name == "create_booking":
+                        logger.info(
+                            "AI_VOICE_BOOKING_RESULT callSid=%s garage=%s outcome=%s",
+                            call_id,
+                            garage.id,
+                            outcome,
+                        )
                     model_output, transfer_uri = _extract_transfer_uri(output)
                     connection.send_raw(
                         json.dumps(
@@ -162,6 +171,19 @@ def _tool_succeeded(output_json: str) -> bool:
     except (ValueError, TypeError):
         return False
     return isinstance(payload, dict) and payload.get("ok") is True
+
+
+def _tool_outcome(output_json: str) -> str:
+    """A compact, non-PII outcome suitable for per-call production logs."""
+    try:
+        payload = json.loads(output_json)
+    except (ValueError, TypeError):
+        return "malformed_output"
+    if not isinstance(payload, dict):
+        return "invalid_output"
+    if payload.get("ok") is not True:
+        return "failed"
+    return str(payload.get("status") or "succeeded")[:40]
 
 
 def _safe_hangup(call_id: str) -> None:
