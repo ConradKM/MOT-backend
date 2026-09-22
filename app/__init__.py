@@ -239,6 +239,7 @@ def create_app(config_class=Config):
     app.cli.add_command(backfill_payment_method_domains_command)
 
     from .ai_voice.routes import openai_voice_blp
+    from .appointment_reminders.routes import reminders_blp
     from .appointments.checklist_templates.routes import checklist_templates_blp
     from .appointments.checklists.routes import appointment_checklists_blp
     from .appointments.media.routes import checklist_item_media_blp
@@ -296,6 +297,7 @@ def create_app(config_class=Config):
     api.register_blueprint(vehicles_blp)
     api.register_blueprint(mot_records_blp)
     api.register_blueprint(mot_reminders_blp)
+    api.register_blueprint(reminders_blp)
     api.register_blueprint(appointment_types_blp)
     api.register_blueprint(appointment_type_groups_blp)
     api.register_blueprint(appointment_statuses_blp)
