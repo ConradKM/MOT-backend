@@ -34,14 +34,18 @@ class AppointmentReminderSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  #
     garage_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("garages.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # Channels the owner has selected, in priority order (e.g. ["sms", "email"]).
     # Actual availability is re-checked against this garage's communications
     # configuration at send time - selecting a channel here doesn't guarantee
     # it will be used (see app.appointment_reminders.service.available_channels).
     channels: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
 
-    garage: Mapped["Garage"] = relationship("Garage", back_populates="appointment_reminder_settings")
+    garage: Mapped["Garage"] = relationship(
+        "Garage", back_populates="appointment_reminder_settings"
+    )
     timings: Mapped[list["AppointmentReminderTiming"]] = relationship(
         "AppointmentReminderTiming",
         back_populates="settings",
@@ -65,7 +69,9 @@ class AppointmentReminderTiming(db.Model, PrimaryKeyMixin, TimestampMixin):  # t
         index=True,
     )
     hours_before: Mapped[int] = mapped_column(Integer, nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
 
     settings: Mapped["AppointmentReminderSettings"] = relationship(
         "AppointmentReminderSettings", back_populates="timings"

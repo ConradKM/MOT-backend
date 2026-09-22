@@ -61,7 +61,9 @@ def seed_appointment_reminder_settings(garage_id, session=None) -> AppointmentRe
     if row is not None:
         return row  # type: ignore[no-any-return]
 
-    row = AppointmentReminderSettings(garage_id=garage_id, enabled=False, channels=list(DEFAULT_CHANNELS))
+    row = AppointmentReminderSettings(
+        garage_id=garage_id, enabled=False, channels=list(DEFAULT_CHANNELS)
+    )
     session.add(row)
     session.flush()
     for hours in DEFAULT_TIMINGS_HOURS:

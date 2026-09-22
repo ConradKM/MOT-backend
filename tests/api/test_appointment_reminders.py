@@ -57,7 +57,10 @@ def test_owner_can_configure_appointment_reminders(authenticated_client, garage)
         json={
             "enabled": True,
             "channels": ["email"],
-            "timings": [{"hours_before": 48, "enabled": True}, {"hours_before": 1, "enabled": True}],
+            "timings": [
+                {"hours_before": 48, "enabled": True},
+                {"hours_before": 1, "enabled": True},
+            ],
         },
     )
     assert resp.status_code == 200
@@ -72,7 +75,10 @@ def test_duplicate_enabled_timings_rejected(authenticated_client):
         json={
             "enabled": True,
             "channels": ["email"],
-            "timings": [{"hours_before": 24, "enabled": True}, {"hours_before": 24, "enabled": True}],
+            "timings": [
+                {"hours_before": 24, "enabled": True},
+                {"hours_before": 24, "enabled": True},
+            ],
         },
     )
     assert resp.status_code == 422
@@ -169,7 +175,9 @@ def test_no_show_appointment_is_not_reminded(session, garage, customer, make_app
     assert created == []
 
 
-def test_unconfirmed_requested_appointment_is_not_reminded(session, garage, customer, make_appointment):
+def test_unconfirmed_requested_appointment_is_not_reminded(
+    session, garage, customer, make_appointment
+):
     _enable(session, garage)
     make_appointment(_in_hours(1), status="REQUESTED")
 
@@ -246,9 +254,7 @@ def test_no_available_channel_records_skipped_not_pretend_sent(
     assert created[0].channel == "none"
 
 
-def test_customer_with_no_email_is_skipped_not_silently_dropped(
-    session, garage, make_appointment
-):
+def test_customer_with_no_email_is_skipped_not_silently_dropped(session, garage, make_appointment):
     from app.models.customer import Customer
 
     _enable(session, garage, timings=(24,))

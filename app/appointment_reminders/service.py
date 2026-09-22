@@ -79,7 +79,9 @@ def format_uk_time(dt: datetime) -> str:
 
 def _reminder_body(*, garage, customer, appointment: Appointment) -> str:
     name = customer.first_name or "there"
-    service_name = appointment.appointment_type.name if appointment.appointment_type else "your appointment"
+    service_name = (
+        appointment.appointment_type.name if appointment.appointment_type else "your appointment"
+    )
     return (
         f"Hi {name},\n\n"
         f"This is a reminder that you have {service_name} booked with {garage.name} "
@@ -143,7 +145,11 @@ def deliver_reminder(*, garage, customer, appointment: Appointment, channel: str
             appointment=appointment,
             trigger_event=APPOINTMENT_REMINDER_DUE,
         )
-        return _status_from_log(log), (log.error_message or f"SMS to {log.to_address}."), log.external_id
+        return (
+            _status_from_log(log),
+            (log.error_message or f"SMS to {log.to_address}."),
+            log.external_id,
+        )
 
     if channel == CHANNEL_WHATSAPP:
         if not customer.phone:
@@ -156,7 +162,11 @@ def deliver_reminder(*, garage, customer, appointment: Appointment, channel: str
             appointment=appointment,
             trigger_event=APPOINTMENT_REMINDER_DUE,
         )
-        return _status_from_log(log), (log.error_message or f"WhatsApp to {log.to_address}."), log.external_id
+        return (
+            _status_from_log(log),
+            (log.error_message or f"WhatsApp to {log.to_address}."),
+            log.external_id,
+        )
 
     return STATUS_SKIPPED, f"The {channel!r} channel is not available.", None
 
@@ -284,7 +294,9 @@ def send_due_appointment_reminders(
             due_at = appointment.start_time - timedelta(hours=hours_before)
             if due_at > now:
                 continue  # not due yet
-            if _already_sent(appointment_id=appointment.id, hours_before=hours_before, due_at=due_at):
+            if _already_sent(
+                appointment_id=appointment.id, hours_before=hours_before, due_at=due_at
+            ):
                 continue
 
             channel = _pick_channel(garage=garage, customer=customer, settings=settings)
