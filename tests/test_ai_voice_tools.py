@@ -134,6 +134,51 @@ def test_production_voice_booking_requires_a_slot_from_this_calls_live_lookup(
     assert created["ok"] is True
 
 
+def test_voice_booking_tool_id_is_idempotent_across_controller_reconnects(
+    garage, garage_schedule, appointment_type
+):
+    day = _future_weekday()
+    lookup_args = json.dumps(
+        {"appointment_type_id": str(appointment_type.id), "date": day.isoformat()}
+    )
+    create_args = json.dumps(
+        {
+            "appointment_type_id": str(appointment_type.id),
+            "date": day.isoformat(),
+            "time": "09:00",
+            "first_name": "Alex",
+            "last_name": "Turner",
+            "vehicle_registration": "PB11 REQ",
+        }
+    )
+    first_state = VoiceToolState()
+    dispatch_tool(garage, "+447123456789", "get_available_slots", lookup_args, state=first_state)
+    first = json.loads(
+        dispatch_tool(
+            garage,
+            "+447123456789",
+            "create_booking",
+            create_args,
+            state=first_state,
+            tool_call_id="openai_tool_1",
+        )
+    )
+    retry_state = VoiceToolState()
+    dispatch_tool(garage, "+447123456789", "get_available_slots", lookup_args, state=retry_state)
+    second = json.loads(
+        dispatch_tool(
+            garage,
+            "+447123456789",
+            "create_booking",
+            create_args,
+            state=retry_state,
+            tool_call_id="openai_tool_1",
+        )
+    )
+    assert second["booking_reference"] == first["booking_reference"]
+    assert BookingRequest.query.filter_by(voice_tool_call_id="openai_tool_1").count() == 1
+
+
 def test_live_slot_proof_cannot_be_reused_for_a_different_service_or_date(
     session, garage, garage_schedule, appointment_type
 ):

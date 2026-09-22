@@ -177,6 +177,7 @@ def create_booking_request(
     preferred_time: time | None,
     notes: str | None = None,
     now: datetime | None = None,
+    voice_tool_call_id: str | None = None,
 ) -> tuple[BookingRequest | None, str | None]:
     """Create the exact same kind of PENDING booking request the public web
     form creates (app/public_booking/routes.py) - the conversation engine
@@ -187,6 +188,14 @@ def create_booking_request(
     workflow can apologise and re-offer real alternatives, exactly as if two
     customers had raced for the same slot over the public booking page.
     """
+    # A controller reconnect can redeliver the same OpenAI function call
+    # after CoMaz has committed it but before OpenAI received the output.
+    # Return the original request rather than reserving a second slot.
+    if voice_tool_call_id:
+        existing = BookingRequest.query.filter_by(voice_tool_call_id=voice_tool_call_id).first()
+        if existing is not None:
+            return existing, None
+
     if preferred_time is not None:
         reason = revalidate_slot(
             garage,
@@ -207,6 +216,7 @@ def create_booking_request(
         source=BOOKING_REQUEST_SOURCE_CONVERSATION,
         status="PENDING",
         booking_reference=unique_booking_reference(db.session),
+        voice_tool_call_id=voice_tool_call_id,
         # Pre-linked when the customer is already known (e.g. identified by
         # phone - see app/communications/service.py::find_customer_by_phone).
         # Unlike the public web form (app/public_booking/routes.py), this

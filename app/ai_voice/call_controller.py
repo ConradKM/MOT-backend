@@ -84,7 +84,12 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                             name,
                         )
                         output = dispatch_tool(
-                            garage, caller_phone, name, arguments, state=tool_state
+                            garage,
+                            caller_phone,
+                            name,
+                            arguments,
+                            state=tool_state,
+                            tool_call_id=cache_key,
                         )
                         if cache_key:
                             completed_tool_outputs[cache_key] = output

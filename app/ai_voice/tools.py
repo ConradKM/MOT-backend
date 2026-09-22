@@ -22,6 +22,7 @@ from datetime import time as time_cls
 
 from app.conversation import actions
 from app.models.ai_voice_faq import GarageVoiceFAQ
+from app.models.booking_request import BookingRequest
 from app.phone import InvalidPhoneNumberError, normalize_uk_phone
 from app.public_booking import availability
 
@@ -356,6 +357,7 @@ def _tool_create_booking(
     vehicle_registration: str,
     phone: str | None = None,
     notes: str | None = None,
+    voice_tool_call_id: str | None = None,
     **_args,
 ) -> dict:
     appointment_type = _find_appointment_type(garage, appointment_type_id)
@@ -388,6 +390,7 @@ def _tool_create_booking(
         preferred_date=day,
         preferred_time=slot_time,
         notes=notes,
+        voice_tool_call_id=voice_tool_call_id,
     )
     if booking_request is None:
         return {
@@ -540,6 +543,7 @@ def dispatch_tool(
     arguments_json: str,
     *,
     state: VoiceToolState | None = None,
+    tool_call_id: str | None = None,
 ) -> str:
     """Execute one tool call by name, tenant-scoped to ``garage``. Always
     returns a JSON string (never raises) - the caller (app/ai_voice/call_controller.py)
@@ -562,7 +566,19 @@ def dispatch_tool(
     # other explicitly-tested internal callers while making the production
     # voice path unable to create a request for a slot it has not actually
     # obtained from CoMaz during this call.
-    if name == "create_booking" and state is not None and not state.includes_slot(arguments):
+    is_idempotent_retry = bool(
+        name == "create_booking"
+        and tool_call_id
+        and BookingRequest.query.filter_by(
+            garage_id=garage.id, voice_tool_call_id=tool_call_id
+        ).first()
+    )
+    if (
+        name == "create_booking"
+        and state is not None
+        and not state.includes_slot(arguments)
+        and not is_idempotent_retry
+    ):
         return json.dumps(
             {
                 "ok": False,
@@ -572,6 +588,11 @@ def dispatch_tool(
                 ),
             }
         )
+
+    # This value is from the OpenAI event envelope, never the model's JSON.
+    # It is persisted solely to make the mutation safe across reconnects.
+    if name == "create_booking" and tool_call_id:
+        arguments["voice_tool_call_id"] = tool_call_id
 
     try:
         if name in _CALLER_SCOPED_TOOLS:
