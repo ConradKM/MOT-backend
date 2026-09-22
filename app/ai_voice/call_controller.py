@@ -90,6 +90,7 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                             arguments,
                             state=tool_state,
                             tool_call_id=cache_key,
+                            call_id=call_id,
                         )
                         if cache_key:
                             completed_tool_outputs[cache_key] = output

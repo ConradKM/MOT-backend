@@ -103,6 +103,7 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # retry after a controller/network failure idempotent without storing any
     # caller speech or customer data.
     voice_tool_call_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
+    voice_call_id: Mapped[str | None] = mapped_column(String(100), unique=True, index=True)
 
     # --- what the public form submitted -------------------------------------
     customer_first_name: Mapped[str] = mapped_column(String(100), nullable=False)

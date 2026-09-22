@@ -178,6 +178,7 @@ def create_booking_request(
     notes: str | None = None,
     now: datetime | None = None,
     voice_tool_call_id: str | None = None,
+    voice_call_id: str | None = None,
 ) -> tuple[BookingRequest | None, str | None]:
     """Create the exact same kind of PENDING booking request the public web
     form creates (app/public_booking/routes.py) - the conversation engine
@@ -193,6 +194,10 @@ def create_booking_request(
     # Return the original request rather than reserving a second slot.
     if voice_tool_call_id:
         existing = BookingRequest.query.filter_by(voice_tool_call_id=voice_tool_call_id).first()
+        if existing is not None:
+            return existing, None
+    if voice_call_id:
+        existing = BookingRequest.query.filter_by(voice_call_id=voice_call_id).first()
         if existing is not None:
             return existing, None
 
@@ -217,6 +222,7 @@ def create_booking_request(
         status="PENDING",
         booking_reference=unique_booking_reference(db.session),
         voice_tool_call_id=voice_tool_call_id,
+        voice_call_id=voice_call_id,
         # Pre-linked when the customer is already known (e.g. identified by
         # phone - see app/communications/service.py::find_customer_by_phone).
         # Unlike the public web form (app/public_booking/routes.py), this

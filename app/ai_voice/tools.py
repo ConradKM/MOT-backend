@@ -358,6 +358,7 @@ def _tool_create_booking(
     phone: str | None = None,
     notes: str | None = None,
     voice_tool_call_id: str | None = None,
+    voice_call_id: str | None = None,
     **_args,
 ) -> dict:
     appointment_type = _find_appointment_type(garage, appointment_type_id)
@@ -391,6 +392,7 @@ def _tool_create_booking(
         preferred_time=slot_time,
         notes=notes,
         voice_tool_call_id=voice_tool_call_id,
+        voice_call_id=voice_call_id,
     )
     if booking_request is None:
         return {
@@ -544,6 +546,7 @@ def dispatch_tool(
     *,
     state: VoiceToolState | None = None,
     tool_call_id: str | None = None,
+    call_id: str | None = None,
 ) -> str:
     """Execute one tool call by name, tenant-scoped to ``garage``. Always
     returns a JSON string (never raises) - the caller (app/ai_voice/call_controller.py)
@@ -593,6 +596,8 @@ def dispatch_tool(
     # It is persisted solely to make the mutation safe across reconnects.
     if name == "create_booking" and tool_call_id:
         arguments["voice_tool_call_id"] = tool_call_id
+    if name == "create_booking" and call_id:
+        arguments["voice_call_id"] = call_id
 
     try:
         if name in _CALLER_SCOPED_TOOLS:
