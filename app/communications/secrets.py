@@ -50,8 +50,27 @@ class SecretDecryptionError(RuntimeError):
 
 
 def secrets_configured() -> bool:
-    """Whether this deployment can store subaccount credentials at all."""
-    return bool(current_app.config.get("COMMS_SECRET_KEY"))
+    """Whether this deployment can store subaccount credentials at all.
+
+    Validates the key, not just its presence: a set-but-malformed
+    ``COMMS_SECRET_KEY`` (wrong length, not urlsafe-base64, a copy/paste
+    truncation) must report exactly the same "not configured" state as an
+    unset one, since :func:`encrypt_secret` would refuse it either way. A
+    readiness check that only asked "is the env var set?" would show green
+    for a value that provisioning immediately rejects.
+    """
+    key = current_app.config.get("COMMS_SECRET_KEY")
+    if not key:
+        return False
+    try:
+        from cryptography.fernet import Fernet
+
+        Fernet(key if isinstance(key, bytes) else key.encode())
+    except ImportError:
+        return False
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def _fernet():

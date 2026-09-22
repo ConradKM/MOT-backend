@@ -1101,3 +1101,35 @@ def test_subaccount_creation_refuses_without_an_encryption_key(
     response = platform_client.post(f"{COMMS.format(garage_id=garage.id)}/subaccount")
     assert response.status_code == 422
     assert "COMMS_SECRET_KEY" in response.get_json()["message"]
+
+
+def test_subaccount_creation_refuses_a_malformed_encryption_key(
+    monkeypatch, app, platform_client, garage, settings
+):
+    """A set-but-invalid COMMS_SECRET_KEY (wrong length, not base64, a
+    truncated paste) must be treated exactly like an unset one - not
+    reported as configured only to fail inside Fernet()."""
+    from app.communications.provisioning import subaccounts
+
+    monkeypatch.setattr(subaccounts, "is_twilio_configured", lambda: True)
+    monkeypatch.setitem(app.config, "COMMS_SECRET_KEY", "not-a-valid-fernet-key")
+
+    response = platform_client.post(f"{COMMS.format(garage_id=garage.id)}/subaccount")
+    assert response.status_code == 422
+    assert "COMMS_SECRET_KEY" in response.get_json()["message"]
+
+
+def test_secrets_configured_rejects_a_malformed_key(app):
+    from app.communications.secrets import secrets_configured
+
+    with app.app_context():
+        app.config["COMMS_SECRET_KEY"] = "not-a-valid-fernet-key"
+        assert secrets_configured() is False
+
+        app.config["COMMS_SECRET_KEY"] = ""
+        assert secrets_configured() is False
+
+        from cryptography.fernet import Fernet
+
+        app.config["COMMS_SECRET_KEY"] = Fernet.generate_key().decode()
+        assert secrets_configured() is True

@@ -41,22 +41,12 @@ def _next_open_weekday(start: datetime, min_days_ahead: int = 3):
     return d
 
 
-def _next_open_24th(start: datetime):
-    """A future weekday which is the 24th, within the booking window.
-
-    These date-parser regressions intentionally exercise an explicit calendar
-    day.  Select it relative to the real clock so the public availability
-    revalidation does not turn an otherwise valid parser test into a stale
-    historical booking attempt.
-    """
-    year, month = start.year, start.month
-    while True:
-        candidate = datetime(year, month, 24, tzinfo=UTC).date()
-        if candidate > start.date() and candidate.weekday() < 5:
-            return candidate
-        month += 1
-        if month == 13:
-            year, month = year + 1, 1
+def _ordinal(n: int) -> str:
+    if 11 <= n % 100 <= 13:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
 
 
 def _now():
@@ -1283,42 +1273,56 @@ def _known(session, customer):
     return customer
 
 
-def test_book_for_24th_september_stays_24_september(
+def test_book_for_a_named_date_stays_that_date(
     session, garage, garage_schedule, appointment_type, user, customer
 ):
-    """The exact failure: 'book for the 24th September' was turned into the
-    next Tuesday (15 September)."""
+    """The exact failure this guards against: 'book for the 24th September'
+    was turned into the next Tuesday (15 September) instead of staying on the
+    24th. The target date is computed relative to `now` (rather than a
+    hardcoded "24th September") so this doesn't itself become date-bound -
+    see `_now()`'s docstring for why a fixed calendar date breaks over time.
+    """
     _known(session, customer)
     now = _now()
-    target = _next_open_24th(now)
+    target = _next_open_weekday(now, min_days_ahead=14)
+    wrong_day = _next_open_weekday(now, min_days_ahead=7)
 
     _send(garage, PHONE_RAW, "I need an MOT", now=now)
-    r = _send(garage, PHONE_RAW, f"the {target.day} {target.strftime('%B')}", now=now)
+    r = _send(garage, PHONE_RAW, f"the {_ordinal(target.day)} {target.strftime('%B')}", now=now)
 
     assert r.needs_human is False
-    assert f"{target.day} {target.strftime('%B')}" in r.response_text
+    assert target.strftime("%d %B").lstrip("0") in r.response_text
+    assert wrong_day.strftime("%d %B").lstrip("0") not in r.response_text
     assert r.workflow_step in {"AWAITING_TIME", "AWAITING_DATE"}  # times, or "nothing that day"
-    # If slots were offered, the stored preferred_date is the 24th.
+    # If slots were offered, the stored preferred_date is the named date.
     if r.workflow_step == "AWAITING_TIME":
         assert _session(garage).context["preferred_date"] == target.isoformat()
 
 
-def test_tuesday_24th_september_is_the_24th_not_the_next_tuesday(
+def test_a_named_date_with_a_mismatched_weekday_keeps_the_date(
     session, garage, garage_schedule, appointment_type, user, customer
 ):
+    """A weekday name that doesn't actually match the given date (e.g. "Tuesday
+    24th" when the 24th is a Thursday) must not shift the booking to the next
+    real occurrence of that weekday - the explicit date wins."""
     _known(session, customer)
     now = _now()
-    target = _next_open_24th(now)
+    target = _next_open_weekday(now, min_days_ahead=14)
+    wrong_day = _next_open_weekday(now, min_days_ahead=7)
+    # Deliberately mismatched: a weekday name that isn't `target`'s own.
+    mismatched_weekday = (target + timedelta(days=1)).strftime("%A")
 
     r = _send(
         garage,
         PHONE_RAW,
-        f"can i book an MOT for Tuesday {target.day} {target.strftime('%B')}",
+        f"can i book an MOT for {mismatched_weekday} {_ordinal(target.day)} "
+        f"{target.strftime('%B')}",
         now=now,
     )
 
     assert r.needs_human is False
-    assert f"{target.day} {target.strftime('%B')}" in r.response_text
+    assert target.strftime("%d %B").lstrip("0") in r.response_text
+    assert wrong_day.strftime("%d %B").lstrip("0") not in r.response_text
     if r.workflow_step == "AWAITING_TIME":
         assert _session(garage).context["preferred_date"] == target.isoformat()
 
@@ -1349,11 +1353,11 @@ def test_numeric_date_format_is_understood(
 ):
     _known(session, customer)
     now = _now()
-    target = _next_open_24th(now)
+    target = _next_open_weekday(now, min_days_ahead=14)
     _send(garage, PHONE_RAW, "I need an MOT", now=now)
-    r = _send(garage, PHONE_RAW, target.strftime("%d/%m"), now=now)
+    r = _send(garage, PHONE_RAW, f"{target.day:02d}/{target.month:02d}", now=now)
     assert r.needs_human is False
-    assert f"{target.day} {target.strftime('%B')}" in r.response_text
+    assert target.strftime("%d %B").lstrip("0") in r.response_text
 
 
 def test_customer_can_correct_their_name_and_it_updates_the_record(

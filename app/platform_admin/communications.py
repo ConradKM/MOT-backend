@@ -560,8 +560,11 @@ def platform_readiness() -> dict:
     would be noise - but not showing it at all would leave an operator
     clicking a button that cannot work.
     """
+    from app.ai_voice.config import openai_voice_prerequisites
     from app.communications.config import is_twilio_configured
     from app.communications.provisioning.voice import webhooks_reachable
+    from app.payments.config import payments_prerequisites
+    from app.tasks.config import background_jobs_prerequisites
 
     return {
         "twilio_configured": is_twilio_configured(),
@@ -570,6 +573,9 @@ def platform_readiness() -> dict:
         "embedded_signup": embedded_signup_prerequisites(),
         "voice_webhooks": voice_webhook_urls(),
         "whatsapp_webhooks": whatsapp_webhook_urls(),
+        "payments": payments_prerequisites(),
+        "openai_voice": openai_voice_prerequisites(),
+        "background_jobs": background_jobs_prerequisites(),
     }
 
 
