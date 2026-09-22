@@ -60,8 +60,10 @@ class Reminder(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-
     customer_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("customers.id", ondelete="CASCADE"), nullable=False
     )
-    vehicle_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("vehicles.id", ondelete="CASCADE"), nullable=False
+    # Nullable: an appointment reminder's appointment may not have a vehicle
+    # attached (see Appointment.vehicle_id) - only MOT reminders require one.
+    vehicle_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("vehicles.id", ondelete="CASCADE")
     )
     appointment_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("appointments.id", ondelete="SET NULL")

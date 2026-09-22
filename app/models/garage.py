@@ -9,6 +9,7 @@ from app.extensions import db
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.appointment_reminder_settings import AppointmentReminderSettings
     from app.models.appointments.appointment import Appointment
     from app.models.appointments.appointment_type import GarageAppointmentType
     from app.models.appointments.appointment_type_group import AppointmentTypeGroup
@@ -172,6 +173,12 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     )
     mot_reminder_settings: Mapped["MOTReminderSettings | None"] = relationship(
         "MOTReminderSettings",
+        back_populates="garage",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    appointment_reminder_settings: Mapped["AppointmentReminderSettings | None"] = relationship(
+        "AppointmentReminderSettings",
         back_populates="garage",
         uselist=False,
         cascade="all, delete-orphan",

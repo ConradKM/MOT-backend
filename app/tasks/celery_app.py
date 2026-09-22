@@ -24,3 +24,21 @@ def send_due_reminders():
     with app.app_context():
         created = send_due_automatic_reminders()
         return {"sent": len(created)}
+
+
+@celery.task
+def send_due_appointment_reminders_task():
+    """Send every appointment reminder timing that is due and not already
+    sent for the appointment's current scheduled time.
+
+    Idempotent and reschedule-safe - see the
+    ``app.appointment_reminders.service`` module docstring. Designed to run
+    frequently (e.g. hourly), same as :func:`send_due_reminders`.
+    """
+    from app import create_app
+    from app.appointment_reminders.service import send_due_appointment_reminders
+
+    app = create_app()
+    with app.app_context():
+        created = send_due_appointment_reminders()
+        return {"sent": len(created)}
