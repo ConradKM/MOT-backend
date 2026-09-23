@@ -1,4 +1,4 @@
-"""Stripe Connect onboarding - one Express connected account per business.
+"""Stripe Connect onboarding - one connected account per business.
 
 Mirrors app/communications/provisioning/subaccounts.py's shape (create once,
 idempotent on the stored id; a status refresh reconciles with what Stripe
@@ -76,16 +76,18 @@ def create_connected_account(garage: Garage) -> str:
     - Stripe's current guidance for all new Connect account creation; the v1
     Accounts API (``stripe.Account.create``) now warns that it's not
     recommended for new integrations. The account is configured to
-    reproduce a v1 Express account's behaviour under Direct Charges exactly
-    (see docs/STRIPE_CONNECT_SETUP.md's "Accounts v2 migration" section for
-    the full reasoning):
+    provide a Stripe-managed Direct Charges account (see
+    docs/STRIPE_CONNECT_SETUP.md's "Accounts v2 migration" section for the
+    full reasoning):
 
-    - ``dashboard="express"`` - the same limited, CoMaz-branded dashboard a
-      v1 ``type="express"`` account got.
+    - ``dashboard="full"`` - the connected business has its own Stripe
+      Dashboard.  Accounts v2 requires this when Stripe collects fees and
+      bears negative-balance losses; ``express`` instead requires CoMaz to
+      accept both of those responsibilities.
     - ``defaults.responsibilities`` both ``"stripe"`` - Stripe collects its
       own processing fee directly from the connected account's charge and
-      is liable for the account's negative balances, matching a v1 Express
-      account's default (CoMaz requests no ``application_fee_amount`` and
+      is liable for the account's negative balances (CoMaz requests no
+      ``application_fee_amount`` and
       has never taken a platform cut - see app/payments/providers/
       stripe_provider.py).
     - ``configuration.merchant.capabilities.card_payments`` - the same
@@ -93,9 +95,8 @@ def create_connected_account(garage: Garage) -> str:
       (payment method eligibility, e.g. wallets) depends on requesting a
       capability by name in v2.
 
-    Every account created before this change remains an ordinary v1
-    Express account, untouched - this only changes what happens for a
-    garage connecting Stripe for the first time from here on.
+    Existing connected accounts are never changed or replaced here; this
+    only affects a garage connecting Stripe for the first time.
     """
     settings = _get_or_create_settings(garage)
     if settings.stripe_account_id:
@@ -109,7 +110,13 @@ def create_connected_account(garage: Garage) -> str:
             {
                 "contact_email": garage.email,
                 "display_name": garage.name,
-                "dashboard": "express",
+                # Accounts v2 deliberately does not support an Express
+                # dashboard with Stripe as both fee and loss collector.  That
+                # was the source of production's
+                # account_controller_unsupported_configuration rejection.
+                # Full Dashboard access is the supported Stripe-managed
+                # configuration for CoMaz's direct-charge merchant model.
+                "dashboard": "full",
                 "identity": {"country": "GB", "entity_type": "company"},
                 "configuration": {
                     "merchant": {"capabilities": {"card_payments": {"requested": True}}}

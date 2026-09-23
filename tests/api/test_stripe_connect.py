@@ -146,7 +146,11 @@ def test_connect_account_creation_and_status_refresh(session, garage, monkeypatc
     # already-stored account id, exactly like the old v1 flow.
     assert len(v2_accounts.created) == 1
     assert v2_accounts.created[0]["contact_email"] == garage.email
-    assert v2_accounts.created[0]["dashboard"] == "express"
+    # Stripe Accounts v2 rejects `express` with Stripe collecting both fees
+    # and losses (account_controller_unsupported_configuration).  CoMaz is a
+    # Direct Charges SaaS platform, so the business gets the full Stripe
+    # Dashboard and Stripe remains responsible for fees/losses.
+    assert v2_accounts.created[0]["dashboard"] == "full"
     assert v2_accounts.created[0]["defaults"]["responsibilities"] == {
         "fees_collector": "stripe",
         "losses_collector": "stripe",
