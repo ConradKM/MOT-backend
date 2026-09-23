@@ -103,6 +103,11 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     address: Mapped[str | None] = mapped_column(String(500))
     postcode: Mapped[str | None] = mapped_column(String(20))
     website: Mapped[str | None] = mapped_column(String(200))
+    # IANA timezone used to interpret opening hours and booking wall-clock
+    # slots. Timestamps themselves remain UTC in PostgreSQL.
+    timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="Europe/London", server_default="Europe/London"
+    )
 
     # --- business logo (see app/garages/logo.py) -----------------------------
     # The bytes live in object storage; this row holds only the reference -

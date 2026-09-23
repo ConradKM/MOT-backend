@@ -16,6 +16,7 @@ from app.booking_requests.reference import unique_booking_reference
 from app.booking_requests.service import resolve_customer_and_vehicle
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
+from app.garages.timezones import local_slot_as_utc
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BOOKING_REQUEST_SOURCE_WEB, BookingRequest
 from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
@@ -183,7 +184,7 @@ def _lock_and_validate_slot(garage, data, appt_type):
                 used, capacity = slot_capacity_usage(
                     garage,
                     data["preferred_date"],
-                    datetime.combine(data["preferred_date"], preferred_time, tzinfo=UTC),
+                    local_slot_as_utc(garage, data["preferred_date"], preferred_time),
                     duration,
                 )
                 extra = f" used={used} capacity={capacity} duration={duration}"

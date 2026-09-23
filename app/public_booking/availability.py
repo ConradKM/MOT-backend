@@ -15,9 +15,10 @@ revisiting this needs a per-garage timezone column and is out of scope here.
 """
 
 import math
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 from app.garages.schedule.defaults import DEFAULT_OPENING_HOURS, DEFAULT_SETTINGS
+from app.garages.timezones import local_day_for, local_slot_as_utc
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
@@ -123,19 +124,19 @@ def _minutes(t: time) -> int:
     return t.hour * 60 + t.minute
 
 
-def _load_day_usage(garage_id, day: date):
+def _load_day_usage(garage, day: date):
     """Fetch, once per day, the appointments and pending requests that could
     fall on ``day`` so the per-slot loop is pure Python."""
-    day_start = datetime.combine(day, time.min, tzinfo=UTC)
-    day_end = datetime.combine(day, time.max, tzinfo=UTC)
+    day_start = local_slot_as_utc(garage, day, time.min)
+    day_end = local_slot_as_utc(garage, day, time.max)
     appointments = Appointment.query.filter(
-        Appointment.garage_id == garage_id,
+        Appointment.garage_id == garage.id,
         Appointment.status != "CANCELLED",
         Appointment.start_time <= day_end,
         Appointment.end_time >= day_start,
     ).all()
     pending = BookingRequest.query.filter(
-        BookingRequest.garage_id == garage_id,
+        BookingRequest.garage_id == garage.id,
         # AWAITING_PAYMENT reserves the slot exactly like PENDING while a
         # deposit is being paid (see app/payments/service.py) - counted here
         # too so a second customer can't take the slot mid-payment.
@@ -164,7 +165,7 @@ def _pending_request_duration(pending_request: BookingRequest, settings: "_Setti
 
 
 def _slot_usage(
-    appointments, pending, slot_start: datetime, duration_min: int, settings: "_Settings"
+    garage, appointments, pending, slot_start: datetime, duration_min: int, settings: "_Settings"
 ) -> int:
     """How much of a candidate ``[slot_start, slot_start + duration_min)``
     window is already used by real appointments or PENDING requests.
@@ -179,7 +180,7 @@ def _slot_usage(
     slot_end = slot_start + timedelta(minutes=duration_min)
     used = sum(1 for a in appointments if a.start_time < slot_end and a.end_time > slot_start)
     for r in pending:
-        p_start = datetime.combine(r.preferred_date, r.preferred_time, tzinfo=UTC)
+        p_start = local_slot_as_utc(garage, r.preferred_date, r.preferred_time)
         p_end = p_start + timedelta(minutes=_pending_request_duration(r, settings))
         if p_start < slot_end and p_end > slot_start:
             used += 1
@@ -211,16 +212,16 @@ def day_slots(
     threshold = math.floor(capacity * settings.limited_threshold_ratio)
     lead_cutoff = now + timedelta(hours=settings.min_lead_time_hours)
 
-    appointments, pending = _load_day_usage(garage.id, day)
+    appointments, pending = _load_day_usage(garage, day)
 
     slots = []
     m = _minutes(opens_at)
     close_m = _minutes(closes_at)
     while m + duration <= close_m:
         slot_time = time(m // 60, m % 60)
-        slot_start = datetime.combine(day, slot_time, tzinfo=UTC)
+        slot_start = local_slot_as_utc(garage, day, slot_time)
         if slot_start >= lead_cutoff:
-            used = _slot_usage(appointments, pending, slot_start, duration, settings)
+            used = _slot_usage(garage, appointments, pending, slot_start, duration, settings)
             remaining = capacity - used
             if remaining <= 0:
                 status = SLOT_BOOKED
@@ -337,7 +338,7 @@ def availability_range(garage, from_date, to_date, now: datetime, appointment_ty
     """
     settings = resolve_settings(garage)
     hours_map = resolve_opening_hours(garage)
-    today = now.date()
+    today = local_day_for(garage, now)
     win_start, win_end = booking_window(settings, today)
 
     start = max(from_date, win_start) if from_date else win_start
@@ -387,7 +388,7 @@ def single_day(
     """
     settings = resolve_settings(garage)
     hours_map = resolve_opening_hours(garage)
-    today = now.date()
+    today = local_day_for(garage, now)
     exceptions = resolve_exceptions(garage, day, day)
     duration = (
         duration_min if duration_min is not None else _type_duration(appointment_type, settings)
@@ -430,12 +431,12 @@ def slot_capacity_usage(
     """
     settings = resolve_settings(garage)
     capacity = slot_capacity(garage, settings)
-    appointments, pending = _load_day_usage(garage.id, day)
+    appointments, pending = _load_day_usage(garage, day)
     if exclude_request_id is not None:
         pending = [p for p in pending if p.id != exclude_request_id]
     if exclude_appointment_id is not None:
         appointments = [a for a in appointments if a.id != exclude_appointment_id]
-    used = _slot_usage(appointments, pending, slot_start, duration_min, settings)
+    used = _slot_usage(garage, appointments, pending, slot_start, duration_min, settings)
     return used, capacity
 
 
@@ -458,7 +459,7 @@ def validate_slot(
     diagnostic but not a 90-minute service must be rejected for the latter.
     """
     settings = resolve_settings(garage)
-    today = now.date()
+    today = local_day_for(garage, now)
     _, win_end = booking_window(settings, today)
 
     if day < today:
@@ -480,7 +481,7 @@ def validate_slot(
     if start_m < _minutes(opens_at) or start_m + duration > _minutes(closes_at):
         return "outside_hours"
 
-    slot_start = datetime.combine(day, slot_time, tzinfo=UTC)
+    slot_start = local_slot_as_utc(garage, day, slot_time)
     if slot_start <= now:
         return "past"
     if slot_start < now + timedelta(hours=settings.min_lead_time_hours):

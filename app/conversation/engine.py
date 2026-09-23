@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from flask import current_app
 
 from app.extensions import db
+from app.garages.timezones import timezone_for
 from app.models.communications.communication_log import (
     CHANNEL_VOICE,
     CHANNEL_WHATSAPP,
@@ -176,7 +177,10 @@ def handle_message(
         channel=channel,
         phone_e164=phone_e164,
         customer=customer,
-        now=now,
+        # Natural-language dates ("tomorrow", "Friday") are calendar
+        # concepts in the business's timezone. Session/audit timestamps above
+        # remain UTC instants.
+        now=now.astimezone(timezone_for(garage)),
     )
     intent, result = _dispatch(ctx, text, intent_guess)
 

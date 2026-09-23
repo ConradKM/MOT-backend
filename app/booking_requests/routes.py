@@ -14,6 +14,7 @@ from app.communications.events import (
 )
 from app.email.service import STATUS_SENT
 from app.extensions import db
+from app.garages.timezones import local_slot_as_utc
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
@@ -68,8 +69,8 @@ def _get_owned_request(request_id, *, lock: bool = False):
 def _resolve_appointment_slot(booking_request, data, appointment_type):
     start_time = data.get("start_time")
     if start_time is None and booking_request.preferred_time is not None:
-        start_time = datetime.combine(
-            booking_request.preferred_date, booking_request.preferred_time, tzinfo=UTC
+        start_time = local_slot_as_utc(
+            booking_request.garage, booking_request.preferred_date, booking_request.preferred_time
         )
     if start_time is None:
         abort(
