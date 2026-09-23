@@ -322,8 +322,8 @@ def test_transfer_refuses_a_number_already_assigned_to_another_business(
     class _FakeParentClient:
         incoming_phone_numbers = _FakeNumberResource()
 
-    app.config["TWILIO_ACCOUNT_SID"] = "ACmaster0000000000000000000000001"
-    app.config["TWILIO_AUTH_TOKEN"] = "token"
+    monkeypatch.setitem(app.config, "TWILIO_ACCOUNT_SID", "ACmaster0000000000000000000000001")
+    monkeypatch.setitem(app.config, "TWILIO_AUTH_TOKEN", "token")
     monkeypatch.setattr(
         voice_module, "get_twilio_account_management_client", lambda: _FakeParentClient()
     )
