@@ -119,6 +119,25 @@ def test_a_half_disabled_business_reports_its_live_channel():
     )
 
 
+def test_a_voice_number_set_outside_the_onboarding_flow_never_contradicts_its_own_blocker(
+    platform_client, garage, settings, session
+):
+    """flask configure-garage-communications sets voice_phone_number
+    directly without advancing GarageCommunicationsOnboarding.voice_status
+    - the exact drift that once showed a business a real number right next
+    to "This business has no voice number yet." The displayed state must
+    derive from what's actually true, not from a status field that can go
+    stale."""
+    settings.voice_phone_number = "+441234567890"
+    session.commit()
+    # No GarageCommunicationsOnboarding row at all - the CLI never created one.
+
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/communications").get_json()
+
+    assert body["voice"]["phone_number"] == "+441234567890"
+    assert "no voice number" not in (body["voice"]["blocker"] or "").lower()
+
+
 # --------------------------------------------------------------------------
 # Authorization
 # --------------------------------------------------------------------------

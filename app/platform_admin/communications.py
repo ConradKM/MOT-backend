@@ -123,12 +123,40 @@ def _action(key: str) -> dict:
 # --------------------------------------------------------------------------
 
 
+def _effective_voice_status(
+    settings: GarageCommunicationSettings | None, row: GarageCommunicationsOnboarding | None
+) -> str:
+    """The onboarding row's own ``voice_status`` is the normal source of
+    truth, but it can drift from ``GarageCommunicationSettings`` - the two
+    are separate rows, and ``flask configure-garage-communications`` (the
+    one supported way to set resource identifiers ahead of any admin UI,
+    per its own docstring) writes ``voice_phone_number`` directly without
+    ever advancing this status. Left alone, that produces exactly the
+    contradiction an operator would see as a bug: a number displayed right
+    next to "this business has no voice number yet".
+
+    Never trust a status that claims there is no number when
+    ``voice_phone_number`` says otherwise - a phone number field with an
+    actual value in it is the more authoritative signal of the two, since
+    nothing else can set it by accident.
+    """
+    status = row.voice_status if row else states.VOICE_NOT_STARTED
+    has_number = bool(settings and settings.voice_phone_number)
+    if has_number and status in (
+        states.VOICE_NOT_STARTED,
+        states.VOICE_SUBACCOUNT_PENDING,
+        states.VOICE_SUBACCOUNT_READY,
+    ):
+        return states.VOICE_NUMBER_ASSIGNED
+    return status
+
+
 def _voice_view(
     garage: Garage,
     settings: GarageCommunicationSettings | None,
     row: GarageCommunicationsOnboarding | None,
 ) -> dict:
-    status = row.voice_status if row else states.VOICE_NOT_STARTED
+    status = _effective_voice_status(settings, row)
     meaning = states.voice_meaning(status)
     capabilities = (row.voice_number_capabilities if row else None) or ""
 
