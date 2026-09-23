@@ -156,7 +156,9 @@ def test_replayed_plain_booking_without_a_token_returns_the_active_request(clien
 
 def test_no_token_retry_with_corrected_notes_is_not_silently_replaced(client, garage):
     payload = _valid_payload(notes="Please call on arrival")
-    assert client.post(f"/api/public/{garage.slug}/booking-requests", json=payload).status_code == 201
+    assert (
+        client.post(f"/api/public/{garage.slug}/booking-requests", json=payload).status_code == 201
+    )
 
     corrected = client.post(
         f"/api/public/{garage.slug}/booking-requests",
