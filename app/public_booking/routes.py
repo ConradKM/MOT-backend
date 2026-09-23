@@ -30,6 +30,7 @@ from app.payments.service import (
     create_deposit_hold,
     expire_stale_payment_holds,
     payment_hold_deadline,
+    reconcile_public_payment_recovery,
 )
 
 from .availability import _type_duration as _slot_duration_for_type
@@ -692,6 +693,8 @@ class DepositAttemptRecovery(MethodView):
         ).first()
         if booking_request is None:
             abort(404, message="Booking recovery attempt not found.")
+
+        booking_request = reconcile_public_payment_recovery(booking_request)
 
         payment = booking_request.active_payment
         session = None

@@ -168,6 +168,26 @@ def test_recovery_of_paid_booking_never_returns_a_new_payment_session(client, se
     assert BookingPayment.query.filter_by(booking_request_id=booking.id).count() == 1
 
 
+def test_recovery_reconciles_provider_success_when_the_browser_missed_the_webhook(
+    client, session, garage
+):
+    from app.payments.providers.fake import FakePaymentProvider
+
+    appt_type = _deposit_type(session, garage)
+    create = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=_payload(appt_type)
+    ).get_json()
+    booking = BookingRequest.query.filter_by(booking_reference=create["booking_reference"]).one()
+    payment = booking.active_payment
+    FakePaymentProvider._sessions[payment.provider_payment_id]["status"] = "SUCCEEDED"
+
+    recovered = _recover(client, garage, create["recovery_token"])
+    assert recovered.status_code == 200
+    assert recovered.get_json()["status"] == "PENDING"
+    assert recovered.get_json()["payment_status"] == "SUCCEEDED"
+    assert recovered.get_json()["provider_data"] is None
+
+
 def test_recovery_reports_expired_attempt_without_resurrecting_it(client, session, garage):
     appt_type = _deposit_type(session, garage)
     create = client.post(

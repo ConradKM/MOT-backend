@@ -308,6 +308,26 @@ def _reconcile_if_already_succeeded(
     return True
 
 
+def reconcile_public_payment_recovery(booking_request: BookingRequest) -> BookingRequest:
+    """Reconcile a recovered public checkout before returning it to a browser.
+
+    A customer can complete Stripe confirmation and lose connectivity before
+    its webhook reaches CoMaz.  Recovery must therefore query the provider
+    through the same locked state transition used by the expiry sweeper,
+    rather than showing a second Pay button until the hold happens to expire.
+    """
+    locked_request = BookingRequest.query.filter_by(id=booking_request.id).with_for_update().one()
+    payment = _locked_active_payment(locked_request)
+    notifications: list[BookingRequest] = []
+    if payment is not None and _reconcile_if_already_succeeded(
+        locked_request, payment, datetime.now(UTC), notifications
+    ):
+        db.session.commit()
+        for created in notifications:
+            emit_event(BOOKING_REQUEST_CREATED, garage=created.garage, booking_request=created)
+    return locked_request
+
+
 def refund_deposit(
     booking_request: BookingRequest, *, reason: str, initiated_by: str = "staff"
 ) -> BookingPayment | None:
