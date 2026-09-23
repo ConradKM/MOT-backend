@@ -79,7 +79,7 @@ def test_discover_lists_subaccount_and_parent_numbers_separately(
         lambda: [
             {
                 "phone_number": "+442222222222",
-                "sid": "PNparent1",
+                "sid": "PNparent00000000000000000000001",
                 "capabilities": [],
                 "friendly_name": None,
                 "whatsapp_configured": False,
@@ -204,7 +204,7 @@ def test_transferring_a_parent_number_configures_and_assigns_it(
 
     response = platform_client.post(
         f"{COMMS.format(garage_id=garage.id)}/voice/number/transfer",
-        json={"phone_number_sid": "PNparent1"},
+        json={"phone_number_sid": "PNparent00000000000000000000001"},
     )
 
     assert response.status_code == 200
@@ -212,7 +212,7 @@ def test_transferring_a_parent_number_configures_and_assigns_it(
     assert body["voice"]["phone_number"] == "+443333333333"
     assert body["voice"]["status"] == states.VOICE_WEBHOOKS_CONFIGURED
     session.refresh(subaccounted)
-    assert subaccounted.voice_number_sid == "PNparent1"
+    assert subaccounted.voice_number_sid == "PNparent00000000000000000000001"
 
 
 def test_transfer_is_idempotent_and_never_retransfers(
@@ -230,14 +230,16 @@ def test_transfer_is_idempotent_and_never_retransfers(
         ),
     )
 
-    body = {"phone_number_sid": "PNparent1"}
+    body = {"phone_number_sid": "PNparent00000000000000000000001"}
     platform_client.post(f"{COMMS.format(garage_id=garage.id)}/voice/number/transfer", json=body)
     second = platform_client.post(
         f"{COMMS.format(garage_id=garage.id)}/voice/number/transfer", json=body
     )
 
     assert second.status_code == 200
-    assert calls == ["PNparent1"]  # only the first request ever reached Twilio
+    assert calls == [
+        "PNparent00000000000000000000001"
+    ]  # only the first request ever reached Twilio
 
 
 def test_transfer_refuses_a_number_no_longer_owned_by_the_parent_account(
@@ -257,7 +259,7 @@ def test_transfer_refuses_a_number_no_longer_owned_by_the_parent_account(
 
     response = platform_client.post(
         f"{COMMS.format(garage_id=garage.id)}/voice/number/transfer",
-        json={"phone_number_sid": "PNparent1"},
+        json={"phone_number_sid": "PNparent00000000000000000000001"},
     )
 
     assert response.status_code == 422
@@ -276,7 +278,7 @@ def test_provider_failure_during_transfer_leaves_a_truthful_action_required_stat
 
     response = platform_client.post(
         f"{COMMS.format(garage_id=garage.id)}/voice/number/transfer",
-        json={"phone_number_sid": "PNparent1"},
+        json={"phone_number_sid": "PNparent00000000000000000000001"},
     )
 
     assert response.status_code == 422
@@ -304,7 +306,7 @@ def test_transfer_refuses_a_number_already_assigned_to_another_business(
 
     class _FakeNumber:
         phone_number = "+443333333333"
-        sid = "PNparent1"
+        sid = "PNparent00000000000000000000001"
         account_sid = "ACmaster0000000000000000000000001"
 
         def update(self, **kwargs):  # pragma: no cover - must never be reached
@@ -318,12 +320,13 @@ def test_transfer_refuses_a_number_already_assigned_to_another_business(
         incoming_phone_numbers = _FakeNumberResource()
 
     app.config["TWILIO_ACCOUNT_SID"] = "ACmaster0000000000000000000000001"
+    app.config["TWILIO_AUTH_TOKEN"] = "token"
     monkeypatch.setattr(
         voice_module, "get_twilio_account_management_client", lambda: _FakeParentClient()
     )
 
     with pytest.raises(VoiceProvisioningError, match="already assigned"):
-        voice_module.transfer_from_parent(garage, "PNparent1")
+        voice_module.transfer_from_parent(garage, "PNparent00000000000000000000001")
 
 
 # --------------------------------------------------------------------------
