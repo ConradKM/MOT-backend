@@ -96,8 +96,9 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # password. Always set by application code at creation; nullable at the
     # DB level only for rows that predate this column.
     booking_reference: Mapped[str | None] = mapped_column(String(16), unique=True, index=True)
-    # Opaque browser-generated token used to resume this exact deposit
-    # attempt without mistaking its own active hold for another customer.
+    # Opaque browser-generated public booking idempotency token. Deposit
+    # submissions use it to resume the provider session; ordinary public
+    # submissions use it to prevent a retry creating a second request.
     payment_attempt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True, index=True)
     # Opaque OpenAI function-call id for a voice-created request. It makes a
     # retry after a controller/network failure idempotent without storing any

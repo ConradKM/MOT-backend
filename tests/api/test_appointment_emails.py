@@ -8,6 +8,7 @@ never touch a real provider.
 """
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 
@@ -163,3 +164,30 @@ def test_re_saving_an_already_completed_appointment_does_not_refire(
 
     assert resp.status_code == 200
     assert box == {}
+
+
+def test_deleting_appointment_triggers_cancellation_event_once(
+    authenticated_user, appointment, monkeypatch
+):
+    # Cancellation currently has SMS/other communications subscribers; assert
+    # the lifecycle event itself so this remains valid as channels evolve.
+    from app.appointments import routes as appointment_routes
+    from app.communications.events import APPOINTMENT_CANCELLED
+
+    emit = Mock()
+    monkeypatch.setattr(appointment_routes, "emit_event", emit)
+
+    assert (
+        authenticated_user.client.delete(f"/api/appointments/{appointment.id}").status_code == 204
+    )
+    emit.assert_called_once_with(
+        APPOINTMENT_CANCELLED, garage=appointment.garage, appointment=appointment
+    )
+
+    # DELETE remains idempotent and must not send duplicate cancellation
+    # communications when a client retries after losing the first response.
+    emit.reset_mock()
+    assert (
+        authenticated_user.client.delete(f"/api/appointments/{appointment.id}").status_code == 204
+    )
+    emit.assert_not_called()

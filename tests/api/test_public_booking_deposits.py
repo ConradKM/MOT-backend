@@ -173,6 +173,61 @@ def test_retried_deposit_attempt_resumes_its_own_hold(client, session, garage):
     assert BookingPayment.query.filter_by(garage_id=garage.id).count() == 1
 
 
+def test_deposit_attempt_cannot_be_reused_for_a_changed_service_or_slot(client, session, garage):
+    first_type = _deposit_type(session, garage, base_price="100.00")
+    second_type = _deposit_type(session, garage, base_price="200.00")
+    attempt_id = str(uuid.uuid4())
+    payload = _payload(first_type, payment_attempt_id=attempt_id)
+    assert (
+        client.post(
+            f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=payload
+        ).status_code
+        == 201
+    )
+
+    changed_service = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(second_type, payment_attempt_id=attempt_id),
+    )
+    assert changed_service.status_code == 409
+    assert changed_service.get_json()["errors"] == {"reason": "payment_attempt_mismatch"}
+
+    changed_slot = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(first_type, payment_attempt_id=attempt_id, preferred_time="10:30:00"),
+    )
+    assert changed_slot.status_code == 409
+    assert changed_slot.get_json()["errors"] == {"reason": "payment_attempt_mismatch"}
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+    assert BookingPayment.query.filter_by(garage_id=garage.id).count() == 1
+
+
+def test_resumed_deposit_attempt_uses_its_original_price_snapshot(client, session, garage):
+    appt_type = _deposit_type(session, garage, base_price="100.00")
+    payload = _payload(appt_type, payment_attempt_id=str(uuid.uuid4()))
+    first = client.post(f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=payload)
+    assert first.status_code == 201
+
+    # Staff changing a catalogue price must not rewrite an in-flight
+    # customer's total when their browser retries the same checkout.
+    appt_type.base_price = "250.00"
+    session.commit()
+    resumed = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=payload
+    )
+    assert resumed.status_code == 201
+    assert resumed.get_json()["service_total"] == "100.00"
+    assert resumed.get_json()["deposit_amount"] == "20.00"
+    assert resumed.get_json()["remaining_balance"] == "80.00"
+    poll = client.get(
+        f"/api/public/{garage.slug}/booking-requests/"
+        f"{resumed.get_json()['booking_reference']}/payment-status"
+    )
+    assert poll.status_code == 200
+    assert poll.get_json()["service_total"] == "100.00"
+    assert poll.get_json()["remaining_balance"] == "80.00"
+
+
 def test_different_deposit_attempt_is_blocked_by_active_hold(client, session, garage):
     appt_type = _deposit_type(session, garage)
     first = client.post(
@@ -426,6 +481,34 @@ def test_expired_hold_releases_capacity_and_cancels_the_intent(app, session, gar
         ),
     )
     assert second.status_code == 201
+
+
+def test_expiry_never_releases_a_hold_with_a_locally_successful_payment(
+    app, session, garage, client
+):
+    """Regression for the webhook/expiry race: the old deadline is not a
+    licence to expire a payment row which has already reached SUCCEEDED."""
+    appt_type = _deposit_type(session, garage)
+    create = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=_payload(appt_type)
+    ).get_json()
+    booking_request = BookingRequest.query.filter_by(
+        booking_reference=create["booking_reference"]
+    ).one()
+    payment = BookingPayment.query.filter_by(booking_request_id=booking_request.id).one()
+    payment.status = "SUCCEEDED"
+    payment.paid_at = datetime.datetime.now(datetime.UTC)
+    booking_request.payment_hold_expires_at = datetime.datetime.now(
+        datetime.UTC
+    ) - datetime.timedelta(minutes=1)
+    session.commit()
+
+    assert expire_stale_payment_holds(garage_id=garage.id) == 0
+    session.refresh(booking_request)
+    session.refresh(payment)
+    assert booking_request.status == "PENDING"
+    assert booking_request.payment_hold_expires_at is None
+    assert payment.status == "SUCCEEDED"
 
 
 def test_expiry_check_reconciles_a_payment_that_actually_succeeded(app, session, garage, client):

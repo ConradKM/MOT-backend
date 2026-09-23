@@ -18,7 +18,7 @@ from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
-from app.models.garage import Garage
+from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
 from app.payments.money import DepositConfigError, minor_to_decimal
 from app.payments.providers import get_provider
 from app.payments.providers.base import PaymentProviderError
@@ -64,7 +64,14 @@ public_booking_blp = Blueprint(
 
 def _get_garage_by_slug(slug):
     garage = Garage.query.filter_by(slug=slug).first()
-    if garage is None:
+    # A public slug is deliberately stable, so suspending or archiving a
+    # tenant must close *every* unauthenticated booking route that resolves
+    # it.  Returning the same 404 as an unknown slug avoids advertising a
+    # business's platform status while preventing new availability probes,
+    # booking requests, payment holds, and status polling for an offline
+    # tenant.  Trial tenants are intentionally public: they are live
+    # businesses until platform administration says otherwise.
+    if garage is None or garage.status not in (GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL):
         abort(404, message="Garage not found")
     return garage
 
@@ -259,7 +266,12 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status, a
         garage_id=garage.id,
         status=status,
         booking_reference=unique_booking_reference(db.session),
-        payment_attempt_id=data.get("payment_attempt_id") if status == "AWAITING_PAYMENT" else None,
+        # The browser-generated attempt id is an idempotency key for either
+        # public submission mode.  Deposit flows additionally use it to
+        # resume their provider session; plain bookings use it to make a
+        # retried POST return the same pending request rather than reserve a
+        # second slot.
+        payment_attempt_id=data.get("payment_attempt_id"),
         customer_id=customer.id,
         # None when the business tracks no item - the column is nullable for
         # exactly that.
@@ -290,9 +302,14 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status, a
     )
 
 
-def _deposit_response(booking_request, payment, session, appt_type):
+def _deposit_response(booking_request, payment, session):
     """Build the client-safe deposit envelope for a new or resumed hold."""
-    base_price = appt_type.base_price
+    # A retry must describe the immutable request/payment snapshot, not a
+    # service record that staff may have edited after the customer began
+    # checkout.  This is the same historical-price rule used by staff
+    # approval and prevents a resumed attempt from displaying a different
+    # total from the amount its provider intent actually represents.
+    base_price = booking_request.requested_price
     deposit_amount = minor_to_decimal(payment.amount_minor)
     remaining_balance = (base_price - deposit_amount) if base_price is not None else None
     return {
@@ -311,7 +328,7 @@ def _deposit_response(booking_request, payment, session, appt_type):
     }
 
 
-def _existing_deposit_attempt(garage, attempt_id, appt_type):
+def _existing_deposit_attempt(garage, attempt_id, appt_type, data):
     """Resume an active attempt before normal capacity revalidation.
 
     The caller holds the garage row lock, so an initial request and its retry
@@ -325,6 +342,20 @@ def _existing_deposit_attempt(garage, attempt_id, appt_type):
     ).first()
     if booking_request is None or booking_request.status != "AWAITING_PAYMENT":
         return None
+    # The browser token is an idempotency key for one exact checkout intent,
+    # not a reusable capability to mutate an existing reservation.  Resuming
+    # it after a service/date/time change would otherwise return the old
+    # payment session while the UI is showing the new selection.
+    if (
+        booking_request.appointment_type_id != appt_type.id
+        or booking_request.preferred_date != data["preferred_date"]
+        or booking_request.preferred_time != data.get("preferred_time")
+    ):
+        abort(
+            409,
+            message="This payment attempt belongs to a different service or appointment time. Please start a new payment attempt.",
+            errors={"reason": "payment_attempt_mismatch"},
+        )
     payment = booking_request.active_payment
     if payment is None or payment.provider_payment_id is None:
         return None
@@ -334,7 +365,35 @@ def _existing_deposit_attempt(garage, attempt_id, appt_type):
         ).get_payment_status(payment.provider_payment_id)
     except PaymentProviderError:
         abort(502, message="Could not resume the deposit payment. Please try again.")
-    return _deposit_response(booking_request, payment, session, appt_type)
+    return _deposit_response(booking_request, payment, session)
+
+
+def _existing_plain_booking_attempt(garage, attempt_id, appt_type, data):
+    """Return the one existing plain submission for a browser attempt.
+
+    A single opaque attempt id is deliberately shared by both public flows,
+    but it is bound to immutable booking selections.  It cannot be replayed
+    to create a second request or silently substitute another service/slot.
+    """
+    if attempt_id is None:
+        return None
+    booking_request = BookingRequest.query.filter_by(
+        garage_id=garage.id, payment_attempt_id=attempt_id
+    ).first()
+    if booking_request is None:
+        return None
+    if (
+        booking_request.appointment_type_id != (appt_type.id if appt_type else None)
+        or booking_request.preferred_date != data["preferred_date"]
+        or booking_request.preferred_time != data.get("preferred_time")
+        or booking_request.status == "AWAITING_PAYMENT"
+    ):
+        abort(
+            409,
+            message="This booking attempt belongs to a different service or appointment time. Please start a new booking attempt.",
+            errors={"reason": "booking_attempt_mismatch"},
+        )
+    return booking_request
 
 
 @public_booking_blp.route("/<slug>/booking-requests")
@@ -358,6 +417,17 @@ class BookingRequestSubmit(MethodView):
                 message="This service requires a deposit - start the deposit payment "
                 "flow instead of submitting directly.",
             )
+
+        # Serialise the idempotency lookup, customer/vehicle resolution and
+        # eventual insertion even for date-only requests (which do not take
+        # the slot-validation lock below).  This is also the database-side
+        # counterpart to the unique payment_attempt_id constraint.
+        db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
+        existing = _existing_plain_booking_attempt(
+            garage, data.get("payment_attempt_id"), appt_type, data
+        )
+        if existing is not None:
+            return existing
 
         resolved_answers = _validate_answers_or_abort(garage, data, data.get("appointment_type_id"))
 
@@ -417,7 +487,9 @@ class DepositIntentCreate(MethodView):
         # treating it as a competing booking; every different attempt still
         # receives the ordinary capacity check below.
         db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
-        existing = _existing_deposit_attempt(garage, data.get("payment_attempt_id"), appt_type)
+        existing = _existing_deposit_attempt(
+            garage, data.get("payment_attempt_id"), appt_type, data
+        )
         if existing is not None:
             return existing
 
@@ -457,7 +529,7 @@ class DepositIntentCreate(MethodView):
 
         db.session.commit()
 
-        return _deposit_response(booking_request, payment, session, appt_type)
+        return _deposit_response(booking_request, payment, session)
 
 
 @public_booking_blp.route("/<slug>/booking-requests/<reference>/payment-status")
@@ -481,11 +553,9 @@ class DepositStatus(MethodView):
         db.session.refresh(booking_request)
 
         payment = booking_request.active_payment
-        base_price = (
-            booking_request.appointment_type.base_price
-            if booking_request.appointment_type
-            else None
-        )
+        # Keep polling responses aligned with the immutable checkout request,
+        # not a price an owner may edit after the customer has paid.
+        base_price = booking_request.requested_price
         deposit_amount = minor_to_decimal(payment.amount_minor) if payment else None
         remaining_balance = (
             (base_price - deposit_amount)

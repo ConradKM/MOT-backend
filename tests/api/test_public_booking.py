@@ -7,12 +7,16 @@ POST /api/public/<slug>/booking-requests
 import datetime
 import json
 import urllib.error
+import uuid
+
+import pytest
 
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
+from app.models.garage import GARAGE_STATUS_ARCHIVED, GARAGE_STATUS_SUSPENDED, GARAGE_STATUS_TRIAL
 from app.models.vehicle import Vehicle
 
 
@@ -85,6 +89,36 @@ def test_get_public_garage_unknown_slug_returns_404(client):
     assert resp.status_code == 404
 
 
+@pytest.mark.parametrize("status", [GARAGE_STATUS_SUSPENDED, GARAGE_STATUS_ARCHIVED])
+def test_offline_tenant_is_not_publicly_bookable(client, session, garage, status):
+    """Suspension/archival must close the whole unauthenticated surface, not
+    merely prevent staff logins while customers can still reserve capacity."""
+    garage.status = status
+    session.commit()
+
+    assert client.get(f"/api/public/{garage.slug}").status_code == 404
+    assert client.get(f"/api/public/{garage.slug}/availability").status_code == 404
+    assert (
+        client.post(
+            f"/api/public/{garage.slug}/booking-requests", json=_valid_payload()
+        ).status_code
+        == 404
+    )
+
+
+def test_trial_tenant_remains_publicly_bookable(client, session, garage):
+    garage.status = GARAGE_STATUS_TRIAL
+    session.commit()
+
+    assert client.get(f"/api/public/{garage.slug}").status_code == 200
+    assert (
+        client.post(
+            f"/api/public/{garage.slug}/booking-requests", json=_valid_payload()
+        ).status_code
+        == 201
+    )
+
+
 # --------------------------------------------------------------------------
 # POST /api/public/<slug>/booking-requests
 # --------------------------------------------------------------------------
@@ -96,6 +130,36 @@ def test_submit_creates_a_pending_booking_request(client, session, garage):
     assert resp.status_code == 201
     body = resp.get_json()
     assert body["status"] == "PENDING"
+
+
+def test_replayed_plain_booking_attempt_creates_only_one_pending_request(client, garage):
+    payload = _valid_payload(payment_attempt_id=str(uuid.uuid4()))
+
+    first = client.post(f"/api/public/{garage.slug}/booking-requests", json=payload)
+    replay = client.post(f"/api/public/{garage.slug}/booking-requests", json=payload)
+
+    assert first.status_code == replay.status_code == 201
+    assert replay.get_json()["id"] == first.get_json()["id"]
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+
+
+def test_plain_booking_attempt_id_cannot_be_reused_for_a_changed_slot(client, garage):
+    attempt_id = str(uuid.uuid4())
+    assert (
+        client.post(
+            f"/api/public/{garage.slug}/booking-requests",
+            json=_valid_payload(payment_attempt_id=attempt_id),
+        ).status_code
+        == 201
+    )
+
+    mismatch = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(payment_attempt_id=attempt_id, preferred_time="10:30:00"),
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.get_json()["errors"] == {"reason": "booking_attempt_mismatch"}
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
 
 
 def test_submit_normalises_the_mobile_number_to_e164(client, session, garage):

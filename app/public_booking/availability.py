@@ -410,6 +410,7 @@ def slot_capacity_usage(
     slot_start: datetime,
     duration_min: int,
     exclude_request_id=None,
+    exclude_appointment_id=None,
 ) -> tuple[int, int]:
     """``(used, capacity)`` for one candidate slot - the same accounting
     :func:`validate_slot` uses for its capacity check, exposed so other
@@ -418,12 +419,17 @@ def slot_capacity_usage(
     ``exclude_request_id`` leaves one PENDING request's own reservation out of
     ``used`` - pass the request being approved so converting its reservation
     into a real appointment isn't double-counted against itself.
+    ``exclude_appointment_id`` does the equivalent for a staff reschedule or
+    reactivation, so the appointment is not treated as a collision with its
+    own current slot.
     """
     settings = resolve_settings(garage)
     capacity = slot_capacity(garage, settings)
     appointments, pending = _load_day_usage(garage.id, day)
     if exclude_request_id is not None:
         pending = [p for p in pending if p.id != exclude_request_id]
+    if exclude_appointment_id is not None:
+        appointments = [a for a in appointments if a.id != exclude_appointment_id]
     used = _slot_usage(appointments, pending, slot_start, duration_min, settings)
     return used, capacity
 
