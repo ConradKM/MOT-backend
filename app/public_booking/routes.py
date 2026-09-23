@@ -396,7 +396,7 @@ def _existing_plain_booking_attempt(garage, attempt_id, appt_type, data):
     return booking_request
 
 
-def _matching_active_plain_request(garage, appt_type, data):
+def _matching_active_plain_request(garage, appt_type, data, answers):
     """Find the active request an accidental no-token retry would duplicate.
 
     Older/current browser clients may not yet send an attempt UUID for an
@@ -406,14 +406,16 @@ def _matching_active_plain_request(garage, appt_type, data):
     token.  Different vehicle/customer/service/slot selections remain
     independent bookings.
     """
-    return (
+    item = tracked_item_kwargs(bound_values(answers))
+    submitted_vehicle_reference = item.get("reference") or data.get("vehicle_registration")
+    candidate = (
         BookingRequest.query.filter_by(
             garage_id=garage.id,
             source=BOOKING_REQUEST_SOURCE_WEB,
             status="PENDING",
             customer_email=data["customer_email"],
             customer_phone=data.get("customer_phone"),
-            vehicle_registration=data.get("vehicle_registration"),
+            vehicle_registration=submitted_vehicle_reference,
             appointment_type_id=appt_type.id if appt_type else None,
             preferred_date=data["preferred_date"],
             preferred_time=data.get("preferred_time"),
@@ -421,6 +423,38 @@ def _matching_active_plain_request(garage, appt_type, data):
         .order_by(BookingRequest.created_at.desc())
         .first()
     )
+    if candidate is None:
+        return None
+
+    # The fallback is only for a byte-for-byte-equivalent submission from an
+    # older browser that has no explicit idempotency token.  Returning a prior
+    # request after the caller corrected notes, their name, or a booking-form
+    # answer would silently discard customer data.  In that case let ordinary
+    # availability validation return its truthful result instead.
+    item_snapshot = {
+        "vehicle_make": item.get("make") or data.get("vehicle_make"),
+        "vehicle_model": item.get("model") or data.get("vehicle_model"),
+        "vehicle_year": item.get("year") or data.get("vehicle_year"),
+        "vehicle_mileage": item.get("usage") or data.get("vehicle_mileage"),
+    }
+    submitted_scalars = {
+        "customer_first_name": data["customer_first_name"],
+        "customer_last_name": data["customer_last_name"],
+        "preferred_employee_note": data.get("preferred_employee_note"),
+        "notes": data.get("notes"),
+        **item_snapshot,
+    }
+    if any(getattr(candidate, key) != value for key, value in submitted_scalars.items()):
+        return None
+
+    submitted_answers = [
+        (str(row["field"].id), row["value"], tuple(row["value_list"])) for row in answers
+    ]
+    stored_answers = [
+        (str(row.booking_flow_field_id), row.value, tuple(row.value_list))
+        for row in sorted(candidate.answers, key=lambda row: row.order)
+    ]
+    return candidate if stored_answers == submitted_answers else None
 
 
 @public_booking_blp.route("/<slug>/booking-requests")
@@ -459,7 +493,9 @@ class BookingRequestSubmit(MethodView):
         resolved_answers = _validate_answers_or_abort(garage, data, data.get("appointment_type_id"))
 
         if data.get("payment_attempt_id") is None:
-            existing_duplicate = _matching_active_plain_request(garage, appt_type, data)
+            existing_duplicate = _matching_active_plain_request(
+                garage, appt_type, data, resolved_answers
+            )
             if existing_duplicate is not None:
                 return existing_duplicate
 
