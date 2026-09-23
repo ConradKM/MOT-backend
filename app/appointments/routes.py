@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, time, timedelta
+from datetime import time, timedelta
 
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
