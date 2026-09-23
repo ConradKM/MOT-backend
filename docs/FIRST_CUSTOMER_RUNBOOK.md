@@ -38,32 +38,54 @@ chargeable. Deposits are only ever offered once `stripe_charges_enabled`
 is genuinely `true` - never from account-id presence alone
 (`app/payments/settings.py::stripe_connect_ready`).
 
-## 8. Communications provisioning
-**COMAZ ADMIN DOES** - Platform Admin -> business -> Communications Setup:
-1. Create (or adopt an existing) Twilio subaccount - isolates this
-   business's credentials and usage from every other tenant
-   (`app/communications/provisioning/subaccounts.py`).
-2. Requires `COMMS_SECRET_KEY` configured deployment-wide (already done).
+## 8. Communications provisioning (Twilio subaccount)
+**COMAZ ADMIN DOES** - Platform Admin -> business -> Communications Setup ->
+"Create Twilio subaccount" (or "Attach existing subaccount" if one was made
+by hand beforehand). Isolates this business's credentials and Twilio usage
+from every other tenant (`app/communications/provisioning/subaccounts.py`).
+Encrypted at rest via `COMMS_SECRET_KEY` (already configured). Safe to
+retry - clicking it again on a business that already has a subaccount just
+returns the existing one, never creates a second.
 
 ## 9. Purchase/assign a dedicated number
 **COMAZ ADMIN DOES, WITH EXPLICIT CONFIRMATION** - search available UK
-numbers, then buy (`POST .../communications/voice/number`). This is a real
-Twilio purchase with a real cost - nothing in this system buys a number
-automatically; it is always one explicit authenticated action.
+numbers ("Search numbers"), then "Buy number" for the chosen one
+(`POST .../communications/voice/number`). This is a real Twilio purchase
+with a real recurring cost - nothing in this system buys a number
+automatically, and it is now provably safe to retry: a business that
+already has a number returns that number unchanged rather than buying a
+second one (fixed in this pass - previously a double-click or retried
+request could have purchased and silently orphaned an extra number).
+The purchased number's voice webhook is pointed at CoMaz automatically in
+the same call - never live-but-unconfigured.
 Do not reuse another business's number. Existing reference numbers
 (`+447402220792`, `+443330382135`) belong to other tenants/testing and must
 never be reassigned.
 
 ## 10. OpenAI voice activation
-**AUTOMATED BY COMAZ, once the number exists**: the SIP trunk and OpenAI
-webhook infrastructure are shared across every tenant safely - tenant
-resolution is per-number (`app/ai_voice/tenant.py::resolve_business_for_sip_call`,
-reading the SIP `Diversion`/`To` header, matched against this business's own
-`voice_phone_number`). No per-business OpenAI project is needed. An
-unrecognised number fails closed - it is never routed to a default tenant.
-**COMAZ ADMIN DOES**: point the number's voice webhook at CoMaz
-(`POST .../communications/voice/configure`), set an escalation/fallback
-number if the owner wants human handoff.
+**AUTOMATED BY COMAZ, once the number is attached to the SIP trunk (below)**:
+the OpenAI webhook infrastructure is shared safely across every tenant -
+tenant resolution is per-number
+(`app/ai_voice/tenant.py::resolve_business_for_sip_call`, reading the SIP
+`Diversion`/`To` header, matched against this business's own
+`voice_phone_number`). No per-business OpenAI project or API key is needed.
+An unrecognised number fails closed - it is never routed to a default
+tenant.
+
+**COMAZ ADMIN MUST DO MANUALLY (not automated, no Platform Admin action for
+this today)**: the number bought in step 9 defaults to CoMaz's own voice
+webhook (Twilio ConversationRelay), *not* OpenAI. To route this specific
+number through OpenAI instead, associate it with the existing Elastic SIP
+Trunk in the **Twilio Console** (Super Network -> Elastic SIP Trunking ->
+the CoMaz trunk -> Numbers -> add this number). A number belongs to exactly
+one trunk/voice-URL configuration at a time, so this is a one-time,
+one-number action - see `docs/OPENAI_VOICE_SETUP.md`. Skip this step
+entirely if TOD should use CoMaz's existing ConversationRelay voice
+assistant instead of the OpenAI Realtime one; both work, and moving between
+them later is the same one-line Twilio Console change.
+
+Also set an escalation/fallback number in Platform Admin
+(`PUT .../communications/voice/routing`) if the owner wants human handoff.
 
 ## 11. Public booking verification
 **COMAZ ADMIN DOES**: open the business's public booking link, place a real

@@ -334,6 +334,45 @@ def test_buying_a_number_configures_webhooks_in_the_same_step(
     assert settings.voice_number_sid == "PNbought0000000000000000000000001"
 
 
+def test_retrying_the_buy_number_action_never_buys_a_second_number(
+    monkeypatch, platform_client, session, garage, settings
+):
+    """A double-click, a retried request, or a resumed page load on this
+    endpoint must never purchase a second real number - it is a paid,
+    irreversible provider action."""
+    settings.twilio_subaccount_sid = "ACtest0000000000000000000000000009"
+    settings.voice_phone_number = "+441234567890"
+    settings.voice_number_sid = "PNbought0000000000000000000000001"
+    session.commit()
+
+    from app.communications.provisioning import service
+
+    calls = []
+    monkeypatch.setattr(
+        service.voice,
+        "buy_number",
+        lambda garage, phone_number: (
+            calls.append(phone_number)
+            or {
+                "phone_number": phone_number,
+                "sid": "PNbought0000000000000000000000002",
+                "capabilities": [],
+            }
+        ),
+    )
+
+    response = platform_client.post(
+        f"{COMMS.format(garage_id=garage.id)}/voice/number",
+        json={"phone_number": "+449999999999"},
+    )
+
+    assert response.status_code == 200
+    assert calls == []  # buy_number (the real Twilio call) was never reached
+    session.refresh(settings)
+    assert settings.voice_phone_number == "+441234567890"
+    assert settings.voice_number_sid == "PNbought0000000000000000000000001"
+
+
 def test_a_failed_purchase_records_the_provider_error(
     monkeypatch, platform_client, session, garage, settings
 ):
