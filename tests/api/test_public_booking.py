@@ -162,6 +162,28 @@ def test_plain_booking_attempt_id_cannot_be_reused_for_a_changed_slot(client, ga
     assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
 
 
+def test_public_booking_attempt_id_is_isolated_between_tenants(client, garage, second_garage):
+    attempt_id = str(uuid.uuid4())
+    assert (
+        client.post(
+            f"/api/public/{garage.slug}/booking-requests",
+            json=_valid_payload(payment_attempt_id=attempt_id),
+        ).status_code
+        == 201
+    )
+    other = client.post(
+        f"/api/public/{second_garage.slug}/booking-requests",
+        json=_valid_payload(
+            payment_attempt_id=attempt_id,
+            customer_email="other@example.com",
+            vehicle_registration="ZZ99 ZZZ",
+        ),
+    )
+    assert other.status_code == 201
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+    assert BookingRequest.query.filter_by(garage_id=second_garage.id).count() == 1
+
+
 def test_submit_normalises_the_mobile_number_to_e164(client, session, garage):
     resp = client.post(
         f"/api/public/{garage.slug}/booking-requests",

@@ -26,6 +26,7 @@ from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
+from app.models.garage import Garage
 from app.models.payments.payment import (
     PAYMENT_STATUSES_CHARGED,
     PAYMENT_TYPE_DEPOSIT,
@@ -554,6 +555,12 @@ def _reinstate_or_flag_expired_booking(
     real charge with no booking behind it needs a human (refund or manual
     rebook), not a silently dropped record."""
     from app.public_booking.availability import validate_slot
+
+    # This expired request no longer reserves capacity.  Take the same
+    # garage lock as every other capacity-acquiring path before validating
+    # and changing it back to PENDING, otherwise a new public/voice booking
+    # can legitimately take the slot between this check and the reinstatement.
+    db.session.query(Garage).filter_by(id=booking_request.garage_id).with_for_update().one()
 
     reason = None
     if booking_request.preferred_time is not None:
