@@ -1,4 +1,6 @@
 from datetime import UTC, date, datetime
+from hashlib import sha256
+from secrets import token_urlsafe
 
 from flask import current_app, g
 from flask.views import MethodView
@@ -48,6 +50,8 @@ from .schemas import (
     BookingRequestCreateSchema,
     DayAvailabilityQueryArgsSchema,
     DaySlotsSchema,
+    DepositAttemptRecoveryResponseSchema,
+    DepositAttemptRecoverySchema,
     DepositIntentCreatedSchema,
     DepositStatusSchema,
     PublicBookingFlowSchema,
@@ -303,7 +307,7 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status, a
     )
 
 
-def _deposit_response(booking_request, payment, session):
+def _deposit_response(booking_request, payment, session, *, recovery_token=None):
     """Build the client-safe deposit envelope for a new or resumed hold."""
     # A retry must describe the immutable request/payment snapshot, not a
     # service record that staff may have edited after the customer began
@@ -313,7 +317,7 @@ def _deposit_response(booking_request, payment, session):
     base_price = booking_request.requested_price
     deposit_amount = minor_to_decimal(payment.amount_minor)
     remaining_balance = (base_price - deposit_amount) if base_price is not None else None
-    return {
+    response = {
         "booking_request_id": booking_request.id,
         "booking_reference": booking_request.booking_reference,
         "status": booking_request.status,
@@ -326,6 +330,66 @@ def _deposit_response(booking_request, payment, session):
         "checkout_mode": session.checkout_mode,
         "provider_data": session.provider_data,
         "hold_expires_at": booking_request.payment_hold_expires_at,
+    }
+    # This capability is emitted only when an attempt is first created.  It
+    # must not be reconstructable from the client-generated idempotency UUID,
+    # and must never be written to logs or persisted alongside provider data.
+    if recovery_token is not None:
+        response["recovery_token"] = recovery_token
+    return response
+
+
+def _recovery_response(booking_request, payment, session=None):
+    """Return the immutable server snapshot for one bearer-authorised
+    recovery attempt.  A normal booking reference/status endpoint cannot do
+    this because it is intentionally guess-resistant only by reference and
+    must never disclose customer data or a reusable client secret.
+    """
+    base_price = booking_request.requested_price
+    deposit_amount = minor_to_decimal(payment.amount_minor) if payment else None
+    remaining_balance = (
+        base_price - deposit_amount
+        if base_price is not None and deposit_amount is not None
+        else None
+    )
+    appointment_type = booking_request.appointment_type
+    return {
+        "booking_reference": booking_request.booking_reference,
+        "status": booking_request.status,
+        "payment_status": payment.status if payment else None,
+        "currency": payment.currency if payment else None,
+        "service_total": base_price,
+        "deposit_amount": deposit_amount,
+        "remaining_balance": remaining_balance,
+        "hold_expires_at": booking_request.payment_hold_expires_at,
+        "appointment_type_id": booking_request.appointment_type_id,
+        "appointment_type_name": appointment_type.name if appointment_type else None,
+        "preferred_date": booking_request.preferred_date,
+        "preferred_time": booking_request.preferred_time,
+        "requested_duration_minutes": booking_request.requested_duration_minutes,
+        "customer_first_name": booking_request.customer_first_name,
+        "customer_last_name": booking_request.customer_last_name,
+        "customer_email": booking_request.customer_email,
+        "customer_phone": booking_request.customer_phone,
+        "vehicle_registration": booking_request.vehicle_registration,
+        "vehicle_make": booking_request.vehicle_make,
+        "vehicle_model": booking_request.vehicle_model,
+        "vehicle_year": booking_request.vehicle_year,
+        "vehicle_mileage": booking_request.vehicle_mileage,
+        "answers": [
+            {
+                "field_id": str(answer.booking_flow_field_id),
+                "value": answer.value,
+                "values": answer.value_list,
+            }
+            for answer in booking_request.answers
+            if answer.booking_flow_field_id is not None
+        ],
+        # Do not make a previously-paid booking pay again.  A client-safe
+        # provider session is only meaningful for the sole active checkout.
+        "provider": payment.provider if session is not None else None,
+        "checkout_mode": session.checkout_mode if session is not None else None,
+        "provider_data": session.provider_data if session is not None else None,
     }
 
 
@@ -573,6 +637,8 @@ class DepositIntentCreate(MethodView):
             answers=resolved_answers,
         )
         booking_request.payment_hold_expires_at = payment_hold_deadline()
+        recovery_token = token_urlsafe(32)
+        booking_request.payment_recovery_token_hash = sha256(recovery_token.encode()).hexdigest()
 
         db.session.add(booking_request)
         db.session.flush()
@@ -598,7 +664,51 @@ class DepositIntentCreate(MethodView):
 
         db.session.commit()
 
-        return _deposit_response(booking_request, payment, session)
+        return _deposit_response(booking_request, payment, session, recovery_token=recovery_token)
+
+
+@public_booking_blp.route("/<slug>/booking-requests/deposit-attempt/recover")
+class DepositAttemptRecovery(MethodView):
+    """Recover a deposit checkout strictly from the server-owned request.
+
+    The token is a high-entropy, one-purpose capability, stored only as a
+    hash.  It is scoped to the garage in this route and deliberately posted
+    in the body rather than included in a bookmarkable URL.  Unknown tokens
+    and cross-tenant tokens both yield the same 404 to prevent enumeration.
+    """
+
+    @limiter.limit(lambda: current_app.config["PUBLIC_BOOKING_RATELIMIT"])
+    @public_booking_blp.arguments(DepositAttemptRecoverySchema)
+    @public_booking_blp.response(200, DepositAttemptRecoveryResponseSchema)
+    def post(self, data, slug):
+        garage = _get_garage_by_slug(slug)
+        token_hash = sha256(data["recovery_token"].encode()).hexdigest()
+
+        # Use the existing sweeper: it serialises with payment success and
+        # reconciles a provider success before ever releasing a stale hold.
+        expire_stale_payment_holds(garage_id=garage.id)
+        booking_request = BookingRequest.query.filter_by(
+            garage_id=garage.id, payment_recovery_token_hash=token_hash
+        ).first()
+        if booking_request is None:
+            abort(404, message="Booking recovery attempt not found.")
+
+        payment = booking_request.active_payment
+        session = None
+        if (
+            booking_request.status == "AWAITING_PAYMENT"
+            and payment is not None
+            and payment.provider_payment_id is not None
+            and payment.status in ("REQUIRES_PAYMENT", "PENDING")
+        ):
+            try:
+                session = get_provider(
+                    payment.provider, connected_account_id=payment.provider_account_id
+                ).get_payment_status(payment.provider_payment_id)
+            except PaymentProviderError:
+                abort(502, message="Could not resume the deposit payment. Please try again.")
+
+        return _recovery_response(booking_request, payment, session)
 
 
 @public_booking_blp.route("/<slug>/booking-requests/<reference>/payment-status")

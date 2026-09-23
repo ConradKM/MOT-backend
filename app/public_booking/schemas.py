@@ -282,6 +282,9 @@ class DepositIntentCreatedSchema(Schema):
     # client_secret (or equivalent) is only ever handed out once. Shape is
     # provider-specific but always client-safe - see PaymentSessionResult.
     provider_data = fields.Dict(dump_only=True, allow_none=True)
+    # A server-issued opaque capability, used only to recover this customer'
+    # own in-progress deposit after a reload.  It is never a Stripe secret.
+    recovery_token = fields.Str(dump_only=True, allow_none=True)
     hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
 
 
@@ -299,6 +302,42 @@ class DepositStatusSchema(Schema):
     deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
+class DepositAttemptRecoverySchema(Schema):
+    """Opaque, server-issued recovery credential; accepted in POST body so
+    it is not placed in URL/history/referrer logs."""
+
+    recovery_token = fields.Str(required=True, validate=validate.Length(min=32, max=256))
+
+
+class DepositAttemptRecoveryResponseSchema(DepositStatusSchema):
+    """Authoritative public-booking recovery envelope.
+
+    ``provider_data`` is returned only while the holder can still resume an
+    AWAITING_PAYMENT checkout, and only after presenting the opaque recovery
+    capability.  It may contain a client-safe Stripe client secret; never a
+    platform secret or card details.
+    """
+
+    appointment_type_id = fields.UUID(dump_only=True, allow_none=True)
+    appointment_type_name = fields.Str(dump_only=True, allow_none=True)
+    preferred_date = fields.Date(dump_only=True)
+    preferred_time = fields.Time(dump_only=True, allow_none=True)
+    requested_duration_minutes = fields.Int(dump_only=True, allow_none=True)
+    customer_first_name = fields.Str(dump_only=True)
+    customer_last_name = fields.Str(dump_only=True)
+    customer_email = fields.Str(dump_only=True, allow_none=True)
+    customer_phone = fields.Str(dump_only=True, allow_none=True)
+    vehicle_registration = fields.Str(dump_only=True, allow_none=True)
+    vehicle_make = fields.Str(dump_only=True, allow_none=True)
+    vehicle_model = fields.Str(dump_only=True, allow_none=True)
+    vehicle_year = fields.Int(dump_only=True, allow_none=True)
+    vehicle_mileage = fields.Int(dump_only=True, allow_none=True)
+    provider = fields.Str(dump_only=True, allow_none=True)
+    checkout_mode = fields.Str(dump_only=True, allow_none=True)
+    provider_data = fields.Dict(dump_only=True, allow_none=True)
+    answers = fields.List(fields.Dict(), dump_only=True)
 
 
 # --- Availability calendar -------------------------------------------------
