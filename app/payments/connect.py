@@ -34,14 +34,31 @@ class ConnectError(RuntimeError):
         self.code = code
 
 
-def _client():
-    import stripe
-
+def _secret_key() -> str:
     secret_key = current_app.config.get("STRIPE_SECRET_KEY")
     if not secret_key:
         raise ConnectError("Stripe is not configured for this deployment.", code="not_configured")
-    stripe.api_key = secret_key
+    return str(secret_key)
+
+
+def _client():
+    import stripe
+
+    stripe.api_key = _secret_key()
     return stripe
+
+
+def _v2_client():
+    """A ``StripeClient`` instance for the v2 Core Accounts API - see
+    create_connected_account. Only new-account creation uses this; every
+    other Connect call in this module (retrieve, AccountLink, webhooks)
+    stays on the classic module-level ``stripe.<Resource>`` pattern, which
+    keeps working unchanged against v2-created accounts (Stripe's v1
+    endpoints accept a v2 account id and respond in v1 shape - see
+    docs/STRIPE_CONNECT_SETUP.md)."""
+    import stripe
+
+    return stripe.StripeClient(_secret_key())
 
 
 def _get_or_create_settings(garage: Garage) -> GaragePaymentSettings:
@@ -54,26 +71,68 @@ def _get_or_create_settings(garage: Garage) -> GaragePaymentSettings:
 
 
 def create_connected_account(garage: Garage) -> str:
-    """Create (or return the existing) Express connected account for
-    ``garage``. Idempotent: a second call for a garage that already has one
-    just returns its id - never creates a duplicate account."""
+    """Create (or return the existing) connected account for ``garage``.
+    Idempotent: a second call for a garage that already has one just
+    returns its id - never creates a duplicate account.
+
+    Creates new accounts through the Accounts v2 API (``/v2/core/accounts``)
+    - Stripe's current guidance for all new Connect account creation; the v1
+    Accounts API (``stripe.Account.create``) now warns that it's not
+    recommended for new integrations. The account is configured to
+    reproduce a v1 Express account's behaviour under Direct Charges exactly
+    (see docs/STRIPE_CONNECT_SETUP.md's "Accounts v2 migration" section for
+    the full reasoning):
+
+    - ``dashboard="express"`` - the same limited, CoMaz-branded dashboard a
+      v1 ``type="express"`` account got.
+    - ``defaults.responsibilities`` both ``"stripe"`` - Stripe collects its
+      own processing fee directly from the connected account's charge and
+      is liable for the account's negative balances, matching a v1 Express
+      account's default (CoMaz requests no ``application_fee_amount`` and
+      has never taken a platform cut - see app/payments/providers/
+      stripe_provider.py).
+    - ``configuration.merchant.capabilities.card_payments`` - the same
+      capability a v1 Express account requested; nothing else CoMaz uses
+      (payment method eligibility, e.g. wallets) depends on requesting a
+      capability by name in v2.
+
+    Every account created before this change remains an ordinary v1
+    Express account, untouched - this only changes what happens for a
+    garage connecting Stripe for the first time from here on.
+    """
     settings = _get_or_create_settings(garage)
     if settings.stripe_account_id:
         return settings.stripe_account_id
 
-    stripe = _client()
+    import stripe
+
+    client = _v2_client()
     try:
-        account = stripe.Account.create(
-            type="express",
-            country="GB",
-            email=garage.email,
-            metadata={"garage_id": str(garage.id)},
-            capabilities={
-                "card_payments": {"requested": True},
-                "transfers": {"requested": True},
-            },
+        account = client.v2.core.accounts.create(
+            {
+                "contact_email": garage.email,
+                "display_name": garage.name,
+                "dashboard": "express",
+                "identity": {"country": "GB", "entity_type": "company"},
+                "configuration": {
+                    "merchant": {"capabilities": {"card_payments": {"requested": True}}}
+                },
+                "defaults": {
+                    "currency": "gbp",
+                    "locales": ["en-GB"],
+                    "responsibilities": {"fees_collector": "stripe", "losses_collector": "stripe"},
+                },
+                "metadata": {"garage_id": str(garage.id)},
+            }
         )
-    except stripe.error.StripeError as exc:  # pragma: no cover - real API only
+    except stripe.StripeError as exc:  # pragma: no cover - real API only
+        current_app.logger.warning(
+            "STRIPE_CONNECT_ACCOUNT_CREATE_FAILED garage=%s code=%s request_id=%s",
+            garage.id,
+            getattr(exc, "code", None),
+            getattr(exc, "request_id", None),
+            exc_info=True,
+        )
         raise ConnectError(str(exc), code=getattr(exc, "code", None)) from exc
 
     settings.stripe_account_id = account.id
@@ -122,6 +181,11 @@ def _apply_account_fields(settings: GaragePaymentSettings, account: dict) -> Non
     settings.stripe_onboarding_complete = settings.stripe_details_submitted
 
 
+def _booking_domain() -> str | None:
+    hostname = urlparse(current_app.config.get("BOOKING_BASE_URL", "")).hostname
+    return str(hostname) if hostname else None
+
+
 def _register_payment_method_domain(stripe, settings: GaragePaymentSettings) -> None:
     """Apple Pay requires the public booking domain to be registered - per
     connected account, since Direct Charges make the connected account the
@@ -140,12 +204,18 @@ def _register_payment_method_domain(stripe, settings: GaragePaymentSettings) -> 
     """
     if not settings.stripe_charges_enabled:
         return
-    domain = urlparse(current_app.config.get("BOOKING_BASE_URL", "")).hostname
+    domain = _booking_domain()
     if not domain:
         return
     try:
         stripe.PaymentMethodDomain.create(
             domain_name=domain, stripe_account=settings.stripe_account_id
+        )
+        current_app.logger.info(
+            "PAYMENT_METHOD_DOMAIN_REGISTERED garage=%s account=%s domain=%s",
+            settings.garage_id,
+            settings.stripe_account_id,
+            domain,
         )
     except Exception:  # see docstring: never block onboarding on this
         current_app.logger.warning(
@@ -155,6 +225,54 @@ def _register_payment_method_domain(stripe, settings: GaragePaymentSettings) -> 
             domain,
             exc_info=True,
         )
+
+
+def get_wallet_domain_status(garage: Garage) -> dict | None:
+    """Live Apple Pay/wallet readiness for ``garage``'s connected account -
+    not persisted, always fetched fresh, since it's Stripe's own
+    verification state (registering the domain does not mean Apple Pay is
+    immediately usable - Stripe verifies domain ownership asynchronously).
+
+    Returns ``None`` when there's nothing to check yet (no connected
+    account, no charges capability, or the lookup itself failed - this is
+    a wallet nicety, never allowed to break the caller). Otherwise:
+    ``{"domain": ..., "enabled": ..., "apple_pay_status": ..., "apple_pay_status_details": ...}``
+    """
+    settings = garage.payment_settings
+    if settings is None or not settings.stripe_account_id or not settings.stripe_charges_enabled:
+        return None
+    domain = _booking_domain()
+    if not domain:
+        return None
+
+    try:
+        stripe = _client()
+        domains = stripe.PaymentMethodDomain.list(
+            domain_name=domain, stripe_account=settings.stripe_account_id
+        )
+    except Exception:
+        current_app.logger.warning(
+            "PAYMENT_METHOD_DOMAIN_STATUS_LOOKUP_FAILED garage=%s account=%s domain=%s",
+            settings.garage_id,
+            settings.stripe_account_id,
+            domain,
+            exc_info=True,
+        )
+        return None
+
+    data = domains.get("data") if hasattr(domains, "get") else domains["data"]
+    if not data:
+        return None
+    record = data[0]
+    if hasattr(record, "to_dict"):
+        record = record.to_dict()
+    apple_pay = record.get("apple_pay") or {}
+    return {
+        "domain": record.get("domain_name"),
+        "enabled": record.get("enabled"),
+        "apple_pay_status": apple_pay.get("status"),
+        "apple_pay_status_details": (apple_pay.get("status_details") or {}).get("error_message"),
+    }
 
 
 def refresh_connect_status(garage: Garage) -> GaragePaymentSettings:
@@ -196,4 +314,13 @@ def sync_account_from_webhook(account: dict) -> None:
     if settings is None:
         return
     _apply_account_fields(settings, account)
+    # Registers the Apple Pay domain the moment Stripe reports this account
+    # can take charges, even if nobody ever opens Payments settings again -
+    # see _register_payment_method_domain. Building the client can itself
+    # fail (e.g. no Stripe key configured in this environment); that must
+    # never break processing of a real, verified webhook event.
+    try:
+        _register_payment_method_domain(_client(), settings)
+    except ConnectError:
+        pass
     db.session.commit()
