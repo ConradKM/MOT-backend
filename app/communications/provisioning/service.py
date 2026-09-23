@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from twilio.base.exceptions import TwilioRestException
+
 from app.conversation import automation
 from app.extensions import db
 from app.models.communications.comms_onboarding import GarageCommunicationsOnboarding
@@ -175,7 +177,11 @@ def action_attach_subaccount(
 
 
 def action_buy_voice_number(
-    garage: Garage, *, phone_number: str, already_owned: bool = False
+    garage: Garage,
+    *,
+    phone_number: str,
+    already_owned: bool = False,
+    acknowledge_whatsapp: bool = False,
 ) -> GarageCommunicationsOnboarding:
     """Buy (or adopt) a voice number and assign it to this business.
 
@@ -183,6 +189,12 @@ def action_buy_voice_number(
     never live-but-unconfigured; the state still passes through
     NUMBER_ASSIGNED → WEBHOOKS_CONFIGURED so the console can show what
     happened rather than jumping two steps silently.
+
+    ``already_owned=True`` (adopting a number this business's own subaccount
+    already holds at Twilio) is refused outright if any CoMaz business has a
+    WhatsApp sender registered on that number, unless ``acknowledge_whatsapp``
+    is explicitly set - see ``voice.transfer_from_parent``'s docstring for
+    why this matters even for a number that was never actually moved.
     """
     row = ensure_onboarding(garage)
     settings = ensure_settings(garage)
@@ -190,6 +202,17 @@ def action_buy_voice_number(
     if not settings.twilio_subaccount_sid:
         raise ProvisioningActionError(
             "Create this business's Twilio subaccount before buying a number."
+        )
+
+    if (
+        already_owned
+        and voice.whatsapp_configured_elsewhere(phone_number)
+        and not acknowledge_whatsapp
+    ):
+        raise ProvisioningActionError(
+            f"{phone_number} has a WhatsApp sender registered somewhere in CoMaz. Confirm this "
+            "is intentional before adopting it for voice.",
+            code="whatsapp_configured",
         )
 
     if settings.voice_phone_number:
@@ -226,6 +249,138 @@ def action_buy_voice_number(
         row.voice_webhooks_configured = True
         row.voice_webhooks_configured_at = _now()
         row.voice_status = states.VOICE_WEBHOOKS_CONFIGURED
+
+    db.session.commit()
+    return row
+
+
+def action_discover_voice_numbers(garage: Garage) -> dict:
+    """Numbers Platform Admin can safely offer for "Use existing number" -
+    read-only, changes nothing.
+
+    Two lists, matching the two safe adoption paths:
+
+    * ``subaccount`` - already owned by this business, ready to adopt
+      immediately (see ``action_buy_voice_number(..., already_owned=True)``).
+    * ``parent`` - owned by CoMaz's shared parent account, offerable as an
+      explicit "Move to this business" action
+      (``action_transfer_voice_number``).
+
+    A number in a *different* business's subaccount is never listed here -
+    Twilio's account-scoped APIs make that structurally impossible to
+    discover this way, which is exactly the point (see
+    ``action_lookup_voice_number`` for the one path that can tell "assigned
+    elsewhere" apart from "genuinely external").
+    """
+    settings = garage.communication_settings
+    subaccount_numbers: list[dict] = []
+    if settings and settings.twilio_subaccount_sid:
+        try:
+            subaccount_numbers = voice.list_owned_numbers(garage)
+        except (VoiceProvisioningError, SubaccountError) as exc:
+            raise ProvisioningActionError(str(exc), code=getattr(exc, "code", None)) from exc
+
+    try:
+        parent_numbers = voice.list_parent_numbers()
+    except VoiceProvisioningError as exc:
+        raise ProvisioningActionError(str(exc), code=getattr(exc, "code", None)) from exc
+
+    return {"subaccount": subaccount_numbers, "parent": parent_numbers}
+
+
+def action_lookup_voice_number(garage: Garage, phone_number: str) -> dict:
+    """Classify a number an admin typed in, for the "I have another number"
+    path - read-only, never assigns or marks anything ready from this alone.
+
+    Returns ``{"status": ..., "detail": ...}`` where ``status`` is one of:
+
+    * ``own_subaccount`` - already usable via ``already_owned=True``.
+    * ``parent`` - usable via ``action_transfer_voice_number``, with its SID.
+    * ``assigned_elsewhere`` - a different CoMaz business already has it;
+      refused, never offered.
+    * ``external`` - not found anywhere in CoMaz's Twilio account hierarchy.
+      Genuinely external numbers cannot be searched for by exact match
+      across accounts CoMaz doesn't control - Twilio's API has no such
+      lookup - so this is a definitive "not here", not "not found yet".
+    """
+    other = voice.claimed_by_other_garage(phone_number, garage)
+    if other is not None:
+        return {"status": "assigned_elsewhere", "detail": other.name}
+
+    settings = garage.communication_settings
+    if settings and settings.twilio_subaccount_sid:
+        try:
+            for number in voice.list_owned_numbers(garage):
+                if number["phone_number"] == phone_number:
+                    return {"status": "own_subaccount", "detail": number}
+        except (VoiceProvisioningError, SubaccountError) as exc:
+            raise ProvisioningActionError(str(exc), code=getattr(exc, "code", None)) from exc
+
+    try:
+        for number in voice.list_parent_numbers():
+            if number["phone_number"] == phone_number:
+                return {"status": "parent", "detail": number}
+    except VoiceProvisioningError as exc:
+        raise ProvisioningActionError(str(exc), code=getattr(exc, "code", None)) from exc
+
+    return {"status": "external", "detail": None}
+
+
+def action_transfer_voice_number(
+    garage: Garage, *, phone_number_sid: str, acknowledge_whatsapp: bool = False
+) -> GarageCommunicationsOnboarding:
+    """Move a number from CoMaz's parent Twilio account into this business's
+    subaccount, then configure and assign it - the explicit, human-confirmed
+    "Move to this business" action for Case 2 of "Use existing number".
+
+    Idempotent the same way ``action_buy_voice_number`` is: a business that
+    already has a number is left untouched rather than attempting a second
+    transfer.
+    """
+    row = ensure_onboarding(garage)
+    settings = ensure_settings(garage)
+
+    if not settings.twilio_subaccount_sid:
+        raise ProvisioningActionError(
+            "Create this business's Twilio subaccount before transferring a number to it."
+        )
+
+    if settings.voice_phone_number:
+        return row
+
+    if not acknowledge_whatsapp:
+        try:
+            current = voice.get_twilio_account_management_client()
+            fetched = current.incoming_phone_numbers(phone_number_sid).fetch() if current else None
+        except TwilioRestException:
+            # A lookup failure here isn't this action's error to report -
+            # transfer_from_parent below re-fetches and raises properly.
+            fetched = None
+        if fetched is not None and voice.whatsapp_configured_elsewhere(fetched.phone_number):
+            raise ProvisioningActionError(
+                f"{fetched.phone_number} has a WhatsApp sender registered somewhere in CoMaz. "
+                "Confirm this is intentional before moving it.",
+                code="whatsapp_configured",
+            )
+
+    previous = row.voice_status
+    row.voice_status = states.VOICE_NUMBER_PURCHASING
+    db.session.flush()
+
+    try:
+        result = voice.transfer_from_parent(garage, phone_number_sid)
+    except (VoiceProvisioningError, SubaccountError) as exc:
+        row.voice_status = previous
+        _fail_voice(row, exc, status=row.voice_status)
+        raise ProvisioningActionError(str(exc), code=getattr(exc, "code", None)) from exc
+
+    _clear_voice_error(row)
+    settings.voice_phone_number = result["phone_number"]
+    settings.voice_number_sid = result["sid"]
+    row.voice_number_sid = result["sid"]
+    row.voice_webhooks_configured = True
+    row.voice_webhooks_configured_at = _now()
+    row.voice_status = states.VOICE_WEBHOOKS_CONFIGURED
 
     db.session.commit()
     return row

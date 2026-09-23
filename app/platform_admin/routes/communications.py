@@ -32,6 +32,8 @@ from app.communications.provisioning.service import (
     action_complete_embedded_signup,
     action_configure_voice,
     action_create_subaccount,
+    action_discover_voice_numbers,
+    action_lookup_voice_number,
     action_mark_migration_complete,
     action_mark_voice_online,
     action_reconfigure_whatsapp_webhooks,
@@ -45,6 +47,7 @@ from app.communications.provisioning.service import (
     action_submit_verification_code,
     action_test_voice,
     action_test_whatsapp,
+    action_transfer_voice_number,
 )
 from app.communications.provisioning.voice import VoiceProvisioningError
 from app.models.platform.audit_log import (
@@ -74,6 +77,7 @@ from app.platform_admin.schemas import (
     EmbeddedSignupConfigSchema,
     EmbeddedSignupResultSchema,
     ErrorCatalogueSchema,
+    ExistingVoiceNumbersSchema,
     SenderRegistrationSchema,
     SubaccountAttachSchema,
     TestCallResultSchema,
@@ -82,7 +86,10 @@ from app.platform_admin.schemas import (
     TestMessageSchema,
     ToggleSchema,
     VerificationCodeSchema,
+    VoiceNumberLookupQuerySchema,
+    VoiceNumberLookupResultSchema,
     VoiceNumberPurchaseSchema,
+    VoiceNumberTransferSchema,
     VoiceRoutingSchema,
     WhatsAppNumberSchema,
 )
@@ -287,6 +294,7 @@ class VoiceNumber(MethodView):
                 garage,
                 phone_number=data["phone_number"],
                 already_owned=data.get("already_owned", False),
+                acknowledge_whatsapp=data.get("acknowledge_whatsapp", False),
             )
         except ProvisioningActionError as exc:
             abort(422, message=str(exc))
@@ -297,6 +305,77 @@ class VoiceNumber(MethodView):
             f"{data['phone_number']} for {garage.name}",
             phone_number=data["phone_number"],
             already_owned=bool(data.get("already_owned")),
+        )
+        return communications_detail(garage)
+
+
+@platform_communications_blp.route(
+    "/tenants/<uuid:garage_id>/communications/voice/existing-numbers"
+)
+class VoiceExistingNumbers(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.response(200, ExistingVoiceNumbersSchema)
+    def get(self, garage_id):
+        """Numbers safe to offer for "Use existing number": already in this
+        business's own subaccount, or sitting in CoMaz's parent account
+        waiting to be moved. Read-only - nothing is reserved or changed.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            return action_discover_voice_numbers(garage)
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc))
+
+
+@platform_communications_blp.route("/tenants/<uuid:garage_id>/communications/voice/number/lookup")
+class VoiceNumberLookup(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.arguments(VoiceNumberLookupQuerySchema, location="query")
+    @platform_communications_blp.response(200, VoiceNumberLookupResultSchema)
+    def get(self, args, garage_id):
+        """Classify a number an admin typed in for "I have another number" -
+        read-only. Never marks a number ready or assigns it purely because
+        it was typed; a genuinely external number is a definitive "not in
+        CoMaz's Twilio account hierarchy", not "not found yet".
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            return action_lookup_voice_number(garage, args["phone_number"])
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc))
+
+
+@platform_communications_blp.route("/tenants/<uuid:garage_id>/communications/voice/number/transfer")
+class VoiceNumberTransfer(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.arguments(VoiceNumberTransferSchema)
+    @platform_communications_blp.response(200, CommunicationsDetailSchema)
+    def post(self, data, garage_id):
+        """Move a number from CoMaz's parent Twilio account into this
+        business's subaccount - the explicit, human-confirmed action for a
+        number offered as "Available in CoMaz Twilio account".
+
+        Refused if the number no longer shows as parent-owned (already
+        moved, by this request or another), or if it already belongs to a
+        different CoMaz business.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            action_transfer_voice_number(
+                garage,
+                phone_number_sid=data["phone_number_sid"],
+                acknowledge_whatsapp=data.get("acknowledge_whatsapp", False),
+            )
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc))
+        _audit(
+            garage,
+            ACTION_COMMS_VOICE_NUMBER,
+            f"Moved voice number into subaccount for {garage.name}",
+            phone_number_sid=data["phone_number_sid"],
         )
         return communications_detail(garage)
 

@@ -1115,6 +1115,43 @@ class VoiceNumberPurchaseSchema(Schema):
     #: new one - never a silent fallback, because one spends money and the
     #: other does not.
     already_owned = fields.Bool(load_default=False)
+    #: Required to be true when the number already has a WhatsApp sender
+    #: registered somewhere in CoMaz - Twilio never moves WhatsApp sender
+    #: configuration with a number, so this can only ever be a deliberate
+    #: acknowledgement, never inferred.
+    acknowledge_whatsapp = fields.Bool(load_default=False)
+
+
+class ExistingVoiceNumberSchema(Schema):
+    phone_number = fields.Str(dump_only=True)
+    sid = fields.Str(dump_only=True)
+    friendly_name = fields.Str(dump_only=True, allow_none=True)
+    capabilities = fields.List(fields.Str(), dump_only=True)
+    whatsapp_configured = fields.Bool(dump_only=True)
+
+
+class ExistingVoiceNumbersSchema(Schema):
+    subaccount = fields.List(fields.Nested(ExistingVoiceNumberSchema), dump_only=True)
+    parent = fields.List(fields.Nested(ExistingVoiceNumberSchema), dump_only=True)
+
+
+class VoiceNumberLookupQuerySchema(Schema):
+    phone_number = fields.Str(required=True, validate=_E164)
+
+
+class VoiceNumberLookupResultSchema(Schema):
+    status = fields.Str(
+        dump_only=True,
+        validate=validate.OneOf(["own_subaccount", "parent", "assigned_elsewhere", "external"]),
+    )
+    #: An owning business's name (assigned_elsewhere), a matched
+    #: ExistingVoiceNumberSchema (own_subaccount/parent), or null (external).
+    detail = fields.Raw(dump_only=True, allow_none=True)
+
+
+class VoiceNumberTransferSchema(Schema):
+    phone_number_sid = fields.Str(required=True, validate=validate.Length(min=10, max=64))
+    acknowledge_whatsapp = fields.Bool(load_default=False)
 
 
 class VoiceRoutingSchema(Schema):
