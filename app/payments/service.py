@@ -325,7 +325,9 @@ def reconcile_public_payment_recovery(booking_request: BookingRequest) -> Bookin
         db.session.commit()
         for created in notifications:
             emit_event(BOOKING_REQUEST_CREATED, garage=created.garage, booking_request=created)
-    return locked_request
+    # Flask-SQLAlchemy's dynamic query typing loses the model type at
+    # ``one()``.  The query is constrained to BookingRequest.id above.
+    return cast(BookingRequest, locked_request)
 
 
 def refund_deposit(
