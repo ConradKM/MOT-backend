@@ -3,10 +3,11 @@ OpenAI Realtime model calls during a phone call.
 """
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 from app.ai_voice.instructions import build_instructions
 from app.ai_voice.tools import TOOL_SCHEMAS, VoiceToolState, dispatch_tool
+from app.conversation import actions
 from app.models.ai_voice_faq import GarageVoiceFAQ
 from app.models.booking_request import BookingRequest
 
@@ -482,6 +483,30 @@ def test_reschedule_appointment_moves_the_callers_own_appointment(
     assert result["ok"] is True
     assert appt.start_time.date() == new_day
     assert appt.start_time.strftime("%H:%M") == "10:00"
+
+
+def test_reschedule_uses_the_existing_appointments_duration_not_edited_service(
+    session, garage, garage_schedule, appointment_type, make_appointment
+):
+    old_start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+    appointment = make_appointment(old_start, minutes=90)
+    # This is a catalogue edit for future customers, not a rewrite of the
+    # appointment's actual 90-minute duration.
+    appointment_type.default_duration_minutes = 30
+    session.commit()
+
+    moved, reason = actions.reschedule_appointment(
+        garage,
+        appointment,
+        _future_weekday(days_ahead=10),
+        time(16, 0),
+    )
+
+    # The default schedule closes at 17:00: the outdated 30-minute type
+    # would appear to fit, but the actual appointment ends at 17:30.
+    assert moved is False
+    assert reason == "outside_hours"
+    assert appointment.start_time == old_start
 
 
 def test_live_voice_appointment_mutation_requires_lookup_and_confirmation(

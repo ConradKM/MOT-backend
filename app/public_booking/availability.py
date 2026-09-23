@@ -375,7 +375,9 @@ def _type_duration(appointment_type: "GarageAppointmentType | None", settings: _
     return settings.default_appointment_minutes
 
 
-def single_day(garage, day: date, now: datetime, appointment_type=None) -> dict:
+def single_day(
+    garage, day: date, now: datetime, appointment_type=None, duration_min: int | None = None
+) -> dict:
     """Payload for GET /api/public/<slug>/availability/<date>.
 
     ``appointment_type`` is the service the customer has selected (optional -
@@ -387,7 +389,9 @@ def single_day(garage, day: date, now: datetime, appointment_type=None) -> dict:
     hours_map = resolve_opening_hours(garage)
     today = now.date()
     exceptions = resolve_exceptions(garage, day, day)
-    duration = _type_duration(appointment_type, settings)
+    duration = (
+        duration_min if duration_min is not None else _type_duration(appointment_type, settings)
+    )
     # The same duration drives the summary as drives the slots: this endpoint
     # already knows the service, so reporting a generic `level` next to
     # service-specific `slots` would contradict itself within one payload.
@@ -436,7 +440,13 @@ def slot_capacity_usage(
 
 
 def validate_slot(
-    garage, day: date, slot_time: time, now: datetime, appointment_type=None
+    garage,
+    day: date,
+    slot_time: time,
+    now: datetime,
+    appointment_type=None,
+    exclude_appointment_id=None,
+    duration_min: int | None = None,
 ) -> str | None:
     """Submit-time re-check that ``(day, slot_time)`` is genuinely bookable, by
     the same rules the customer calendar uses. Returns ``None`` when it is, or a
@@ -463,7 +473,9 @@ def validate_slot(
         return "closed"
 
     opens_at, closes_at = hrs
-    duration = _type_duration(appointment_type, settings)
+    duration = (
+        duration_min if duration_min is not None else _type_duration(appointment_type, settings)
+    )
     start_m = _minutes(slot_time)
     if start_m < _minutes(opens_at) or start_m + duration > _minutes(closes_at):
         return "outside_hours"
@@ -474,7 +486,13 @@ def validate_slot(
     if slot_start < now + timedelta(hours=settings.min_lead_time_hours):
         return "too_soon"
 
-    used, capacity = slot_capacity_usage(garage, day, slot_start, duration)
+    used, capacity = slot_capacity_usage(
+        garage,
+        day,
+        slot_start,
+        duration,
+        exclude_appointment_id=exclude_appointment_id,
+    )
     if used >= capacity:
         return "full"
 

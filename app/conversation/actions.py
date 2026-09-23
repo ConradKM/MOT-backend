@@ -56,12 +56,16 @@ def get_appointment_types(garage) -> list[GarageAppointmentType]:
     return [t for t in garage.appointment_types if t.status == "ACTIVE"]
 
 
-def get_availability_for_day(garage, day: date, *, appointment_type=None, now=None) -> dict:
+def get_availability_for_day(
+    garage, day: date, *, appointment_type=None, duration_min: int | None = None, now=None
+) -> dict:
     """Real, live slots for one day - exactly what the public booking
     calendar shows (app/public_booking/availability.py::single_day). Never
     duplicated/re-derived - this *is* the availability service."""
     now = now or datetime.now(UTC)
-    return availability.single_day(garage, day, now, appointment_type=appointment_type)
+    return availability.single_day(
+        garage, day, now, appointment_type=appointment_type, duration_min=duration_min
+    )
 
 
 def latest_bookable_day(garage, *, now=None) -> date:
@@ -309,12 +313,34 @@ def reschedule_appointment(
     (app/appointments/routes.py), applied here so a conversational
     reschedule can never double-book either the garage or one employee.
     """
+    # Share the same garage lock as public booking, staff scheduling and
+    # payment reinstatement.  Without it, two callers can both revalidate a
+    # last-capacity slot before either reschedule commits.
+    db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
+    appointment = (
+        Appointment.query.filter_by(id=appointment.id, garage_id=garage.id)
+        .with_for_update()
+        .first()
+    )
+    if appointment is None:
+        return False, "not_found"
+    if appointment.status == "CANCELLED":
+        return False, "already_cancelled"
+    if appointment.status == "COMPLETED":
+        return False, "already_completed"
+
     duration = appointment.end_time - appointment.start_time
     new_start = datetime.combine(new_day, new_time, tzinfo=UTC)
     new_end = new_start + duration
 
-    reason = revalidate_slot(
-        garage, new_day, new_time, appointment_type=appointment.appointment_type
+    reason = availability.validate_slot(
+        garage,
+        new_day,
+        new_time,
+        datetime.now(UTC),
+        appointment_type=appointment.appointment_type,
+        exclude_appointment_id=appointment.id,
+        duration_min=int(duration.total_seconds() // 60),
     )
     if reason is not None:
         return False, reason
