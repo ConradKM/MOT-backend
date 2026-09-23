@@ -27,8 +27,12 @@ from datetime import UTC, datetime
 from flask import current_app
 from twilio.base.exceptions import TwilioRestException
 
+from app.communications.client import get_twilio_account_management_client
 from app.communications.config import is_twilio_configured
 from app.extensions import db
+from app.models.communications.garage_communication_settings import (
+    GarageCommunicationSettings,
+)
 from app.models.garage import Garage
 
 from .subaccounts import SubaccountError, get_client_for_subaccount_resources
@@ -115,6 +119,160 @@ def search_available_numbers(
         }
         for number in found
     ]
+
+
+def claimed_by_other_garage(phone_number: str, garage: Garage) -> Garage | None:
+    """The *other* CoMaz business already recording this number, if any.
+
+    Belt-and-braces: ``voice_phone_number`` already carries a database
+    unique constraint, so this can never be bypassed - but a clear refusal
+    here is better than surfacing that constraint's raw IntegrityError to an
+    admin picking a number from a list.
+    """
+    row = (
+        db.session.query(GarageCommunicationSettings)
+        .filter(
+            GarageCommunicationSettings.voice_phone_number == phone_number,
+            GarageCommunicationSettings.garage_id != garage.id,
+        )
+        .first()
+    )
+    return row.garage if row else None
+
+
+def whatsapp_configured_elsewhere(phone_number: str) -> bool:
+    """Whether *any* CoMaz business has this number registered as a
+    WhatsApp sender - including this same business, since a number moving
+    accounts at Twilio never moves its WhatsApp sender configuration with
+    it (Twilio's own documented behaviour). A caller must treat this as a
+    reason to stop and require explicit confirmation, never to silently
+    transfer or reconfigure."""
+    return (
+        db.session.query(GarageCommunicationSettings.id)
+        .filter(GarageCommunicationSettings.whatsapp_sender == phone_number)
+        .first()
+        is not None
+    )
+
+
+def _number_summary(number, *, whatsapp_flag: bool = True) -> dict:
+    return {
+        "phone_number": number.phone_number,
+        "sid": number.sid,
+        "friendly_name": getattr(number, "friendly_name", None),
+        "capabilities": _capability_list(getattr(number, "capabilities", None)),
+        "whatsapp_configured": (
+            whatsapp_configured_elsewhere(number.phone_number) if whatsapp_flag else False
+        ),
+    }
+
+
+def list_owned_numbers(garage: Garage) -> list[dict]:
+    """Numbers already owned by this business's own Twilio subaccount -
+    Case 1 of "Use existing number": nothing to buy or transfer, only to
+    adopt and configure."""
+    if not is_twilio_configured():
+        raise VoiceProvisioningError("Twilio is not configured for this deployment.")
+
+    client = get_client_for_subaccount_resources(garage)
+    try:
+        numbers = client.incoming_phone_numbers.list(limit=50)
+    except TwilioRestException as exc:
+        raise _twilio_error(exc, "Twilio could not list this business's numbers.") from exc
+
+    return [_number_summary(n) for n in numbers]
+
+
+def list_parent_numbers() -> list[dict]:
+    """Numbers owned by CoMaz's own parent Twilio account - Case 2 of "Use
+    existing number": available to move into a business's subaccount, but
+    never automatically.
+
+    Never scoped to a garage: the parent account is shared platform
+    infrastructure, not any one business's resource.
+    """
+    if not is_twilio_configured():
+        raise VoiceProvisioningError("Twilio is not configured for this deployment.")
+
+    client = get_twilio_account_management_client()
+    if client is None:  # pragma: no cover - guarded by is_twilio_configured above
+        raise VoiceProvisioningError("Twilio client unavailable.")
+
+    try:
+        numbers = client.incoming_phone_numbers.list(limit=50)
+    except TwilioRestException as exc:
+        raise _twilio_error(exc, "Twilio could not list the parent account's numbers.") from exc
+
+    return [_number_summary(n) for n in numbers]
+
+
+def transfer_from_parent(garage: Garage, phone_number_sid: str) -> dict:
+    """Move a number Twilio shows as owned by CoMaz's parent account into
+    this business's own subaccount, then point it at CoMaz's webhooks.
+
+    Uses Twilio's own documented mechanism for moving a number between
+    accounts: updating the number resource's ``account_sid``, authenticated
+    with credentials that can act on its *current* owning account - here,
+    the parent account client, exactly like ``list_parent_numbers`` uses.
+
+    Fails closed rather than trusting the caller's claim that this number is
+    parent-owned: the number is re-fetched from Twilio first, and the
+    transfer is refused unless Twilio itself currently reports it under the
+    parent account. A number already moved elsewhere (by a concurrent
+    request, or by hand in the console) is never silently moved again.
+    """
+    if not is_twilio_configured():
+        raise VoiceProvisioningError("Twilio is not configured for this deployment.")
+
+    settings = garage.communication_settings
+    subaccount_sid = settings.twilio_subaccount_sid if settings else None
+    if not subaccount_sid:
+        raise VoiceProvisioningError(
+            "Create this business's Twilio subaccount before transferring a number to it."
+        )
+
+    parent_client = get_twilio_account_management_client()
+    if parent_client is None:  # pragma: no cover - guarded above
+        raise VoiceProvisioningError("Twilio client unavailable.")
+
+    parent_account_sid = current_app.config["TWILIO_ACCOUNT_SID"]
+
+    try:
+        current = parent_client.incoming_phone_numbers(phone_number_sid).fetch()
+    except TwilioRestException as exc:
+        raise _twilio_error(
+            exc, "Twilio could not find that number on the parent account."
+        ) from exc
+
+    if getattr(current, "account_sid", None) != parent_account_sid:
+        raise VoiceProvisioningError(
+            f"{current.phone_number} is no longer owned by CoMaz's parent account - it may "
+            "already have been moved. Refresh and try again."
+        )
+
+    other = claimed_by_other_garage(current.phone_number, garage)
+    if other is not None:
+        raise VoiceProvisioningError(f"{current.phone_number} is already assigned to {other.name}.")
+
+    try:
+        moved = parent_client.incoming_phone_numbers(phone_number_sid).update(
+            account_sid=subaccount_sid
+        )
+    except TwilioRestException as exc:
+        raise _twilio_error(exc, "Twilio refused to move that number to this business.") from exc
+
+    logger.info(
+        "[provisioning] transferred voice number %s (%s) from parent account to garage %s "
+        "subaccount %s",
+        moved.phone_number,
+        moved.sid,
+        garage.id,
+        subaccount_sid,
+    )
+
+    # Now owned by the subaccount - point it at CoMaz's webhooks the same
+    # way a fresh purchase or an in-subaccount adoption does.
+    return configure_number(garage, moved.sid)
 
 
 def _capability_list(capabilities: object) -> list[str]:
