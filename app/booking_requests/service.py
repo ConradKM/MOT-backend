@@ -196,11 +196,20 @@ def expire_stale_booking_requests(garage_id=None, now: datetime | None = None, s
     if not stale_ids:
         return 0
 
-    BookingRequest.query.filter(BookingRequest.id.in_(stale_ids)).update(
-        {"status": "EXPIRED"}, synchronize_session=False
+    # The initial read is deliberately cheap, but it must not be treated as
+    # authority for the later write: a reviewer can approve one of these
+    # requests in the gap.  Keep the state precondition in the UPDATE itself
+    # so expiry can never overwrite a completed approval.
+    expired = (
+        session.query(BookingRequest)
+        .filter(
+            BookingRequest.id.in_(stale_ids),
+            BookingRequest.status == "PENDING",
+        )
+        .update({"status": "EXPIRED"}, synchronize_session=False)
     )
     session.commit()
-    return len(stale_ids)
+    return int(expired)
 
 
 def slot_check_for_request(booking_request: BookingRequest, now: datetime | None = None):
@@ -241,17 +250,19 @@ def slot_check_for_request(booking_request: BookingRequest, now: datetime | None
 
 
 def _duration_minutes_for(booking_request: BookingRequest) -> int | None:
-    """Best-known duration: the type's current default when it's still
-    around, else the snapshot taken at submission time (covers a type edited
-    or - since it's a nullable FK - deleted while this request was pending),
-    else the garage's generic default."""
+    """Best-known duration, preferring the immutable request snapshot.
+
+    This must mirror public availability: an owner changing a service's
+    duration after the customer submitted cannot rewrite the reservation or
+    the staff review's capacity check for that request.
+    """
+    if booking_request.requested_duration_minutes is not None:
+        return booking_request.requested_duration_minutes
     if (
         booking_request.appointment_type
         and booking_request.appointment_type.default_duration_minutes
     ):
         return booking_request.appointment_type.default_duration_minutes
-    if booking_request.requested_duration_minutes is not None:
-        return booking_request.requested_duration_minutes
     if booking_request.garage is None:
         return None
     return resolve_settings(booking_request.garage).default_appointment_minutes

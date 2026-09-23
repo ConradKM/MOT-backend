@@ -147,18 +147,19 @@ def _load_day_usage(garage_id, day: date):
 
 
 def _pending_request_duration(pending_request: BookingRequest, settings: "_Settings") -> int:
-    """The duration a PENDING request itself reserves - its selected
-    appointment type's current duration; the snapshot taken at submission
-    time if that type has since been edited to have none or deleted
-    (BookingRequest.appointment_type_id is a nullable FK, so this can
-    happen); the garage's generic default otherwise. Matches
-    _duration_minutes_for in app/booking_requests/service.py, which the
-    review screen uses for the same request."""
+    """The duration a PENDING request itself reserves.
+
+    A request's snapshot is authoritative even if an owner later edits the
+    catalogue type: otherwise shortening a 90-minute service could release
+    the final hour of a customer's live reservation, while lengthening it
+    could consume capacity they never requested.  Legacy rows without the
+    snapshot retain the current-type/default fallback.
+    """
+    if pending_request.requested_duration_minutes is not None:
+        return pending_request.requested_duration_minutes
     appt_type = pending_request.appointment_type
     if appt_type is not None and appt_type.default_duration_minutes is not None:
         return appt_type.default_duration_minutes
-    if pending_request.requested_duration_minutes is not None:
-        return pending_request.requested_duration_minutes
     return settings.default_appointment_minutes
 
 

@@ -79,12 +79,20 @@ def _resolve_appointment_slot(booking_request, data, appointment_type):
 
     end_time = data.get("end_time")
     if end_time is None:
-        if appointment_type.default_duration_minutes is None:
+        # The request captures the service duration the customer actually
+        # selected.  A later catalogue edit must affect future bookings only,
+        # not silently shorten or lengthen this customer's approved slot.
+        duration_minutes = (
+            booking_request.requested_duration_minutes
+            if booking_request.requested_duration_minutes is not None
+            else appointment_type.default_duration_minutes
+        )
+        if duration_minutes is None:
             abort(
                 422,
                 message="end_time is required - this appointment type has no default duration.",
             )
-        end_time = start_time + timedelta(minutes=appointment_type.default_duration_minutes)
+        end_time = start_time + timedelta(minutes=duration_minutes)
 
     if start_time >= end_time:
         abort(422, message="start_time must be before end_time.")
