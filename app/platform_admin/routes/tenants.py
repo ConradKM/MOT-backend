@@ -54,8 +54,10 @@ from app.platform_admin.provisioning import (
     update_opening_hours,
     update_service,
 )
+from app.platform_admin.readiness import business_readiness
 from app.platform_admin.schemas import (
     BookingSettingsSchema,
+    BusinessReadinessSchema,
     FeatureFlagListSchema,
     FeatureFlagUpdateSchema,
     ImpersonationGrantSchema,
@@ -234,6 +236,22 @@ class TenantResource(MethodView):
         except TenantError as exc:
             abort(422, message=str(exc))
         return {"message": "Business permanently deleted."}
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/readiness")
+class TenantReadiness(MethodView):
+    @jwt_required()
+    @platform_admin_required
+    @platform_tenants_blp.response(200, BusinessReadinessSchema)
+    def get(self, garage_id):
+        """Go-live checklist: business setup, payments, communications.
+
+        Read-only and derived from each area's own authoritative state (the
+        same rows Tenant Detail, Payments and Communications Setup already
+        render) - never fabricated from ID presence alone, so a Stripe
+        account with charges disabled reports not-ready here too.
+        """
+        return business_readiness(_require_tenant(garage_id))
 
 
 @platform_tenants_blp.route("/tenants/<uuid:garage_id>/suspend")
