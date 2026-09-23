@@ -89,3 +89,57 @@ def test_buy_number_never_confuses_a_different_number_for_an_existing_purchase(m
 
     assert len(client.incoming_phone_numbers.create_calls) == 1
     assert result["sid"] == "PNnew0000000000000000000000000001"
+
+
+class _FakeOwnedNumber:
+    def __init__(self, phone_number, sid, account_sid):
+        self.phone_number = phone_number
+        self.sid = sid
+        self.account_sid = account_sid
+        self.update_calls = []
+
+    def fetch(self):
+        return self
+
+    def update(self, **kwargs):
+        self.update_calls.append(kwargs)
+        self.account_sid = kwargs.get("account_sid", self.account_sid)
+        return self
+
+
+class _FakeSubaccountResourceClient:
+    def __init__(self, number: _FakeOwnedNumber):
+        self._number = number
+
+    def incoming_phone_numbers(self, sid):
+        assert sid == self._number.sid
+        return self._number
+
+
+def test_return_to_parent_moves_a_subaccount_owned_number_back(monkeypatch, garage):
+    number = _FakeOwnedNumber(
+        "+441234567890", "PNowned0000000000000000000000001", "ACsubaccount000000000000000000001"
+    )
+    client = _FakeSubaccountResourceClient(number)
+    monkeypatch.setattr(voice, "get_client_for_subaccount_resources", lambda g: client)
+
+    result = voice.return_to_parent(garage, number.sid)
+
+    assert number.update_calls == [{"account_sid": "ACmaster0000000000000000000000001"}]
+    assert result["sid"] == number.sid
+
+
+def test_return_to_parent_is_idempotent_if_already_moved(monkeypatch, garage):
+    """A prior attempt's Twilio call succeeded but its result was never
+    recorded - the retry must recognise that and not attempt to move an
+    already-parent-owned number again."""
+    number = _FakeOwnedNumber(
+        "+441234567890", "PNowned0000000000000000000000001", "ACmaster0000000000000000000000001"
+    )
+    client = _FakeSubaccountResourceClient(number)
+    monkeypatch.setattr(voice, "get_client_for_subaccount_resources", lambda g: client)
+
+    result = voice.return_to_parent(garage, number.sid)
+
+    assert number.update_calls == []  # already parent-owned - no provider mutation attempted
+    assert result["sid"] == number.sid

@@ -386,6 +386,55 @@ def action_transfer_voice_number(
     return row
 
 
+def action_return_voice_number_to_parent(
+    garage: Garage, *, acknowledge_whatsapp: bool = False
+) -> GarageCommunicationsOnboarding:
+    """Move this business's voice number out of its subaccount and back into
+    CoMaz's shared parent inventory - never released or deleted, so the
+    existing discovery flow (``voice.list_parent_numbers``) finds it again
+    for whichever business it goes to next.
+
+    Idempotent: a business with no number is left untouched. The provider
+    move always happens before any local state is cleared - a crash between
+    the two leaves Twilio authoritative and the next retry recovers by
+    re-checking Twilio (see ``voice.return_to_parent``), never by assuming
+    success from the database alone.
+    """
+    row = ensure_onboarding(garage)
+    settings = ensure_settings(garage)
+
+    number_sid = settings.voice_number_sid or row.voice_number_sid
+    if not settings.voice_phone_number or not number_sid:
+        return row
+
+    if not acknowledge_whatsapp and voice.whatsapp_configured_elsewhere(
+        settings.voice_phone_number
+    ):
+        raise ProvisioningActionError(
+            f"{settings.voice_phone_number} has a WhatsApp sender registered somewhere in "
+            "CoMaz. Confirm this is intentional before returning it.",
+            code="whatsapp_configured",
+        )
+
+    try:
+        voice.return_to_parent(garage, number_sid)
+    except (VoiceProvisioningError, SubaccountError) as exc:
+        _fail_voice(row, exc, status=states.VOICE_ACTION_REQUIRED)
+        raise ProvisioningActionError(str(exc), code=getattr(exc, "code", None)) from exc
+
+    # Only cleared once Twilio has confirmed (or already reflected) the move.
+    _clear_voice_error(row)
+    settings.voice_phone_number = None
+    settings.voice_number_sid = None
+    row.voice_number_sid = None
+    row.voice_webhooks_configured = False
+    row.voice_webhooks_configured_at = None
+    row.voice_status = states.VOICE_SUBACCOUNT_READY
+
+    db.session.commit()
+    return row
+
+
 def action_configure_voice(garage: Garage) -> GarageCommunicationsOnboarding:
     """(Re)point this business's number at CoMaz's voice webhooks."""
     row = ensure_onboarding(garage)
