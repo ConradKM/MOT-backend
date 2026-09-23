@@ -196,6 +196,7 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
         return 0
 
     expired_count = 0
+    created_notifications: list[BookingRequest] = []
     for request_id in stale_ids:
         # Lock the request and its payment state before deciding whether to
         # expire.  A payment webhook and the sweeper may arrive together;
@@ -209,7 +210,9 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
         ):
             continue
         payment = _locked_active_payment(booking_request)
-        if payment is not None and _reconcile_if_already_succeeded(booking_request, payment, now):
+        if payment is not None and _reconcile_if_already_succeeded(
+            booking_request, payment, now, created_notifications
+        ):
             continue
 
         booking_request.status = "EXPIRED"
@@ -243,11 +246,18 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
             )
 
     db.session.commit()
+    for booking_request in created_notifications:
+        emit_event(
+            BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request
+        )
     return expired_count
 
 
 def _reconcile_if_already_succeeded(
-    booking_request: BookingRequest, payment: BookingPayment, now: datetime
+    booking_request: BookingRequest,
+    payment: BookingPayment,
+    now: datetime,
+    created_notifications: list[BookingRequest] | None = None,
 ) -> bool:
     """``True`` (and the booking/payment already updated) if the provider's
     own live status for ``payment`` says it actually succeeded - the same
@@ -285,9 +295,8 @@ def _reconcile_if_already_succeeded(
     payment.paid_at = now
     booking_request.status = "PENDING"
     booking_request.payment_hold_expires_at = None
-    emit_event(
-        BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request
-    )
+    if created_notifications is not None:
+        created_notifications.append(booking_request)
     record_payment_event(
         garage_id=payment.garage_id,
         booking_request_id=booking_request.id,
@@ -429,18 +438,23 @@ def process_webhook(
         db.session.rollback()
         return
 
-    _dispatch(event)
+    created_notifications: list[BookingRequest] = []
+    _dispatch(event, created_notifications)
     record.processed_at = datetime.now(UTC)
     db.session.commit()
+    for booking_request in created_notifications:
+        emit_event(
+            BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request
+        )
 
 
-def _dispatch(event: ProviderWebhookEvent) -> None:
+def _dispatch(event: ProviderWebhookEvent, created_notifications: list[BookingRequest]) -> None:
     """Dispatches purely on the adapter-normalised ``kind`` - never a
     provider-native event type/name. Every adapter maps its own vocabulary
     to these constants in its own ``verify_webhook`` (see
     app/payments/providers/base.py)."""
     if event.kind == WEBHOOK_PAYMENT_SUCCEEDED:
-        _handle_payment_succeeded(event)
+        _handle_payment_succeeded(event, created_notifications)
     elif event.kind == WEBHOOK_PAYMENT_FAILED:
         _handle_payment_failed(event)
     elif event.kind == WEBHOOK_PAYMENT_CANCELLED:
@@ -507,7 +521,9 @@ def _locked_active_payment(booking_request: BookingRequest) -> BookingPayment | 
     return live[-1] if live else (payments[-1] if payments else None)
 
 
-def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
+def _handle_payment_succeeded(
+    event: ProviderWebhookEvent, created_notifications: list[BookingRequest]
+) -> None:
     payment = _find_payment(event.provider_payment_id, event.provider_account_id)
     if payment is None or payment.status == "SUCCEEDED":
         return  # unknown intent, or already handled (duplicate/out-of-order)
@@ -519,12 +535,10 @@ def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
     if booking_request.status == "AWAITING_PAYMENT":
         booking_request.status = "PENDING"
         booking_request.payment_hold_expires_at = None
-        # The booking only becomes visible/actionable to staff now - this is
-        # the deposit-flow's equivalent of the plain submit path's
-        # BOOKING_REQUEST_CREATED emit (see app/public_booking/routes.py).
-        emit_event(
-            BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request
-        )
+        # Queue the external notification until the payment/webhook
+        # transaction has committed.  A handler must never confirm a booking
+        # that a later database error rolled back.
+        created_notifications.append(booking_request)
     elif booking_request.status == "EXPIRED":
         # A belated success for a hold that had already been expired -
         # expire_stale_payment_holds re-checks live provider status before
@@ -534,7 +548,8 @@ def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
         # The money is real either way; what's still open is whether the
         # slot is. Only reinstate the booking if it genuinely still is -
         # never overwrite a slot someone else has since taken.
-        _reinstate_or_flag_expired_booking(booking_request, payment)
+        if _reinstate_or_flag_expired_booking(booking_request, payment):
+            created_notifications.append(booking_request)
 
     record_payment_event(
         garage_id=payment.garage_id,
@@ -547,7 +562,7 @@ def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
 
 def _reinstate_or_flag_expired_booking(
     booking_request: BookingRequest, payment: BookingPayment
-) -> None:
+) -> bool:
     """A payment succeeded for a booking that's already EXPIRED. If its
     original slot is still genuinely free, reinstate the booking exactly as
     a normal success would (never assumed - re-validated the same way a
@@ -574,9 +589,6 @@ def _reinstate_or_flag_expired_booking(
 
     if reason is None:
         booking_request.status = "PENDING"
-        emit_event(
-            BOOKING_REQUEST_CREATED, garage=booking_request.garage, booking_request=booking_request
-        )
         record_payment_event(
             garage_id=payment.garage_id,
             booking_request_id=booking_request.id,
@@ -585,6 +597,7 @@ def _reinstate_or_flag_expired_booking(
             summary="Deposit succeeded after the hold had already expired; the slot "
             "was still free, so the booking was reinstated.",
         )
+        return True
     else:
         current_app.logger.error(
             "Deposit payment %s succeeded for booking %s, but its hold had already "
@@ -603,6 +616,7 @@ def _reinstate_or_flag_expired_booking(
             f"slot is no longer available ({reason}) - needs manual follow-up "
             f"(refund or rebook).",
         )
+    return False
 
 
 def _handle_payment_failed(event: ProviderWebhookEvent) -> None:
