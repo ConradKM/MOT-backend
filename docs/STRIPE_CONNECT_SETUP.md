@@ -9,9 +9,11 @@ does not receive or store a garage's Stripe credentials.
 Stripe deprecated `/v1/accounts` for *creating* new connected accounts in
 favour of `/v2/core/accounts` - `app/payments/connect.py::
 create_connected_account` uses the v2 API for every new account from here
-on. Nothing else changed: v1's `Account.retrieve`/`AccountLink`/webhooks all
-keep working unmodified against a v2-created account, because Stripe's v1
-endpoints accept a v2 account id and respond in v1 shape (Stripe's own
+on. Account Links use `/v2/core/account_links` as well, with the account's
+`merchant` configuration; a v2 account cannot start onboarding through the
+legacy `/v1/account_links` endpoint. Status retrieval and existing webhook
+handling continue to use v1-compatible account identifiers, because Stripe's
+v1 endpoints accept a v2 account id and respond in v1 shape (Stripe's own
 "Accounts v2" docs: "you can still pass the ID of a v2 Account to an
 Accounts v1 API endpoint... the response is structured as a v1 Account").
 Every account created before this change remains an ordinary v1 Express

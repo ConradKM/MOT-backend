@@ -11,7 +11,11 @@ from app.models.booking_request import BookingRequest
 from app.models.payments.garage_payment_settings import GaragePaymentSettings
 from app.models.payments.payment import BookingPayment
 from app.models.payments.webhook_event import PaymentWebhookEvent
-from app.payments.connect import create_connected_account, refresh_connect_status
+from app.payments.connect import (
+    create_account_link,
+    create_connected_account,
+    refresh_connect_status,
+)
 from app.payments.providers.base import (
     WEBHOOK_ACCOUNT_UPDATED,
     WEBHOOK_PAYMENT_SUCCEEDED,
@@ -90,18 +94,34 @@ class _FakeV2Accounts:
         return type("V2Account", (), {"id": self.account_id})()
 
 
+class _FakeV2AccountLinks:
+    def __init__(self):
+        self.created = []
+
+    def create(self, params):
+        self.created.append(params)
+        return type("V2AccountLink", (), {"url": "https://connect.stripe.test/onboarding"})()
+
+
 def _patch_v2_create(monkeypatch, account_id="acct_connect_a"):
     """Patch ``app.payments.connect._v2_client`` so
     ``create_connected_account`` succeeds without a real Stripe account -
     returns the ``_FakeV2Accounts`` recorder to assert on."""
     accounts = _FakeV2Accounts(account_id)
+    links = _FakeV2AccountLinks()
     v2_client = type(
         "V2Client",
         (),
-        {"v2": type("V2", (), {"core": type("Core", (), {"accounts": accounts})()})()},
+        {
+            "v2": type(
+                "V2",
+                (),
+                {"core": type("Core", (), {"accounts": accounts, "account_links": links})()},
+            )()
+        },
     )()
     monkeypatch.setattr("app.payments.connect._v2_client", lambda: v2_client)
-    return accounts
+    return accounts, links
 
 
 class _PaymentMethodDomainApi:
@@ -118,7 +138,7 @@ def test_connect_account_creation_and_status_refresh(session, garage, monkeypatc
     domains = _PaymentMethodDomainApi()
     stripe = type("Stripe", (), {"Account": api, "PaymentMethodDomain": domains})()
     monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
-    v2_accounts = _patch_v2_create(monkeypatch)
+    v2_accounts, _ = _patch_v2_create(monkeypatch)
 
     assert create_connected_account(garage) == "acct_connect_a"
     assert create_connected_account(garage) == "acct_connect_a"  # idempotent
@@ -144,6 +164,34 @@ def test_connect_account_creation_and_status_refresh(session, garage, monkeypatc
     assert len(domains.created) == 1
     assert domains.created[0]["stripe_account"] == "acct_connect_a"
     assert domains.created[0]["domain_name"]  # the configured BOOKING_BASE_URL's host
+
+
+def test_v2_account_link_uses_the_same_v2_lifecycle_and_fresh_urls(session, garage, monkeypatch):
+    """Regression for production: a v2 account cannot be onboarded through
+    the legacy v1 AccountLink endpoint. Retries retain this garage's account
+    but mint a fresh tenant-bound onboarding link."""
+    accounts, links = _patch_v2_create(monkeypatch)
+    create_connected_account(garage)
+
+    first = create_account_link(
+        garage,
+        return_url="https://app.comaz.co.uk/a/settings/payments?onboarding=return",
+        refresh_url="https://app.comaz.co.uk/a/settings/payments?onboarding=refresh",
+    )
+    second = create_account_link(
+        garage,
+        return_url="https://app.comaz.co.uk/a/settings/payments?onboarding=return",
+        refresh_url="https://app.comaz.co.uk/a/settings/payments?onboarding=refresh",
+    )
+
+    assert first == second == "https://connect.stripe.test/onboarding"
+    assert len(accounts.created) == 1
+    assert len(links.created) == 2
+    assert all(item["account"] == "acct_connect_a" for item in links.created)
+    onboarding = links.created[0]["use_case"]["account_onboarding"]
+    assert onboarding["configurations"] == ["merchant"]
+    assert onboarding["return_url"].endswith("onboarding=return")
+    assert onboarding["refresh_url"].endswith("onboarding=refresh")
 
 
 def test_backfill_cli_registers_the_domain_for_an_already_onboarded_garage(

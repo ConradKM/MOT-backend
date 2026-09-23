@@ -29,7 +29,7 @@ from flask import current_app
 from twilio.base.exceptions import TwilioRestException
 from twilio.rest import Client
 
-from app.communications.client import get_twilio_client
+from app.communications.client import get_twilio_account_management_client
 from app.communications.config import is_twilio_configured
 from app.communications.secrets import (
     CURRENT_KEY_VERSION,
@@ -148,7 +148,10 @@ def create_subaccount(garage: Garage) -> str:
             "be stored safely. Set it before creating subaccounts."
         )
 
-    client = get_twilio_client()
+    # ``POST /2010-04-01/Accounts`` is denied to ordinary API keys.  This
+    # intentionally uses the parent Account SID/Auth Token management client
+    # even when normal REST traffic is configured to use an API key.
+    client = get_twilio_account_management_client()
     if client is None:  # pragma: no cover - guarded by is_twilio_configured above
         raise SubaccountError("Twilio client unavailable.")
 
@@ -272,9 +275,7 @@ def get_client_for_subaccount_resources(garage: Garage) -> Client:
             f"{garage.name} has no Twilio subaccount yet - create one before buying a number."
         )
 
+    # A main-account API key cannot access subaccount resources.  Twilio
+    # explicitly supports parent SID/Auth Token for these v2010 paths.
     cfg = current_app.config
-    api_key_sid = cfg.get("TWILIO_API_KEY_SID")
-    api_key_secret = cfg.get("TWILIO_API_KEY_SECRET")
-    if api_key_sid and api_key_secret:
-        return Client(api_key_sid, api_key_secret, subaccount_sid)
     return Client(cfg["TWILIO_ACCOUNT_SID"], cfg["TWILIO_AUTH_TOKEN"], subaccount_sid)

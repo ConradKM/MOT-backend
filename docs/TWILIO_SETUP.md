@@ -60,7 +60,7 @@ Set these in the deployment's environment (never commit real values -
 | --- | --- | --- |
 | `TWILIO_ACCOUNT_SID` | to enable communications | Platform master account SID |
 | `TWILIO_AUTH_TOKEN` | to enable communications | Platform master account Auth Token. Verifies inbound webhook signatures (no API-key equivalent); also authenticates the REST client when no API key is set. |
-| `TWILIO_API_KEY_SID` | no (recommended for production) | Standard API Key SID (`SK…`). When set with its secret, the **outbound REST client** authenticates with the key + Account SID instead of the Auth Token. |
+| `TWILIO_API_KEY_SID` | no (recommended for main-account-only REST calls) | Standard API Key SID (`SK…`). When set with its secret, the **main-account** REST client authenticates with the key + Account SID instead of the Auth Token. Account management and parent-to-subaccount v2010 calls still require the parent Account SID + Auth Token: Twilio denies those endpoints to ordinary parent API keys. |
 | `TWILIO_API_KEY_SECRET` | no (with `TWILIO_API_KEY_SID`) | The API Key's secret. Both must be set for key auth to take effect; otherwise the client falls back to Account SID + Auth Token. |
 | `TWILIO_TWIML_APP_SID` | no (for browser calling) | A TwiML Application SID (`AP…`). With the API key above, staff can place outbound calls from the Communications UI: `GET /api/communications/voice/token` mints a short-lived Voice Access Token and Twilio fetches call instructions from `POST /api/communications/voice/outbound`. |
 | `TWILIO_VOICE_TOKEN_TTL` | no (default `3600`) | Lifetime, in seconds, of a browser Voice Access Token. |
