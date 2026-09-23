@@ -15,6 +15,7 @@ from app.communications.events import (
     emit_event,
 )
 from app.extensions import db
+from app.garages.timezones import local_slot_as_utc
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_status import GarageAppointmentStatus
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -183,10 +184,10 @@ def _check_capacity(garage, start_time, end_time, exclude_appointment_id=None):
         )
 
 
-def _day_bounds(day):
+def _day_bounds(garage, day):
     return (
-        datetime.combine(day, time.min, tzinfo=UTC),
-        datetime.combine(day, time.max, tzinfo=UTC),
+        local_slot_as_utc(garage, day, time.min),
+        local_slot_as_utc(garage, day, time.max),
     )
 
 
@@ -198,6 +199,7 @@ class AppointmentList(MethodView):
     @appointments_blp.response(200, AppointmentSchema(many=True))
     def get(self, args):
         garage_id = get_current_employee().garage_id
+        garage = Garage.query.filter_by(id=garage_id).one()
 
         query = Appointment.query.filter_by(garage_id=garage_id)
 
@@ -216,18 +218,22 @@ class AppointmentList(MethodView):
         if args.get("appointment_type_id") is not None:
             query = query.filter(Appointment.appointment_type_id == args["appointment_type_id"])
 
-        # Calendar-day filters compare against UTC day boundaries, since
-        # start_time is always stored and compared as an absolute instant.
+        # Date query values name the business calendar day; convert its local
+        # boundary to UTC before filtering persisted appointment instants.
         if args.get("date") is not None:
-            day_start, day_end = _day_bounds(args["date"])
+            day_start, day_end = _day_bounds(garage, args["date"])
             query = query.filter(
                 Appointment.start_time >= day_start, Appointment.start_time <= day_end
             )
         else:
             if args.get("start_date") is not None:
-                query = query.filter(Appointment.start_time >= _day_bounds(args["start_date"])[0])
+                query = query.filter(
+                    Appointment.start_time >= _day_bounds(garage, args["start_date"])[0]
+                )
             if args.get("end_date") is not None:
-                query = query.filter(Appointment.start_time <= _day_bounds(args["end_date"])[1])
+                query = query.filter(
+                    Appointment.start_time <= _day_bounds(garage, args["end_date"])[1]
+                )
 
         return query.order_by(Appointment.start_time).all()
 
