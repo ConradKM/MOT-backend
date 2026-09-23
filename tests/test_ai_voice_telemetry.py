@@ -105,6 +105,37 @@ def test_finish_call_sets_measured_duration_and_reason(session, garage):
     assert row.duration_seconds >= 0
 
 
+def test_finish_call_calculates_openai_and_twilio_cost_from_measured_usage(session, garage):
+    telemetry.start_call(garage.id, "call_1")
+    telemetry.record_usage("call_1", input_tokens=1000, output_tokens=500, cached_input_tokens=100)
+
+    telemetry.finish_call("call_1", end_reason=END_REASON_HANGUP)
+
+    row = VoiceCallMetrics.query.filter_by(external_call_id="call_1").one()
+    # OPENAI_REALTIME_MODEL defaults to gpt-realtime-2.1 in TestConfig.
+    assert row.openai_cost_amount is not None
+    assert row.openai_cost_currency == "USD"
+    assert row.openai_cost_is_estimated is True
+    assert row.openai_pricing_version == "openai:gpt-realtime-2.1:2026-09"
+    assert row.twilio_cost_amount is not None
+    assert row.twilio_cost_is_estimated is True
+    assert row.twilio_pricing_version is not None
+
+
+def test_finish_call_leaves_cost_null_for_an_unrecognised_model(session, garage, app):
+    app.config["OPENAI_REALTIME_MODEL"] = "some-future-model"
+    telemetry.start_call(garage.id, "call_1")
+    telemetry.record_usage("call_1", input_tokens=1000, output_tokens=500)
+
+    telemetry.finish_call("call_1", end_reason=END_REASON_HANGUP)
+
+    row = VoiceCallMetrics.query.filter_by(external_call_id="call_1").one()
+    assert row.openai_cost_amount is None
+    assert row.openai_pricing_version is None
+    # Twilio's flat-rate calculation is independent of the OpenAI model.
+    assert row.twilio_cost_amount is not None
+
+
 # --------------------------------------------------------------------------
 # Wired into the live call-control loop
 # --------------------------------------------------------------------------

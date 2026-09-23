@@ -16,11 +16,15 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from flask import current_app
+
 from app.extensions import db
 from app.models.communications.voice_call_metrics import (
     PROVIDER_OPENAI_REALTIME_SIP,
     VoiceCallMetrics,
 )
+
+from . import pricing
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +132,11 @@ def record_usage(
 
 
 def finish_call(external_call_id: str, *, end_reason: str) -> None:
+    """Closes out the call's measured duration and, from that plus the
+    usage already accumulated by record_usage, calculates its estimated
+    OpenAI and Twilio infrastructure cost - see app/ai_voice/pricing.py for
+    what "estimated" means here and why neither figure is ever a
+    provider-billed actual."""
     try:
         row = _get(external_call_id)
         if row is None:
@@ -135,6 +144,30 @@ def finish_call(external_call_id: str, *, end_reason: str) -> None:
         row.ended_at = _now()
         row.duration_seconds = max(0, int((row.ended_at - row.started_at).total_seconds()))
         row.end_reason = end_reason
+
+        model = current_app.config.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1")
+        openai_amount, openai_version = pricing.calculate_openai_cost(
+            model=model,
+            input_tokens=row.input_tokens,
+            output_tokens=row.output_tokens,
+            cached_input_tokens=row.cached_input_tokens,
+            duration_seconds=row.duration_seconds,
+        )
+        if openai_amount is not None:
+            row.openai_cost_amount = openai_amount
+            row.openai_cost_currency = "USD"
+            row.openai_cost_is_estimated = True
+            row.openai_pricing_version = openai_version
+
+        twilio_amount, twilio_version = pricing.calculate_twilio_cost(
+            duration_seconds=row.duration_seconds
+        )
+        if twilio_amount is not None:
+            row.twilio_cost_amount = twilio_amount
+            row.twilio_cost_currency = "USD"
+            row.twilio_cost_is_estimated = True
+            row.twilio_pricing_version = twilio_version
+
         db.session.commit()
     except Exception:
         db.session.rollback()
