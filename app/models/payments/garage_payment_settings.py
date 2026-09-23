@@ -67,7 +67,8 @@ class GaragePaymentSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type:
     merchant_account_reference: Mapped[str | None] = mapped_column(String(255))
 
     # --- Stripe Connect ------------------------------------------------
-    # One Express connected account per business (see app/payments/connect.py).
+    # One tenant-bound connected account per business (see
+    # app/payments/connect.py).
     # Direct Charges: the connected account is the merchant of record for its
     # own customers' deposits - CoMaz's platform Stripe account never holds
     # that money. Populated once onboarding starts; never a secret (Stripe

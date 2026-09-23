@@ -1,7 +1,7 @@
 # Stripe Connect setup
 
-CoMaz is the Stripe Connect platform. Each garage gets an Express connected
-account and customer deposits are **Direct Charges** on that account. CoMaz
+CoMaz is the Stripe Connect platform. Each garage gets a connected account
+and customer deposits are **Direct Charges** on that account. CoMaz
 does not receive or store a garage's Stripe credentials.
 
 ## Accounts v2 migration (new accounts only)
@@ -19,15 +19,20 @@ Accounts v1 API endpoint... the response is structured as a v1 Account").
 Every account created before this change remains an ordinary v1 Express
 account, untouched.
 
-The new account is configured to reproduce a v1 `type="express"` account's
-default behaviour exactly:
+The new account uses Stripe's supported Stripe-managed Direct Charges
+configuration:
 
-| v1 (old) | v2 (new) | Meaning |
+| Accounts v2 property | Value | Meaning |
 | --- | --- | --- |
-| `type="express"` | `dashboard="express"` | Same limited, CoMaz-branded Express Dashboard. |
-| (default) | `defaults.responsibilities.fees_collector="stripe"` | Stripe deducts its processing fee directly from the connected account's charge - CoMaz takes no platform cut (no `application_fee_amount` is set anywhere in this codebase). |
-| (default) | `defaults.responsibilities.losses_collector="stripe"` | Stripe is liable for the connected account's negative balances, same as a v1 Express account. |
-| `capabilities.card_payments` | `configuration.merchant.capabilities.card_payments` | The only capability CoMaz has ever requested. |
+| `dashboard` | `"full"` | The business has its own full Stripe Dashboard. Accounts v2 requires this dashboard when Stripe collects fees and bears negative-balance losses. |
+| `defaults.responsibilities.fees_collector` | `"stripe"` | Stripe deducts its processing fee directly from the connected account's charge - CoMaz takes no platform cut (no `application_fee_amount` is set anywhere in this codebase). |
+| `defaults.responsibilities.losses_collector` | `"stripe"` | Stripe is liable for the connected account's negative balances. |
+| `configuration.merchant.capabilities.card_payments` | requested | The only capability CoMaz currently requests. |
+
+`dashboard="express"` is incompatible with Stripe as both fee and loss
+collector in Accounts v2. Do not change the dashboard to Express unless CoMaz
+also deliberately takes both responsibilities and the associated compliance
+and risk obligations.
 
 **Before ever using this in Live mode**, verify in Stripe *Test* mode that a
 freshly-created v2 account behaves identically end to end: connect a test
@@ -71,7 +76,7 @@ server-selected connected account ID.
    payment events are processed at the Connect endpoint; this endpoint keeps
    provider configuration explicit and supports any platform events.
 4. Deploy, sign in as the garage owner, go to **Settings → Payments**, and
-   choose **Connect Stripe**. Complete Stripe's hosted Express onboarding.
+   choose **Connect Stripe**. Complete Stripe's hosted onboarding.
    Returning to CoMaz refreshes the account from Stripe; only
    `charges_enabled` makes deposits available.
 5. Enable a deposit on an appointment type, make a public booking, and use
