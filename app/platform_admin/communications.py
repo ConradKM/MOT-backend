@@ -30,6 +30,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, or_, select
 
+from app.ai_voice.config import openai_voice_enabled
 from app.communications.provisioning import states
 from app.communications.provisioning.errors import explain
 from app.communications.provisioning.subaccounts import has_credential
@@ -70,6 +71,7 @@ ACTION_CONFIGURE_VOICE = "configure_voice"
 ACTION_SET_VOICE_ROUTING = "set_voice_routing"
 ACTION_TEST_VOICE = "test_voice"
 ACTION_MARK_VOICE_ONLINE = "mark_voice_online"
+ACTION_ENABLE_OPENAI_VOICE = "enable_openai_voice"
 ACTION_CONNECT_WHATSAPP = "connect_whatsapp"
 ACTION_MARK_MIGRATION_COMPLETE = "mark_migration_complete"
 ACTION_CONTINUE_META_SETUP = "continue_meta_setup"
@@ -89,6 +91,7 @@ ACTION_ENABLE_COMMUNICATIONS = "enable_communications"
 ACTION_LABELS: dict[str, str] = {
     ACTION_CREATE_SUBACCOUNT: "Create Twilio subaccount",
     ACTION_ATTACH_SUBACCOUNT: "Attach existing subaccount",
+    ACTION_ENABLE_OPENAI_VOICE: "Enable OpenAI Voice",
     ACTION_BUY_VOICE_NUMBER: "Buy voice number",
     ACTION_CONFIGURE_VOICE: "Configure voice",
     ACTION_SET_VOICE_ROUTING: "Set escalation and fallback",
@@ -188,6 +191,27 @@ def _voice_view(
     }
 
 
+def _openai_voice_view(row: GarageCommunicationsOnboarding | None) -> dict:
+    status = row.openai_voice_status if row else states.OPENAI_VOICE_NOT_STARTED
+    meaning = states.openai_voice_meaning(status)
+
+    return {
+        "status": status,
+        "status_label": meaning.label,
+        "display_status": meaning.display,
+        "display_label": states.DISPLAY_LABELS[meaning.display],
+        "blocker": meaning.blocker,
+        "next_admin_action": meaning.admin_action,
+        "trunk_sid": row.openai_voice_trunk_sid if row else None,
+        "ready_at": row.openai_voice_ready_at if row else None,
+        "last_error": _last_error(
+            row.openai_voice_last_error_code if row else None,
+            row.openai_voice_last_error_message if row else None,
+            CHANNEL_VOICE,
+        ),
+    }
+
+
 def _whatsapp_view(
     garage: Garage,
     settings: GarageCommunicationSettings | None,
@@ -267,6 +291,16 @@ def _voice_actions(
         actions.append(ACTION_TEST_VOICE)
         if status != states.VOICE_ONLINE and row and row.voice_webhooks_configured:
             actions.append(ACTION_MARK_VOICE_ONLINE)
+        # A separate lifecycle stage from the number itself - offered as
+        # soon as there is a webhook-configured number to route, regardless
+        # of whether voice has been marked online yet.
+        if (
+            row
+            and row.voice_webhooks_configured
+            and row.openai_voice_status != states.OPENAI_VOICE_READY
+            and openai_voice_enabled()
+        ):
+            actions.append(ACTION_ENABLE_OPENAI_VOICE)
 
     if status in (states.VOICE_FAILED, states.VOICE_ACTION_REQUIRED):
         actions.append(ACTION_RETRY_SETUP)
@@ -628,6 +662,7 @@ def communications_detail(garage: Garage) -> dict:
         "display_label": states.DISPLAY_LABELS[overall],
         "voice": voice,
         "whatsapp": wa,
+        "openai_voice": _openai_voice_view(row),
         "voice_actions": _voice_actions(settings, row),
         "whatsapp_actions": _whatsapp_actions(settings, row),
         "business_actions": _business_actions(garage, settings),

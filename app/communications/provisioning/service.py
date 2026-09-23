@@ -33,7 +33,8 @@ from app.models.communications.garage_communication_settings import (
 )
 from app.models.garage import Garage
 
-from . import states, voice, whatsapp
+from . import openai_voice_sip, states, voice, whatsapp
+from .openai_voice_sip import OpenAIVoiceProvisioningError
 from .subaccounts import (
     SubaccountError,
     adopt_subaccount,
@@ -115,6 +116,18 @@ def _fail_whatsapp(row: GarageCommunicationsOnboarding, exc: Exception, *, statu
     row.whatsapp_status = status
     row.whatsapp_last_error_code = getattr(exc, "code", None)
     row.whatsapp_last_error_message = str(exc)
+    db.session.commit()
+
+
+def _clear_openai_voice_error(row: GarageCommunicationsOnboarding) -> None:
+    row.openai_voice_last_error_code = None
+    row.openai_voice_last_error_message = None
+
+
+def _fail_openai_voice(row: GarageCommunicationsOnboarding, exc: Exception, *, status: str) -> None:
+    row.openai_voice_status = status
+    row.openai_voice_last_error_code = getattr(exc, "code", None)
+    row.openai_voice_last_error_message = str(exc)
     db.session.commit()
 
 
@@ -519,6 +532,51 @@ def action_mark_voice_online(garage: Garage) -> GarageCommunicationsOnboarding:
     row.voice_online_at = _now()
     _clear_voice_error(row)
     settings.communications_enabled = True
+    db.session.commit()
+    return row
+
+
+# --------------------------------------------------------------------------
+# OpenAI Voice
+# --------------------------------------------------------------------------
+
+
+def action_enable_openai_voice(garage: Garage) -> GarageCommunicationsOnboarding:
+    """Route this business's existing voice number through OpenAI Realtime -
+    a deliberately separate, explicit action from buying/adopting a number.
+
+    Requires a webhook-configured voice number first (there is nothing to
+    route otherwise). Idempotent: a business already READY is left
+    untouched rather than re-provisioned, and each provider step underneath
+    (``openai_voice_sip.enable_openai_voice``) is independently idempotent
+    too, so a retry after a crash mid-provisioning resumes rather than
+    creating a second trunk or a duplicate number association.
+    """
+    row = ensure_onboarding(garage)
+    settings = ensure_settings(garage)
+
+    if not settings.voice_phone_number or not settings.voice_number_sid:
+        raise ProvisioningActionError(
+            "This business needs a working voice number before OpenAI Voice can be enabled."
+        )
+
+    if row.openai_voice_status == states.OPENAI_VOICE_READY:
+        return row
+
+    row.openai_voice_status = states.OPENAI_VOICE_TRUNK_CREATING
+    db.session.flush()
+
+    try:
+        trunk_sid = openai_voice_sip.enable_openai_voice(garage, settings.voice_number_sid)
+    except (OpenAIVoiceProvisioningError, SubaccountError) as exc:
+        _fail_openai_voice(row, exc, status=states.OPENAI_VOICE_ACTION_REQUIRED)
+        raise ProvisioningActionError(str(exc), code=getattr(exc, "code", None)) from exc
+
+    _clear_openai_voice_error(row)
+    row.openai_voice_trunk_sid = trunk_sid
+    row.openai_voice_status = states.OPENAI_VOICE_READY
+    row.openai_voice_ready_at = _now()
+
     db.session.commit()
     return row
 

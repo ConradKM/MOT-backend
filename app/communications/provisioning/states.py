@@ -327,6 +327,73 @@ def voice_meaning(status: str | None) -> StateMeaning:
     return VOICE_MEANINGS.get(status or VOICE_NOT_STARTED, VOICE_MEANINGS[VOICE_NOT_STARTED])
 
 
+# --------------------------------------------------------------------------
+# OpenAI Voice
+# --------------------------------------------------------------------------
+#
+# Deliberately its own state machine, not folded into VOICE_STATUSES: a
+# business's Twilio number can be fully ONLINE with OpenAI Voice never
+# enabled at all, and enabling it later must never look like starting voice
+# setup over. See app/models/communications/comms_onboarding.py's
+# "OpenAI Voice" section for why this is a separate column too.
+
+OPENAI_VOICE_NOT_STARTED = "NOT_STARTED"
+OPENAI_VOICE_TRUNK_CREATING = "TRUNK_CREATING"
+OPENAI_VOICE_NUMBER_ASSOCIATING = "NUMBER_ASSOCIATING"
+OPENAI_VOICE_READY = "READY"
+OPENAI_VOICE_ACTION_REQUIRED = "ACTION_REQUIRED"
+OPENAI_VOICE_FAILED = "FAILED"
+
+OPENAI_VOICE_STATUSES = (
+    OPENAI_VOICE_NOT_STARTED,
+    OPENAI_VOICE_TRUNK_CREATING,
+    OPENAI_VOICE_NUMBER_ASSOCIATING,
+    OPENAI_VOICE_READY,
+    OPENAI_VOICE_ACTION_REQUIRED,
+    OPENAI_VOICE_FAILED,
+)
+
+OPENAI_VOICE_MEANINGS: dict[str, StateMeaning] = {
+    OPENAI_VOICE_NOT_STARTED: StateMeaning(
+        label="Not started",
+        display=DISPLAY_SETUP_REQUIRED,
+        blocker="OpenAI Voice has not been enabled for this business.",
+        admin_action="Enable OpenAI Voice",
+    ),
+    OPENAI_VOICE_TRUNK_CREATING: StateMeaning(
+        label="Creating SIP trunk",
+        display=DISPLAY_WAITING_FOR_TWILIO,
+        blocker="Twilio has not yet confirmed this business's Elastic SIP Trunk.",
+        admin_action="Check status",
+    ),
+    OPENAI_VOICE_NUMBER_ASSOCIATING: StateMeaning(
+        label="Associating number",
+        display=DISPLAY_WAITING_FOR_TWILIO,
+        blocker="The voice number has not yet been confirmed on this business's SIP trunk.",
+        admin_action="Check status",
+    ),
+    OPENAI_VOICE_READY: StateMeaning(label="Ready", display=DISPLAY_ONLINE),
+    OPENAI_VOICE_ACTION_REQUIRED: StateMeaning(
+        label="Action required",
+        display=DISPLAY_ACTION_REQUIRED,
+        blocker="OpenAI Voice setup stopped and needs an operator decision.",
+        admin_action="Review the last error and retry",
+    ),
+    OPENAI_VOICE_FAILED: StateMeaning(
+        label="Failed",
+        display=DISPLAY_FAILED,
+        blocker="The last OpenAI Voice provisioning step failed at Twilio.",
+        admin_action="Retry",
+    ),
+}
+
+
+def openai_voice_meaning(status: str | None) -> StateMeaning:
+    return OPENAI_VOICE_MEANINGS.get(
+        status or OPENAI_VOICE_NOT_STARTED, OPENAI_VOICE_MEANINGS[OPENAI_VOICE_NOT_STARTED]
+    )
+
+
 def whatsapp_meaning(status: str | None) -> StateMeaning:
     return WHATSAPP_MEANINGS.get(status or WA_NOT_STARTED, WHATSAPP_MEANINGS[WA_NOT_STARTED])
 

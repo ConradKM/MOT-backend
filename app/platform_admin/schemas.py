@@ -11,6 +11,7 @@ from marshmallow import Schema, fields, validate
 
 from app.communications.provisioning.states import (
     DISPLAY_STATUSES,
+    OPENAI_VOICE_STATUSES,
     VOICE_STATUSES,
     WHATSAPP_STATUSES,
 )
@@ -943,6 +944,19 @@ class VoiceSetupSchema(Schema):
     last_error = fields.Nested(ProviderErrorSchema, dump_only=True, allow_none=True)
 
 
+class OpenAIVoiceSetupSchema(Schema):
+    status = fields.Str(dump_only=True, validate=validate.OneOf(OPENAI_VOICE_STATUSES))
+    status_label = fields.Str(dump_only=True)
+    display_status = fields.Str(dump_only=True, validate=validate.OneOf(DISPLAY_STATUSES))
+    display_label = fields.Str(dump_only=True)
+    blocker = fields.Str(dump_only=True, allow_none=True)
+    next_admin_action = fields.Str(dump_only=True, allow_none=True)
+
+    trunk_sid = fields.Str(dump_only=True, allow_none=True)
+    ready_at = fields.DateTime(dump_only=True, allow_none=True)
+    last_error = fields.Nested(ProviderErrorSchema, dump_only=True, allow_none=True)
+
+
 class ExistingRegistrationSchema(Schema):
     """Instructions for a number already on WhatsApp. Instructions, not an
     action - CoMaz never deletes a customer's WhatsApp account."""
@@ -1038,6 +1052,7 @@ class CommunicationsDetailSchema(Schema):
     display_status = fields.Str(dump_only=True, validate=validate.OneOf(DISPLAY_STATUSES))
     display_label = fields.Str(dump_only=True)
     voice = fields.Nested(VoiceSetupSchema, dump_only=True)
+    openai_voice = fields.Nested(OpenAIVoiceSetupSchema, dump_only=True)
     whatsapp = fields.Nested(WhatsAppSetupSchema, dump_only=True)
     voice_actions = fields.List(fields.Nested(SetupActionSchema), dump_only=True)
     whatsapp_actions = fields.List(fields.Nested(SetupActionSchema), dump_only=True)
