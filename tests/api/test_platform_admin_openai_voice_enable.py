@@ -114,6 +114,6 @@ def test_provider_failure_leaves_a_truthful_action_required_state(
     follow_up = platform_client.get(COMMS.format(garage_id=garage.id))
     detail = follow_up.get_json()["openai_voice"]
     assert detail["status"] == states.OPENAI_VOICE_ACTION_REQUIRED
-    assert detail["last_error"]["code"] == "20003"
+    assert detail["last_error"]["error_code"] == "20003"
     # Never marked ready off a failed provider call, and no trunk recorded.
     assert detail["trunk_sid"] is None
