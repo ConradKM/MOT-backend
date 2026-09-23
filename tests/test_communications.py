@@ -170,6 +170,47 @@ def test_get_twilio_client_uses_api_key_when_both_key_vars_are_set(
     assert client.password != "test-auth-token"
 
 
+def test_account_management_client_uses_parent_auth_token_even_with_an_api_key(
+    app, monkeypatch, _clear_twilio_client
+):
+    """POST /Accounts is deliberately unavailable to Standard API keys."""
+    from app.communications.client import get_twilio_account_management_client
+
+    _configure_twilio(app, monkeypatch)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SID", "SK" + "1" * 32)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SECRET", "key-secret")
+    app.extensions.pop("_twilio_account_management_client", None)
+
+    client = get_twilio_account_management_client()
+
+    assert client is not None
+    assert client.username == "AC" + "0" * 32
+    assert client.password == "test-auth-token"
+
+
+def test_subaccount_resource_client_uses_parent_auth_token_even_with_an_api_key(
+    app, session, garage, monkeypatch
+):
+    """A parent API key cannot operate a subaccount's v2010 resource path."""
+    from app.communications.provisioning.subaccounts import get_client_for_subaccount_resources
+
+    _configure_twilio(app, monkeypatch)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SID", "SK" + "1" * 32)
+    monkeypatch.setitem(app.config, "TWILIO_API_KEY_SECRET", "key-secret")
+    settings = GarageCommunicationSettings(
+        garage_id=garage.id, twilio_subaccount_sid="AC" + "2" * 32
+    )
+    session.add(settings)
+    session.commit()
+    session.refresh(garage)
+
+    client = get_client_for_subaccount_resources(garage)
+
+    assert client.username == "AC" + "0" * 32
+    assert client.password == "test-auth-token"
+    assert client.account_sid == "AC" + "2" * 32
+
+
 def test_get_twilio_client_falls_back_to_auth_token_if_only_key_sid_is_set(
     app, monkeypatch, _clear_twilio_client
 ):

@@ -21,6 +21,7 @@ from twilio.rest import Client
 from .config import is_twilio_configured
 
 _EXT_KEY = "_twilio_client"
+_ACCOUNT_MANAGEMENT_EXT_KEY = "_twilio_account_management_client"
 
 
 def get_twilio_client() -> Client | None:
@@ -48,6 +49,32 @@ def get_twilio_client() -> Client | None:
         client = Client(account_sid, cfg["TWILIO_AUTH_TOKEN"])
 
     current_app.extensions[_EXT_KEY] = client
+    return client
+
+
+def get_twilio_account_management_client() -> Client | None:
+    """A parent-account client for the ``/Accounts`` collection.
+
+    Creating a subaccount is an account-management operation, not an
+    ordinary resource operation.  Twilio deliberately denies it to Standard
+    and Restricted API keys (and a parent API key cannot act on subaccount
+    resources either).  Use the parent Account SID + Auth Token here even
+    when the deployment otherwise uses an API key for routine REST calls.
+
+    Keeping this as a separate, narrowly-scoped client prevents a configured
+    API key from silently turning Platform Admin's "Create Twilio subaccount"
+    action into a 403/70004 failure.
+    """
+    if not is_twilio_configured():
+        return None
+
+    client = current_app.extensions.get(_ACCOUNT_MANAGEMENT_EXT_KEY)
+    if client is not None:
+        return client
+
+    cfg = current_app.config
+    client = Client(cfg["TWILIO_ACCOUNT_SID"], cfg["TWILIO_AUTH_TOKEN"])
+    current_app.extensions[_ACCOUNT_MANAGEMENT_EXT_KEY] = client
     return client
 
 
@@ -81,9 +108,8 @@ def get_twilio_client_for_garage(garage) -> Client | None:
     if not subaccount_sid:
         return base
 
+    # Twilio parent API keys are *not* allowed to access subaccount
+    # resources.  Parent Account SID + Auth Token is the supported parent
+    # credential for v2010 subaccount paths.
     cfg = current_app.config
-    api_key_sid = cfg.get("TWILIO_API_KEY_SID")
-    api_key_secret = cfg.get("TWILIO_API_KEY_SECRET")
-    if api_key_sid and api_key_secret:
-        return Client(api_key_sid, api_key_secret, subaccount_sid)
     return Client(cfg["TWILIO_ACCOUNT_SID"], cfg["TWILIO_AUTH_TOKEN"], subaccount_sid)

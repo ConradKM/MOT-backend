@@ -209,7 +209,7 @@ def test_create_subaccount_stores_the_token_encrypted(
     monkeypatch.setattr(subaccounts, "is_twilio_configured", lambda: True)
     monkeypatch.setattr(
         subaccounts,
-        "get_twilio_client",
+        "get_twilio_account_management_client",
         lambda: SimpleNamespace(
             api=SimpleNamespace(
                 v2010=SimpleNamespace(

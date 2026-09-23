@@ -50,12 +50,9 @@ def _client():
 
 def _v2_client():
     """A ``StripeClient`` instance for the v2 Core Accounts API - see
-    create_connected_account. Only new-account creation uses this; every
-    other Connect call in this module (retrieve, AccountLink, webhooks)
-    stays on the classic module-level ``stripe.<Resource>`` pattern, which
-    keeps working unchanged against v2-created accounts (Stripe's v1
-    endpoints accept a v2 account id and respond in v1 shape - see
-    docs/STRIPE_CONNECT_SETUP.md)."""
+    create_connected_account. New-account creation and Account Link creation
+    use this v2 client; status retrieval and established webhook/payment
+    handling remain on the v1-compatible resource APIs."""
     import stripe
 
     return stripe.StripeClient(_secret_key())
@@ -151,15 +148,29 @@ def create_account_link(garage: Garage, *, return_url: str, refresh_url: str) ->
             code="no_account",
         )
 
-    stripe = _client()
+    client = _v2_client()
     try:
-        link = stripe.AccountLink.create(
-            account=settings.stripe_account_id,
-            return_url=return_url,
-            refresh_url=refresh_url,
-            type="account_onboarding",
+        # Accounts v2 must use Accounts v2 Account Links.  The previous
+        # migration created a v2 account then called legacy
+        # ``POST /v1/account_links``; Stripe rejects that mixed lifecycle,
+        # which surfaced to owners only as the generic setup failure.
+        link = client.v2.core.account_links.create(
+            {
+                "account": settings.stripe_account_id,
+                "use_case": {
+                    "type": "account_onboarding",
+                    "account_onboarding": {
+                        "configurations": ["merchant"],
+                        "return_url": return_url,
+                        "refresh_url": refresh_url,
+                    },
+                },
+            }
         )
-    except stripe.error.StripeError as exc:  # pragma: no cover - real API only
+    except Exception as exc:  # pragma: no cover - real API / SDK only
+        # V2 error classes have moved across the preview SDK releases in the
+        # supported dependency range.  Preserve the safe route boundary for
+        # every provider/SDK failure; the route logs the diagnostic detail.
         raise ConnectError(str(exc), code=getattr(exc, "code", None)) from exc
     return str(link.url)
 
