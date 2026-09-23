@@ -1169,7 +1169,11 @@ def _offer_reschedule_slots(ctx: ConversationContext, appointment, day: date) ->
     handle_awaiting_reschedule_date (date given as a follow-up), so both
     paths check the same real slots before ever proposing a time."""
     payload = actions.get_availability_for_day(
-        ctx.garage, day, appointment_type=appointment.appointment_type, now=ctx.now
+        ctx.garage,
+        day,
+        appointment_type=appointment.appointment_type,
+        duration_min=int((appointment.end_time - appointment.start_time).total_seconds() // 60),
+        now=ctx.now,
     )
     slots = [s for s in payload["slots"] if s["status"] != "booked"] if payload["is_open"] else []
     if not slots:
