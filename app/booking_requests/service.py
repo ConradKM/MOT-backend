@@ -18,9 +18,9 @@ from datetime import UTC, datetime
 
 from flask import current_app, g
 from flask_smorest import abort
-from sqlalchemy import and_, or_
 
 from app.extensions import db
+from app.garages.timezones import local_day_for, local_slot_as_utc, timezone_for
 from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
 from app.models.vehicle import Vehicle
@@ -149,7 +149,7 @@ def is_request_stale(booking_request: BookingRequest, now: datetime | None = Non
     the day itself is still "current" until it ends.
     """
     now = now or datetime.now(UTC)
-    today = now.date()
+    today = local_day_for(booking_request.garage, now)
 
     if booking_request.preferred_date < today:
         return True
@@ -158,7 +158,9 @@ def is_request_stale(booking_request: BookingRequest, now: datetime | None = Non
     # Same day as today.
     if booking_request.preferred_time is None:
         return False
-    return booking_request.preferred_time < now.time()
+    return (
+        booking_request.preferred_time < now.astimezone(timezone_for(booking_request.garage)).time()
+    )
 
 
 def expire_stale_booking_requests(garage_id=None, now: datetime | None = None, session=None) -> int:
@@ -171,28 +173,14 @@ def expire_stale_booking_requests(garage_id=None, now: datetime | None = None, s
     """
     session = session or db.session
     now = now or datetime.now(UTC)
-    today = now.date()
-
     query = BookingRequest.query.filter(BookingRequest.status == "PENDING")
     if garage_id is not None:
         query = query.filter(BookingRequest.garage_id == garage_id)
-
-    timed_and_passed = and_(
-        BookingRequest.preferred_time.isnot(None),
-        or_(
-            BookingRequest.preferred_date < today,
-            and_(
-                BookingRequest.preferred_date == today,
-                BookingRequest.preferred_time < now.time(),
-            ),
-        ),
-    )
-    date_only_and_passed = and_(
-        BookingRequest.preferred_time.is_(None),
-        BookingRequest.preferred_date < today,
-    )
-
-    stale_ids = [row.id for row in query.filter(or_(timed_and_passed, date_only_and_passed)).all()]
+    # ``preferred_date`` / ``preferred_time`` are wall-clock values, so a
+    # single SQL comparison against UTC's calendar date is wrong for a
+    # multi-timezone tenant set. Evaluate the small pending set through the
+    # same business-local predicate staff approval uses.
+    stale_ids = [row.id for row in query.all() if is_request_stale(row, now)]
     if not stale_ids:
         return 0
 
@@ -224,10 +212,10 @@ def slot_check_for_request(booking_request: BookingRequest, now: datetime | None
         return {"checked": False, "available": None, "reason": None}
 
     now = now or datetime.now(UTC)
-    slot_start = datetime.combine(
-        booking_request.preferred_date, booking_request.preferred_time, tzinfo=UTC
-    )
     garage = booking_request.garage
+    slot_start = local_slot_as_utc(
+        garage, booking_request.preferred_date, booking_request.preferred_time
+    )
     # The request's *own* selected duration, not the garage's flat default -
     # otherwise a 90-minute Full Service request could be re-checked as if it
     # only needed the garage's generic slot length, understating what it

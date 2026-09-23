@@ -33,6 +33,7 @@ from app.communications.events import (
 )
 from app.communications.service import find_customer_by_phone
 from app.extensions import db
+from app.garages.timezones import local_slot_as_utc
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import (
@@ -330,7 +331,7 @@ def reschedule_appointment(
         return False, "already_completed"
 
     duration = appointment.end_time - appointment.start_time
-    new_start = datetime.combine(new_day, new_time, tzinfo=UTC)
+    new_start = local_slot_as_utc(garage, new_day, new_time)
     new_end = new_start + duration
 
     reason = availability.validate_slot(
