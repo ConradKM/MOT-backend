@@ -309,6 +309,9 @@ def test_transfer_refuses_a_number_already_assigned_to_another_business(
         sid = "PNparent00000000000000000000001"
         account_sid = "ACmaster0000000000000000000000001"
 
+        def fetch(self):
+            return self
+
         def update(self, **kwargs):  # pragma: no cover - must never be reached
             raise AssertionError("must never update a cross-tenant-claimed number")
 
