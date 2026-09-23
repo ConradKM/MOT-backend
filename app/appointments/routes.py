@@ -20,7 +20,9 @@ from app.models.appointments.appointment_status import GarageAppointmentStatus
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.customer import Customer
 from app.models.employee import Employee
+from app.models.garage import Garage
 from app.models.vehicle import Vehicle
+from app.public_booking.availability import slot_capacity_usage
 
 from .schemas import AppointmentQueryArgsSchema, AppointmentSchema, AppointmentUpdateSchema
 
@@ -157,6 +159,30 @@ def _check_for_conflict(employee_id, start_time, end_time, exclude_appointment_i
         )
 
 
+def _check_capacity(garage, start_time, end_time, exclude_appointment_id=None):
+    """Apply the garage-wide capacity contract to staff-created schedules.
+
+    Employee conflict checks alone are insufficient when a business has set
+    ``capacity_per_slot`` below its number of staff.  This deliberately uses
+    the same reservation accounting as public booking and request approval,
+    including pending customer requests, so staff actions cannot silently
+    take a slot those flows have already reserved.
+    """
+    duration_minutes = int((end_time - start_time).total_seconds() // 60)
+    used, capacity = slot_capacity_usage(
+        garage,
+        start_time.date(),
+        start_time,
+        duration_minutes,
+        exclude_appointment_id=exclude_appointment_id,
+    )
+    if used >= capacity:
+        abort(
+            409,
+            message="This time is no longer available - capacity has already been taken by another appointment or request.",
+        )
+
+
 def _day_bounds(day):
     return (
         datetime.combine(day, time.min, tzinfo=UTC),
@@ -211,6 +237,7 @@ class AppointmentList(MethodView):
     @appointments_blp.response(201, AppointmentSchema)
     def post(self, data):
         garage_id = get_current_employee().garage_id
+        garage = db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
 
         _get_owned_employee(data["employee_id"], garage_id)
         _get_owned_customer(data["customer_id"], garage_id)
@@ -225,6 +252,8 @@ class AppointmentList(MethodView):
         _validate_time_range(data["start_time"], end_time)
         _validate_status(data.get("status"), garage_id)
         _check_for_conflict(data["employee_id"], data["start_time"], end_time)
+        if data.get("status") != "CANCELLED":
+            _check_capacity(garage, data["start_time"], end_time)
 
         appointment = Appointment(
             garage_id=garage_id,
@@ -273,6 +302,7 @@ class AppointmentResource(MethodView):
     @appointments_blp.response(200, AppointmentSchema)
     def patch(self, data, appointment_id):
         garage_id = get_current_employee().garage_id
+        garage = db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
 
         appointment = Appointment.query.filter_by(id=appointment_id, garage_id=garage_id).first()
 
@@ -299,10 +329,23 @@ class AppointmentResource(MethodView):
         effective_end = data.get("end_time", appointment.end_time)
         _validate_time_range(effective_start, effective_end)
 
-        if "employee_id" in data or "start_time" in data or "end_time" in data:
+        will_be_live = data.get("status", appointment.status) != "CANCELLED"
+        scheduling_changed = (
+            "employee_id" in data
+            or "start_time" in data
+            or "end_time" in data
+            or (appointment.status == "CANCELLED" and will_be_live)
+        )
+        if scheduling_changed and will_be_live:
             effective_employee_id = data.get("employee_id", appointment.employee_id)
             _check_for_conflict(
                 effective_employee_id,
+                effective_start,
+                effective_end,
+                exclude_appointment_id=appointment.id,
+            )
+            _check_capacity(
+                garage,
                 effective_start,
                 effective_end,
                 exclude_appointment_id=appointment.id,
@@ -351,7 +394,10 @@ class AppointmentResource(MethodView):
         # Appointments are historical scheduling records, so deletion cancels
         # rather than hard-deletes - the booking stays visible in the
         # customer/employee's history instead of disappearing outright.
+        was_cancelled = appointment.status == "CANCELLED"
         appointment.status = "CANCELLED"
         db.session.commit()
+        if not was_cancelled:
+            emit_event(APPOINTMENT_CANCELLED, garage=appointment.garage, appointment=appointment)
 
         return ""

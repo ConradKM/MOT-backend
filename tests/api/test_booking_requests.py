@@ -180,6 +180,31 @@ def test_approve_snapshots_the_types_price_onto_the_appointment(
     assert str(appointment.price_at_booking) == "54.85"
 
 
+def test_approve_preserves_the_request_price_when_the_service_was_edited(
+    authenticated_user, session, garage, booking_request
+):
+    appt_type = _make_type(session, garage, base_price="54.85")
+    booking_request.appointment_type_id = appt_type.id
+    booking_request.requested_price = "54.85"
+    session.commit()
+
+    # The customer saw/requested £54.85. A later service catalogue edit must
+    # not rewrite the historical appointment price at staff approval.
+    appt_type.base_price = "79.99"
+    session.commit()
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/approve",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "start_time": START,
+            "end_time": "2026-11-03T09:45:00+00:00",
+        },
+    )
+    assert resp.status_code == 200
+    appointment = db.session.get(Appointment, resp.get_json()["appointment_id"])
+    assert str(appointment.price_at_booking) == "54.85"
+
+
 def test_approve_creates_the_appointments_checklist_instance(
     authenticated_user, session, garage, booking_request
 ):

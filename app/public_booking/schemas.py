@@ -204,8 +204,9 @@ class BookingRequestCreateSchema(Schema):
     )
     notes = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=2000))
 
-    # Only the deposit-intent endpoint uses this opaque browser-generated
-    # idempotency token; ordinary no-deposit booking ignores it.
+    # Opaque browser-generated idempotency token. The deposit endpoint uses
+    # it to resume its provider session; an ordinary booking submission uses
+    # it to return the same PENDING request on a network/browser retry.
     payment_attempt_id = fields.UUID(allow_none=True, load_default=None)
 
     # What the customer answered to this business's own configured questions.

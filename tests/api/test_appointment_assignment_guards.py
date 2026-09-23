@@ -185,3 +185,92 @@ def test_booking_an_archived_vehicle_reactivates_it(
     assert resp.status_code == 201
     session.refresh(vehicle)
     assert vehicle.is_active is True
+
+
+def test_staff_create_cannot_bypass_garage_capacity_with_a_second_employee(
+    authenticated_user, session, garage, garage_schedule, customer
+):
+    """Direct staff scheduling must obey the same capacity limit as public
+    requests, even when a different employee has no personal conflict."""
+    appt_type = _appt_type(session, garage)
+    other = Employee(
+        garage_id=garage.id,
+        email="second-capacity-tech@garage-a.example",
+        password_hash=generate_password_hash("CorrectHorse123!"),
+    )
+    garage_schedule.capacity_per_slot = 1
+    session.add(other)
+    session.commit()
+
+    first = authenticated_user.client.post(
+        "/api/appointments/",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "customer_id": str(customer.id),
+            "appointment_type_id": str(appt_type.id),
+            "start_time": START.isoformat(),
+            "end_time": END.isoformat(),
+        },
+    )
+    assert first.status_code == 201
+
+    second = authenticated_user.client.post(
+        "/api/appointments/",
+        json={
+            "employee_id": str(other.id),
+            "customer_id": str(customer.id),
+            "appointment_type_id": str(appt_type.id),
+            "start_time": START.isoformat(),
+            "end_time": END.isoformat(),
+        },
+    )
+    assert second.status_code == 409
+
+
+def test_cancelled_appointment_cannot_be_reactivated_into_full_capacity(
+    authenticated_user, session, garage, garage_schedule, customer
+):
+    appt_type = _appt_type(session, garage)
+    other = Employee(
+        garage_id=garage.id,
+        email="reactivation-capacity-tech@garage-a.example",
+        password_hash=generate_password_hash("CorrectHorse123!"),
+    )
+    garage_schedule.capacity_per_slot = 1
+    session.add(other)
+    session.commit()
+
+    original = authenticated_user.client.post(
+        "/api/appointments/",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "customer_id": str(customer.id),
+            "appointment_type_id": str(appt_type.id),
+            "start_time": START.isoformat(),
+            "end_time": END.isoformat(),
+        },
+    ).get_json()
+    assert (
+        authenticated_user.client.patch(
+            f"/api/appointments/{original['id']}", json={"status": "CANCELLED"}
+        ).status_code
+        == 200
+    )
+    assert (
+        authenticated_user.client.post(
+            "/api/appointments/",
+            json={
+                "employee_id": str(other.id),
+                "customer_id": str(customer.id),
+                "appointment_type_id": str(appt_type.id),
+                "start_time": START.isoformat(),
+                "end_time": END.isoformat(),
+            },
+        ).status_code
+        == 201
+    )
+
+    revived = authenticated_user.client.patch(
+        f"/api/appointments/{original['id']}", json={"status": "BOOKED"}
+    )
+    assert revived.status_code == 409

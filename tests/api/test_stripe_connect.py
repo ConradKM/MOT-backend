@@ -477,7 +477,35 @@ def test_connect_account_webhook_and_payment_event_are_account_bound(session, ga
         currency="GBP",
         status="REQUIRES_PAYMENT",
     )
-    session.add(payment)
+    # Provider payment ids are account-scoped inputs for a Connect webhook.
+    # Keep a second tenant/account with the same opaque id to prove lookup is
+    # filtered by the verified account rather than whichever row happens to
+    # sort first in the database.
+    other_booking = BookingRequest(
+        garage_id=garage.id,
+        status="AWAITING_PAYMENT",
+        booking_reference="BKCONNECTOTHER",
+        customer_first_name="Other",
+        customer_last_name="Customer",
+        customer_email="other@example.com",
+        customer_phone="+447123456788",
+        vehicle_registration="CN11OTH",
+        preferred_date=datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=7),
+        preferred_time=datetime.time(10, 30),
+    )
+    session.add_all([payment, other_booking])
+    session.flush()
+    other_payment = BookingPayment(
+        garage_id=garage.id,
+        booking_request_id=other_booking.id,
+        provider="stripe",
+        provider_account_id="acct_other",
+        provider_payment_id="pi_connect_1",
+        amount_minor=2000,
+        currency="GBP",
+        status="REQUIRES_PAYMENT",
+    )
+    session.add(other_payment)
     session.commit()
 
     events = iter(
@@ -535,8 +563,10 @@ def test_connect_account_webhook_and_payment_event_are_account_bound(session, ga
 
     session.refresh(settings)
     session.refresh(payment)
+    session.refresh(other_payment)
     assert settings.stripe_charges_enabled is True
-    assert payment.status == "SUCCEEDED"  # the wrong-account event was ignored
+    assert payment.status == "SUCCEEDED"
+    assert other_payment.status == "SUCCEEDED"
 
 
 def test_refund_uses_the_original_connected_account(session, garage, monkeypatch):

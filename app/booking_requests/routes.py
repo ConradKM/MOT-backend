@@ -19,6 +19,7 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.communications.communication_log import CHANNEL_EMAIL, CommunicationLog
 from app.models.employee import Employee
+from app.models.garage import Garage
 from app.payments.service import expire_stale_payment_holds, refund_deposit
 from app.public_booking.availability import slot_capacity_usage
 
@@ -45,9 +46,14 @@ booking_requests_blp = Blueprint(
 )
 
 
-def _get_owned_request(request_id):
-    garage_id = get_current_employee().garage_id
-    booking_request = BookingRequest.query.filter_by(id=request_id, garage_id=garage_id).first()
+def _get_owned_request(request_id, *, lock: bool = False):
+    employee = get_current_employee()
+    assert employee is not None
+    garage_id = employee.garage_id
+    query = BookingRequest.query.filter_by(id=request_id, garage_id=garage_id)
+    if lock:
+        query = query.with_for_update()
+    booking_request = query.first()
 
     if booking_request is None:
         abort(404, message="Booking request not found")
@@ -204,7 +210,11 @@ class BookingRequestApprove(MethodView):
     def post(self, data, request_id):
         employee = get_current_employee()
         garage_id = employee.garage_id
-        booking_request = _get_owned_request(request_id)
+        # Use the same per-garage lock as public booking submission.  Without
+        # it two staff approvals for different pending requests can both pass
+        # the capacity check before either appointment is committed.
+        db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
+        booking_request = _get_owned_request(request_id, lock=True)
 
         if booking_request.status == "PENDING" and is_request_stale(booking_request):
             booking_request.status = "EXPIRED"
@@ -283,7 +293,15 @@ class BookingRequestApprove(MethodView):
             end_time=end_time,
             status="BOOKED",
             notes=booking_request.notes,
-            price_at_booking=appointment_type.base_price,
+            # Preserve what this customer requested, not a catalogue price
+            # that an owner may have edited while the request awaited review.
+            # Legacy/non-public requests without a snapshot retain the safe
+            # current-type fallback.
+            price_at_booking=(
+                booking_request.requested_price
+                if booking_request.requested_price is not None
+                else appointment_type.base_price
+            ),
         )
         db.session.add(appointment)
         db.session.flush()
@@ -319,7 +337,7 @@ class BookingRequestReject(MethodView):
     @booking_requests_blp.response(200, BookingRequestSchema)
     def post(self, data, request_id):
         employee = get_current_employee()
-        booking_request = _get_owned_request(request_id)
+        booking_request = _get_owned_request(request_id, lock=True)
 
         if booking_request.status == "PENDING" and is_request_stale(booking_request):
             booking_request.status = "EXPIRED"
@@ -375,7 +393,7 @@ class BookingRequestRefund(MethodView):
     @booking_requests_blp.arguments(BookingRequestRefundSchema)
     @booking_requests_blp.response(200, BookingRequestSchema)
     def post(self, data, request_id):
-        booking_request = _get_owned_request(request_id)
+        booking_request = _get_owned_request(request_id, lock=True)
 
         payment = booking_request.active_payment
         if payment is None or payment.status != "SUCCEEDED":

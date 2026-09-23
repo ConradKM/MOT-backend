@@ -185,13 +185,29 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
     if garage_id is not None:
         query = query.filter(BookingRequest.garage_id == garage_id)
 
-    stale = query.filter(BookingRequest.payment_hold_expires_at < now).all()
-    if not stale:
+    stale_ids = [
+        request_id
+        for (request_id,) in query.filter(BookingRequest.payment_hold_expires_at < now)
+        .with_entities(BookingRequest.id)
+        .all()
+    ]
+    if not stale_ids:
         return 0
 
     expired_count = 0
-    for booking_request in stale:
-        payment = booking_request.active_payment
+    for request_id in stale_ids:
+        # Lock the request and its payment state before deciding whether to
+        # expire.  A payment webhook and the sweeper may arrive together;
+        # without this boundary one can act on an old identity-map snapshot
+        # and release a slot that the other transaction has just paid for.
+        booking_request = BookingRequest.query.filter_by(id=request_id).with_for_update().one()
+        if (
+            booking_request.status != "AWAITING_PAYMENT"
+            or booking_request.payment_hold_expires_at is None
+            or booking_request.payment_hold_expires_at >= now
+        ):
+            continue
+        payment = _locked_active_payment(booking_request)
         if payment is not None and _reconcile_if_already_succeeded(booking_request, payment, now):
             continue
 
@@ -240,6 +256,14 @@ def _reconcile_if_already_succeeded(
     before it could record anything. Never raises - a provider error here
     just means "can't confirm either way", so the caller falls back to its
     normal expire-the-hold path unchanged."""
+    # A local SUCCEEDED state is already an authoritative webhook outcome.
+    # It can be observed here when a concurrent worker completed payment
+    # processing just before this sweep acquired the row lock; never expire
+    # such a booking because its old hold deadline has passed.
+    if payment.status == "SUCCEEDED":
+        booking_request.status = "PENDING"
+        booking_request.payment_hold_expires_at = None
+        return True
     if payment.status not in ("REQUIRES_PAYMENT", "PENDING") or not payment.provider_payment_id:
         return False
     try:
@@ -285,7 +309,12 @@ def refund_deposit(
     policy is implemented; PARTIALLY_REFUNDED exists in PAYMENT_STATUSES for a
     future manual/partial path but nothing sets it today.
     """
-    payment = booking_request.active_payment
+    # Lock the payment row, rather than trusting the relationship that may
+    # have been loaded before another request initiated a refund.  The lock
+    # is held through the provider call and status commit, making a staff
+    # retry, a simultaneous rejection, or a duplicate request observe
+    # REFUND_PENDING/REFUNDED instead of issuing a second provider refund.
+    payment = _locked_active_payment(booking_request)
     if payment is None or payment.status not in PAYMENT_STATUSES_CHARGED:
         return None
     if payment.status != "SUCCEEDED":
@@ -441,18 +470,40 @@ def _find_payment(
 ) -> BookingPayment | None:
     if not provider_payment_id:
         return None
+    query = BookingPayment.query.filter_by(provider_payment_id=provider_payment_id)
+    # Connected-account payment ids are scoped to the account that emitted
+    # the verified webhook.  Filter in SQL rather than taking an arbitrary
+    # first row and rejecting it in Python: a collision in another tenant's
+    # account must not leave the legitimate payment unprocessed.
+    if provider_account_id is not None:
+        query = query.filter_by(provider_account_id=provider_account_id)
     payment = cast(
         BookingPayment | None,
-        BookingPayment.query.filter_by(provider_payment_id=provider_payment_id).first(),
+        query.with_for_update().first(),
     )
-    # A verified Connect delivery can still only change a payment made on the
-    # account named in that delivery.  This is deliberately not imposed on
-    # fake/legacy platform events, which carry no account id.
-    if provider_account_id is not None and (
-        payment is None or payment.provider_account_id != provider_account_id
-    ):
-        return None
     return payment
+
+
+def _locked_active_payment(booking_request: BookingRequest) -> BookingPayment | None:
+    """Return the current payment attempt while holding its database rows.
+
+    All stateful payment operations use this one ordering/lock boundary:
+    webhooks, the expiry sweeper, and staff refunds therefore cannot make a
+    stale `SUCCEEDED`/`REQUIRES_PAYMENT` decision concurrently.
+    """
+    payments = cast(
+        list[BookingPayment],
+        (
+            BookingPayment.query.filter_by(
+                booking_request_id=booking_request.id, garage_id=booking_request.garage_id
+            )
+            .order_by(BookingPayment.created_at.asc())
+            .with_for_update()
+            .all()
+        ),
+    )
+    live = [payment for payment in payments if payment.status not in ("CANCELLED", "FAILED")]
+    return live[-1] if live else (payments[-1] if payments else None)
 
 
 def _handle_payment_succeeded(event: ProviderWebhookEvent) -> None:
