@@ -484,6 +484,42 @@ def test_pending_request_reserves_its_full_duration_not_just_its_start_time(
     assert slots["11:30"] == "available"
 
 
+def test_pending_request_keeps_its_original_duration_after_service_edit(client, session, garage):
+    day = _future_weekday()
+    original_type = _make_type(session, garage, 90, "Full Service")
+    candidate_type = _make_type(session, garage, 30, "Diagnostic Check")
+    session.add(
+        BookingRequest(
+            garage_id=garage.id,
+            status="PENDING",
+            customer_first_name="Sam",
+            customer_last_name="Lee",
+            customer_email="sam.lee@example.com",
+            vehicle_registration="PD11 AAA",
+            appointment_type_id=original_type.id,
+            requested_duration_minutes=90,
+            preferred_date=day,
+            preferred_time=datetime.time(10, 0),
+        )
+    )
+    session.commit()
+
+    # Editing the catalogue affects future customers only.  The already
+    # submitted request still reserves 10:00-11:30.
+    original_type.default_duration_minutes = 30
+    session.commit()
+
+    slots = {
+        s["start"]: s["status"]
+        for s in client.get(
+            f"/api/public/{garage.slug}/availability/{day.isoformat()}",
+            query_string={"appointment_type_id": str(candidate_type.id)},
+        ).get_json()["slots"]
+    }
+    assert slots["10:30"] == "booked"
+    assert slots["11:00"] == "booked"
+
+
 def test_tenant_isolation(client, session, garage, second_garage):
     day = _future_weekday()
     session.add(

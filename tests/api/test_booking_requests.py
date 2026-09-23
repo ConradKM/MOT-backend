@@ -132,6 +132,34 @@ def test_approve_creates_and_links_customer_vehicle_appointment(
     assert appointment.status == "BOOKED"
 
 
+def test_approval_preserves_requested_duration_after_service_edit(
+    authenticated_user, session, garage, booking_request
+):
+    appt_type = _make_type(session, garage, minutes=90, base_price=50)
+    booking_request.appointment_type_id = appt_type.id
+    booking_request.requested_duration_minutes = 90
+    session.commit()
+
+    # The owner changes the catalogue for new customers while this request
+    # waits for review.  Approval without an explicit end time must retain
+    # what the requester selected.
+    appt_type.default_duration_minutes = 30
+    session.commit()
+
+    resp = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/approve",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "appointment_type_id": str(appt_type.id),
+            "start_time": START,
+        },
+    )
+
+    assert resp.status_code == 200
+    appointment = db.session.get(Appointment, resp.get_json()["appointment_id"])
+    assert appointment.end_time == datetime.datetime.fromisoformat("2026-11-03T10:30:00+00:00")
+
+
 def test_approve_triggers_appointment_confirmation_email(
     authenticated_user, session, garage, booking_request, monkeypatch
 ):
