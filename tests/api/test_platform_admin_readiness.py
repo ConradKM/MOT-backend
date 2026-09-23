@@ -2,6 +2,9 @@
 presence alone - a Stripe account with charges disabled must report
 not-ready, exactly as it should before a business's first real deposit."""
 
+from datetime import time
+
+from app.models.garage_schedule import GarageOpeningHours
 from app.models.payments.garage_payment_settings import GaragePaymentSettings
 
 
@@ -48,10 +51,21 @@ def test_stripe_account_with_charges_disabled_is_not_ready(platform_client, gara
 
 
 def test_communications_is_optional_for_public_booking_readiness(
-    platform_client, garage, user, appointment_type, garage_schedule
+    platform_client, garage, user, appointment_type, session
 ):
     """A business can take public bookings with zero comms configured -
     ready_for_public_booking must not depend on the communications section."""
+    session.add(
+        GarageOpeningHours(
+            garage_id=garage.id,
+            weekday=0,
+            opens_at=time(8, 0),
+            closes_at=time(18, 0),
+            is_closed=False,
+        )
+    )
+    session.commit()
+
     body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/readiness").json
 
     assert body["communications_ready"] is False
