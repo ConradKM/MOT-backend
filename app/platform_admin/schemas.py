@@ -1048,6 +1048,30 @@ class CommunicationsDetailSchema(Schema):
     updated_at = fields.DateTime(dump_only=True, allow_none=True)
 
 
+# --------------------------------------------------------------------------
+# Business readiness (app/platform_admin/readiness.py)
+# --------------------------------------------------------------------------
+
+
+class ReadinessCheckSchema(Schema):
+    key = fields.Str(dump_only=True)
+    label = fields.Str(dump_only=True)
+    ok = fields.Bool(dump_only=True)
+
+
+class BusinessReadinessSchema(Schema):
+    garage_id = fields.UUID(dump_only=True)
+    garage_name = fields.Str(dump_only=True)
+    business = fields.List(fields.Nested(ReadinessCheckSchema), dump_only=True)
+    business_ready = fields.Bool(dump_only=True)
+    payments = fields.List(fields.Nested(ReadinessCheckSchema), dump_only=True)
+    payments_ready = fields.Bool(dump_only=True)
+    communications = fields.List(fields.Nested(ReadinessCheckSchema), dump_only=True)
+    communications_ready = fields.Bool(dump_only=True)
+    ready_for_public_booking = fields.Bool(dump_only=True)
+    ready_to_take_deposits = fields.Bool(dump_only=True)
+
+
 class SubaccountAttachSchema(Schema):
     """Attaching a subaccount created by hand in the Twilio console.
 
