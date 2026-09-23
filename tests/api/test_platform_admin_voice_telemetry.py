@@ -184,3 +184,145 @@ def test_platform_wide_endpoint_aggregates_across_businesses(
 
     assert body["call_count"] == 2
     assert body["garage_id"] is None
+
+
+def test_priced_call_counts_distinguish_zero_cost_from_no_priced_calls(
+    platform_client, garage, session
+):
+    """ "£0 cost" and "cost unavailable" must be distinguishable - a business
+    with no priced calls at all must not look identical to one whose calls
+    happened to cost nothing."""
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/voice-telemetry").json
+    assert body["cost"]["openai_total"] is None
+    assert body["cost"]["openai_priced_calls"] == 0
+
+    _call(
+        session,
+        garage,
+        external_call_id="c1",
+        openai_cost_amount=Decimal(0),
+        openai_cost_currency="USD",
+        openai_cost_is_estimated=True,
+    )
+
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/voice-telemetry").json
+    assert Decimal(body["cost"]["openai_total"]) == Decimal(0)
+    assert body["cost"]["openai_priced_calls"] == 1
+
+
+def test_combined_total_only_appears_when_both_providers_priced_in_the_same_currency(
+    platform_client, garage, session
+):
+    _call(
+        session,
+        garage,
+        external_call_id="c1",
+        openai_cost_amount=Decimal("0.30"),
+        openai_cost_currency="USD",
+        twilio_cost_amount=Decimal("0.01"),
+        twilio_cost_currency="USD",
+    )
+
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/voice-telemetry").json
+
+    assert Decimal(body["cost"]["combined_total"]) == Decimal("0.31")
+    assert body["cost"]["combined_currency"] == "USD"
+
+
+def test_combined_total_is_absent_when_only_one_provider_has_priced_calls(
+    platform_client, garage, session
+):
+    _call(
+        session,
+        garage,
+        external_call_id="c1",
+        openai_cost_amount=Decimal("0.30"),
+        openai_cost_currency="USD",
+        twilio_cost_amount=None,
+    )
+
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/voice-telemetry").json
+
+    # Never invent a combined figure out of one real component and one
+    # unknown - report the components separately instead.
+    assert body["cost"]["combined_total"] is None
+    assert body["cost"]["combined_currency"] is None
+
+
+def test_combined_total_is_absent_when_currencies_do_not_match(platform_client, garage, session):
+    _call(
+        session,
+        garage,
+        external_call_id="c1",
+        openai_cost_amount=Decimal("0.30"),
+        openai_cost_currency="USD",
+        twilio_cost_amount=Decimal("0.01"),
+        twilio_cost_currency="GBP",
+    )
+
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/voice-telemetry").json
+
+    # Never add USD to GBP - report the components separately instead.
+    assert body["cost"]["combined_total"] is None
+    assert body["cost"]["combined_currency"] is None
+
+
+def test_pricing_version_is_preserved_per_call_not_recomputed_by_the_report(
+    platform_client, garage, session
+):
+    """A stored row keeps whichever pricing version actually priced it -
+    the reporting layer reads that figure back, it never recalculates
+    under today's rate table."""
+    row = _call(
+        session,
+        garage,
+        external_call_id="c1",
+        openai_cost_amount=Decimal("1.00"),
+        openai_cost_currency="USD",
+        openai_pricing_version="openai:gpt-realtime-2.1:2025-01",
+    )
+
+    # A later rate change would add a new version, never edit this one -
+    # confirm the stored row is untouched by the report simply existing.
+    platform_client.get(f"/api/platform-admin/tenants/{garage.id}/voice-telemetry")
+
+    session.refresh(row)
+    assert row.openai_pricing_version == "openai:gpt-realtime-2.1:2025-01"
+
+
+def test_voice_telemetry_schema_serializes_every_cost_field(platform_client, garage, session):
+    """A regression guard on the response shape itself - every field the
+    schema declares must actually round-trip through the API, not just
+    exist in the aggregation function's return dict."""
+    _call(
+        session,
+        garage,
+        external_call_id="c1",
+        duration_seconds=42,
+        openai_cost_amount=Decimal("0.123456"),
+        openai_cost_currency="USD",
+        openai_cost_is_estimated=True,
+        openai_pricing_version="openai:gpt-realtime-2.1:2026-09",
+        twilio_cost_amount=Decimal("0.000200"),
+        twilio_cost_currency="USD",
+        twilio_cost_is_estimated=True,
+        twilio_pricing_version="twilio:sip_trunking_inbound_us_local:2026-09",
+    )
+
+    response = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/voice-telemetry")
+
+    assert response.status_code == 200
+    cost = response.json["cost"]
+    for field in (
+        "openai_total",
+        "openai_is_estimated",
+        "openai_priced_calls",
+        "twilio_total",
+        "twilio_is_estimated",
+        "twilio_priced_calls",
+        "combined_total",
+        "combined_currency",
+    ):
+        assert field in cost
+    assert Decimal(cost["openai_total"]) == Decimal("0.123456")
+    assert Decimal(cost["twilio_total"]) == Decimal("0.000200")

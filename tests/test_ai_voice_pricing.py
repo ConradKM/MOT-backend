@@ -24,7 +24,7 @@ def test_openai_per_token_cost_uses_uncached_and_cached_rates_separately():
         Decimal(800_000) * Decimal("32.00") / Decimal(1_000_000)
         + Decimal(200_000) * Decimal("0.40") / Decimal(1_000_000)
         + Decimal(500_000) * Decimal("64.00") / Decimal(1_000_000)
-    ).quantize(Decimal("0.0001"))
+    ).quantize(Decimal("0.000001"))
     assert amount == expected
     assert version == "openai:gpt-realtime-2.1:2026-09"
 
@@ -39,7 +39,7 @@ def test_openai_per_minute_model_bills_measured_duration_not_tokens():
     )
 
     # $0.05/min == 90 seconds * ($0.05 / 60)
-    expected = (Decimal(90) * Decimal("0.05") / Decimal(60)).quantize(Decimal("0.0001"))
+    expected = (Decimal(90) * Decimal("0.05") / Decimal(60)).quantize(Decimal("0.000001"))
     assert amount == expected
     assert version == "openai:gpt-live-1:2026-09"
 
@@ -91,7 +91,7 @@ def test_twilio_cost_is_a_flat_rate_on_measured_duration():
     amount, version = pricing.calculate_twilio_cost(duration_seconds=180)
 
     expected = (Decimal(180) / Decimal(60) * pricing.TWILIO_INBOUND_RATE_PER_MINUTE).quantize(
-        Decimal("0.0001")
+        Decimal("0.000001")
     )
     assert amount == expected
     assert version == pricing.TWILIO_INBOUND_RATE_VERSION
@@ -99,6 +99,70 @@ def test_twilio_cost_is_a_flat_rate_on_measured_duration():
 
 def test_twilio_cost_is_none_without_a_duration():
     assert pricing.calculate_twilio_cost(duration_seconds=None) == (None, None)
+
+
+def test_openai_cost_with_zero_tokens_is_a_real_zero_not_unknown():
+    """Distinct from "no usage was ever recorded" (None) - here the call
+    was priced, and genuinely cost nothing because nothing billable
+    happened, which must show as $0.00, not "unavailable"."""
+    amount, version = pricing.calculate_openai_cost(
+        model="gpt-realtime-2.1",
+        input_tokens=0,
+        cached_input_tokens=0,
+        output_tokens=0,
+        duration_seconds=5,
+    )
+    assert amount == Decimal("0.000000")
+    assert version == "openai:gpt-realtime-2.1:2026-09"
+
+
+def test_twilio_cost_with_zero_duration_is_a_real_zero():
+    amount, version = pricing.calculate_twilio_cost(duration_seconds=0)
+    assert amount == Decimal("0.000000")
+    assert version == pricing.TWILIO_INBOUND_RATE_VERSION
+
+
+def test_short_call_precision_is_not_rounded_to_zero():
+    """A 3-second call at the Twilio inbound rate is well under a cent -
+    6dp keeps it a real, summable number rather than noise."""
+    amount, _version = pricing.calculate_twilio_cost(duration_seconds=3)
+    assert amount is not None
+    assert amount > Decimal(0)
+    assert amount == Decimal(3) / Decimal(60) * pricing.TWILIO_INBOUND_RATE_PER_MINUTE
+
+
+def test_openai_cost_calculation_is_deterministic_across_repeated_calls():
+    """Same Decimal inputs must always produce the exact same Decimal
+    output - no floating-point drift a caller could observe by retrying."""
+    kwargs = {
+        "model": "gpt-realtime-2.1",
+        "input_tokens": 123_456,
+        "cached_input_tokens": 7_890,
+        "output_tokens": 45_678,
+        "duration_seconds": 37,
+    }
+    first = pricing.calculate_openai_cost(**kwargs)
+    second = pricing.calculate_openai_cost(**kwargs)
+    assert first == second
+
+
+def test_mini_model_uses_its_own_cheaper_rate_not_the_flagship_rate():
+    flagship, _ = pricing.calculate_openai_cost(
+        model="gpt-realtime-2.1",
+        input_tokens=1_000_000,
+        cached_input_tokens=0,
+        output_tokens=0,
+        duration_seconds=60,
+    )
+    mini, mini_version = pricing.calculate_openai_cost(
+        model="gpt-realtime-2.1-mini",
+        input_tokens=1_000_000,
+        cached_input_tokens=0,
+        output_tokens=0,
+        duration_seconds=60,
+    )
+    assert mini < flagship
+    assert mini_version == "openai:gpt-realtime-2.1-mini:2026-09"
 
 
 def test_reconcile_openai_cost_overwrites_and_clears_the_estimate_flag():

@@ -92,11 +92,15 @@ class VoiceCallMetrics(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     # always produces a new figure under a new version, never an overwrite
     # of the old one, unless a provider-reported figure is reconciled in
     # (see pricing.py's reconcile_* functions).
-    openai_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    # 6 decimal places, not 4: a single-digit-second call's Twilio share
+    # (e.g. 3s at $0.0034/min = $0.00017) would round to noise at 4dp,
+    # distorting an aggregate summed across many short calls. See
+    # app/ai_voice/pricing.py's own rounding.
+    openai_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     openai_cost_currency: Mapped[str | None] = mapped_column(String(3))
     openai_cost_is_estimated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     openai_pricing_version: Mapped[str | None] = mapped_column(String(60))
-    twilio_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    twilio_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 6))
     twilio_cost_currency: Mapped[str | None] = mapped_column(String(3))
     twilio_cost_is_estimated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     twilio_pricing_version: Mapped[str | None] = mapped_column(String(60))

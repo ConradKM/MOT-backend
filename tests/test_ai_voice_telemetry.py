@@ -122,8 +122,11 @@ def test_finish_call_calculates_openai_and_twilio_cost_from_measured_usage(sessi
     assert row.twilio_pricing_version is not None
 
 
-def test_finish_call_leaves_cost_null_for_an_unrecognised_model(session, garage, app):
-    app.config["OPENAI_REALTIME_MODEL"] = "some-future-model"
+def test_finish_call_leaves_cost_null_for_an_unrecognised_model(session, monkeypatch, garage, app):
+    # setitem, not a direct assignment: the app fixture isn't guaranteed to
+    # reset config between tests, and a leaked "some-future-model" here
+    # previously broke an unrelated later test.
+    monkeypatch.setitem(app.config, "OPENAI_REALTIME_MODEL", "some-future-model")
     telemetry.start_call(garage.id, "call_1")
     telemetry.record_usage("call_1", input_tokens=1000, output_tokens=500)
 
@@ -134,6 +137,80 @@ def test_finish_call_leaves_cost_null_for_an_unrecognised_model(session, garage,
     assert row.openai_pricing_version is None
     # Twilio's flat-rate calculation is independent of the OpenAI model.
     assert row.twilio_cost_amount is not None
+
+
+def test_finish_call_with_zero_usage_leaves_openai_cost_null(session, garage):
+    """No response.done ever arrived - there is genuinely nothing to price,
+    which must read as "unknown", not a false $0."""
+    telemetry.start_call(garage.id, "call_1")
+
+    telemetry.finish_call("call_1", end_reason=END_REASON_CONNECTION_CLOSED)
+
+    row = VoiceCallMetrics.query.filter_by(external_call_id="call_1").one()
+    assert row.input_tokens is None
+    assert row.openai_cost_amount is None
+    # Twilio's duration-only calculation still applies - a call with no
+    # tokens still occupied a SIP trunk for its measured duration.
+    assert row.twilio_cost_amount is not None
+
+
+def test_finish_call_with_only_output_tokens_still_prices_openai_cost(session, garage):
+    """Partial usage - the model spoke but the caller's audio never
+    produced billable input tokens in this response."""
+    telemetry.start_call(garage.id, "call_1")
+    telemetry.record_usage("call_1", output_tokens=300)
+
+    telemetry.finish_call("call_1", end_reason=END_REASON_HANGUP)
+
+    row = VoiceCallMetrics.query.filter_by(external_call_id="call_1").one()
+    assert row.openai_cost_amount is not None
+    assert row.openai_cost_amount > 0
+
+
+def test_finish_call_a_cost_calculation_crash_never_loses_the_already_committed_duration(
+    session, monkeypatch, garage
+):
+    """A bug in pricing.py (or a future rate-table typo) must not roll back
+    the duration/end_reason this function's caller relies on to know the
+    call actually ended - accounting failing is not the same fact as the
+    call failing."""
+    telemetry.start_call(garage.id, "call_1")
+    monkeypatch.setattr(
+        telemetry.pricing,
+        "calculate_openai_cost",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("bad rate table")),
+    )
+
+    # Must not raise.
+    telemetry.finish_call("call_1", end_reason=END_REASON_HANGUP)
+
+    row = VoiceCallMetrics.query.filter_by(external_call_id="call_1").one()
+    assert row.ended_at is not None
+    assert row.end_reason == END_REASON_HANGUP
+    assert row.duration_seconds is not None
+    # The cost side genuinely failed - left unknown, not guessed.
+    assert row.openai_cost_amount is None
+
+
+def test_repeated_finish_call_is_safe_and_recomputes_consistently(session, garage):
+    """A retried/duplicated finish (e.g. both a normal end-of-call path and
+    a later cleanup pass) must not raise or corrupt the row - it simply
+    recomputes duration and cost against the new end time."""
+    telemetry.start_call(garage.id, "call_1")
+    telemetry.record_usage("call_1", input_tokens=1000, output_tokens=500)
+
+    telemetry.finish_call("call_1", end_reason=END_REASON_CONNECTION_CLOSED)
+    first_cost = (
+        VoiceCallMetrics.query.filter_by(external_call_id="call_1").one().openai_cost_amount
+    )
+
+    telemetry.finish_call("call_1", end_reason=END_REASON_HANGUP)
+
+    row = VoiceCallMetrics.query.filter_by(external_call_id="call_1").one()
+    assert row.end_reason == END_REASON_HANGUP
+    # Same usage both times, so the same rate table produces the same
+    # OpenAI figure regardless of how many times this ran.
+    assert row.openai_cost_amount == first_cost
 
 
 # --------------------------------------------------------------------------
