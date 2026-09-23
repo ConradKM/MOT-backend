@@ -33,6 +33,7 @@ from app.communications.provisioning.service import (
     action_configure_voice,
     action_create_subaccount,
     action_discover_voice_numbers,
+    action_enable_openai_voice,
     action_lookup_voice_number,
     action_mark_migration_complete,
     action_mark_voice_online,
@@ -55,6 +56,7 @@ from app.models.platform.audit_log import (
     ACTION_COMMS_AUTOMATION_TOGGLE,
     ACTION_COMMS_ENABLED_TOGGLE,
     ACTION_COMMS_META_SIGNUP,
+    ACTION_COMMS_OPENAI_VOICE_ENABLE,
     ACTION_COMMS_SENDER_REGISTER,
     ACTION_COMMS_SUBACCOUNT_CREATE,
     ACTION_COMMS_TEST,
@@ -409,6 +411,34 @@ class VoiceNumberReturnToParent(MethodView):
             garage,
             ACTION_COMMS_VOICE_NUMBER,
             f"Returned voice number to CoMaz's parent account for {garage.name}",
+        )
+        return communications_detail(garage)
+
+
+@platform_communications_blp.route("/tenants/<uuid:garage_id>/communications/voice/openai/enable")
+class OpenAIVoiceEnable(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.response(200, CommunicationsDetailSchema)
+    def post(self, garage_id):
+        """Explicitly turn on OpenAI Voice routing for this business's
+        existing voice number - a separate, deliberate action from acquiring
+        or assigning the number itself.
+
+        Reuse-or-create this business's own SIP trunk, point it at OpenAI's
+        shared SIP destination, and associate the number - each step
+        idempotent, so a retry after a partial provider failure resumes
+        rather than duplicating trunks or associations.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            action_enable_openai_voice(garage)
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc))
+        _audit(
+            garage,
+            ACTION_COMMS_OPENAI_VOICE_ENABLE,
+            f"Enabled OpenAI Voice for {garage.name}",
         )
         return communications_detail(garage)
 

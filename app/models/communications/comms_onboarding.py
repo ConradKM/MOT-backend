@@ -131,6 +131,25 @@ class GarageCommunicationsOnboarding(db.Model, PrimaryKeyMixin, TimestampMixin):
     whatsapp_last_error_message: Mapped[str | None] = mapped_column(Text)
     whatsapp_online_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # --- OpenAI Voice -----------------------------------------------------
+    # A separate lifecycle stage from voice_status above: a business can
+    # have a working, webhook-configured Twilio number (voice_status ==
+    # WEBHOOKS_CONFIGURED/ONLINE) with OpenAI Voice never enabled at all -
+    # number ownership and AI routing activation are deliberately never
+    # coupled. app/communications/provisioning/states.py::OPENAI_VOICE_STATUSES.
+    openai_voice_status: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="NOT_STARTED", server_default="NOT_STARTED"
+    )
+    # This business's own Elastic SIP Trunk ("TK…"), created in its own
+    # subaccount - never the shared platform reference trunk. One trunk per
+    # subaccount: Twilio's newer v1 API domains (Trunking among them) have no
+    # parent-acts-as-subaccount path the way the classic 2010-04-01 API does,
+    # so a trunk and the numbers it carries must live in the same account.
+    openai_voice_trunk_sid: Mapped[str | None] = mapped_column(String(64))
+    openai_voice_last_error_code: Mapped[str | None] = mapped_column(String(40))
+    openai_voice_last_error_message: Mapped[str | None] = mapped_column(Text)
+    openai_voice_ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     # --- Shared ---------------------------------------------------------
     # A free-text note the operator leaves for the next operator ("owner is on
     # holiday until the 14th"). Internal to the platform, never shown to the
