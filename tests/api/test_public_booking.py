@@ -154,6 +154,22 @@ def test_replayed_plain_booking_without_a_token_returns_the_active_request(clien
     assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
 
 
+def test_no_token_retry_with_corrected_notes_is_not_silently_replaced(client, garage):
+    payload = _valid_payload(notes="Please call on arrival")
+    assert client.post(f"/api/public/{garage.slug}/booking-requests", json=payload).status_code == 201
+
+    corrected = client.post(
+        f"/api/public/{garage.slug}/booking-requests",
+        json=_valid_payload(notes="Please text on arrival"),
+    )
+
+    # The active request reserves this one-capacity slot.  Crucially, the
+    # retry is not incorrectly reported as success for the older request,
+    # whose customer notes are different.
+    assert corrected.status_code == 409
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+
+
 def test_plain_booking_attempt_id_cannot_be_reused_for_a_changed_slot(client, garage):
     attempt_id = str(uuid.uuid4())
     assert (
