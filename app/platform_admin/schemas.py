@@ -347,6 +347,42 @@ class TenantStatsSchema(Schema):
     communications = fields.Nested(CommunicationStatsSchema, dump_only=True)
 
 
+class VoiceTelemetryUsageSchema(Schema):
+    total_input_tokens = fields.Int(dump_only=True)
+    total_output_tokens = fields.Int(dump_only=True)
+    total_cached_input_tokens = fields.Int(dump_only=True)
+
+
+class VoiceTelemetryCostSchema(Schema):
+    openai_total = fields.Decimal(dump_only=True, allow_none=True, as_string=True)
+    openai_is_estimated = fields.Bool(dump_only=True, allow_none=True)
+    twilio_total = fields.Decimal(dump_only=True, allow_none=True, as_string=True)
+    twilio_is_estimated = fields.Bool(dump_only=True, allow_none=True)
+
+
+class VoiceTelemetryToolCallsSchema(Schema):
+    total = fields.Int(dump_only=True)
+    avg_per_call = fields.Float(dump_only=True, allow_none=True)
+
+
+class VoiceTelemetryStatsSchema(Schema):
+    garage_id = fields.UUID(dump_only=True, allow_none=True)
+    period_days = fields.Int(dump_only=True)
+    period_start = fields.DateTime(dump_only=True)
+    period_end = fields.DateTime(dump_only=True)
+    call_count = fields.Int(dump_only=True)
+    total_duration_seconds = fields.Int(dump_only=True)
+    avg_duration_seconds = fields.Float(dump_only=True, allow_none=True)
+    usage = fields.Nested(VoiceTelemetryUsageSchema, dump_only=True)
+    cost = fields.Nested(VoiceTelemetryCostSchema, dump_only=True)
+    tool_calls = fields.Nested(VoiceTelemetryToolCallsSchema, dump_only=True)
+    booking_outcomes = fields.Dict(keys=fields.Str(), values=fields.Int(), dump_only=True)
+    end_reasons = fields.Dict(keys=fields.Str(), values=fields.Int(), dump_only=True)
+    escalated_count = fields.Int(dump_only=True)
+    escalation_rate = fields.Float(dump_only=True, allow_none=True)
+    still_open_count = fields.Int(dump_only=True)
+
+
 class TenantDetailSchema(TenantSummarySchema):
     """The tenant detail header - the list row plus nothing extra today, but a
     separate schema so the two can diverge without churning the list."""

@@ -356,6 +356,7 @@ def create_app(config_class=Config):
         conversation_state,
         garage_communication_settings,
         message_template,
+        voice_call_metrics,
     )
     from .models.conversation import callback_request, conversation_session  # noqa: F401
     from .models.payments import audit_log as payment_audit_log  # noqa: F401

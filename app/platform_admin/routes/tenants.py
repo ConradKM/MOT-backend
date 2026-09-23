@@ -90,6 +90,7 @@ from app.platform_admin.schemas import (
     TenantSuspendSchema,
     TenantUnarchiveSchema,
     TenantUpdateSchema,
+    VoiceTelemetryStatsSchema,
 )
 from app.platform_admin.security import (
     get_current_platform_admin,
@@ -109,6 +110,7 @@ from app.platform_admin.tenants import (
     unarchive_tenant,
     update_tenant,
 )
+from app.platform_admin.voice_telemetry import voice_telemetry_stats
 
 platform_tenants_blp = Blueprint(
     "platform_admin_tenants",
@@ -587,6 +589,19 @@ class TenantStats(MethodView):
     def get(self, args, garage_id):
         """Per-business statistics over the last ``days`` days."""
         return tenant_stats(_require_tenant(garage_id), days=args.get("days") or 30)
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/voice-telemetry")
+class TenantVoiceTelemetry(MethodView):
+    @jwt_required()
+    @platform_admin_required
+    @platform_tenants_blp.arguments(PeriodQuerySchema, location="query")
+    @platform_tenants_blp.response(200, VoiceTelemetryStatsSchema)
+    def get(self, args, garage_id):
+        """This business's AI voice call usage, cost and quality telemetry
+        over the last ``days`` days."""
+        garage = _require_tenant(garage_id)
+        return voice_telemetry_stats(garage.id, days=args.get("days") or 30)
 
 
 @platform_tenants_blp.route("/tenants/<uuid:garage_id>/feature-flags")

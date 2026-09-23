@@ -20,6 +20,14 @@ from time import monotonic
 
 from openai import OpenAI
 
+from app.models.communications.voice_call_metrics import (
+    END_REASON_CONNECTION_CLOSED,
+    END_REASON_CRASH,
+    END_REASON_HANDOFF,
+    END_REASON_HANGUP,
+)
+
+from . import telemetry
 from .openai_sip import OpenAIVoiceError, hangup_call, refer_call
 from .tools import CALL_ENDING_TOOLS, VoiceToolState, dispatch_tool
 
@@ -53,6 +61,7 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                     event = connection.recv()
                 except Exception:  # noqa: BLE001 - the connection closing must never crash the call
                     logger.info("AI_VOICE_CALL_CONTROL_CLOSED callSid=%s", call_id)
+                    telemetry.finish_call(call_id, end_reason=END_REASON_CONNECTION_CLOSED)
                     break
 
                 etype = getattr(event, "type", None)
@@ -96,6 +105,7 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                             completed_tool_outputs[cache_key] = output
                     tool_ok = _tool_succeeded(output)
                     outcome = _tool_outcome(output)
+                    latency_ms = int((monotonic() - started) * 1000)
                     logger.info(
                         "AI_VOICE_TOOL_RESULT callSid=%s garage=%s tool=%s ok=%s outcome=%s latency_ms=%d",
                         call_id,
@@ -103,7 +113,10 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                         name,
                         tool_ok,
                         outcome,
-                        (monotonic() - started) * 1000,
+                        latency_ms,
+                    )
+                    telemetry.record_tool_call(
+                        call_id, tool=name, outcome=outcome, latency_ms=latency_ms
                     )
                     if name == "create_booking":
                         logger.info(
@@ -112,6 +125,9 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                             garage.id,
                             outcome,
                         )
+                        telemetry.record_booking_outcome(call_id, outcome=outcome)
+                    if name == "request_human_handoff" and tool_ok:
+                        telemetry.record_escalation(call_id)
                     model_output, transfer_uri = _extract_transfer_uri(output)
                     connection.send_raw(
                         json.dumps(
@@ -130,6 +146,7 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                         end_after_response = True
 
                 elif etype == "response.done":
+                    _record_usage_if_present(call_id, event)
                     if end_after_response:
                         logger.info(
                             "AI_VOICE_ENDING_CALL callSid=%s reason=handoff transfer=%s",
@@ -140,6 +157,10 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                             _safe_refer(call_id, transfer_uri)
                         else:
                             _safe_hangup(call_id)
+                        telemetry.finish_call(
+                            call_id,
+                            end_reason=END_REASON_HANDOFF if transfer_uri else END_REASON_HANGUP,
+                        )
                         break
 
                 elif etype == "error":
@@ -150,6 +171,7 @@ def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str
                     )
     except Exception:
         logger.exception("AI_VOICE_CALL_CONTROL_CRASH callSid=%s", call_id)
+        telemetry.finish_call(call_id, end_reason=END_REASON_CRASH)
 
 
 def _extract_transfer_uri(output_json: str) -> tuple[str, str | None]:
@@ -164,6 +186,30 @@ def _extract_transfer_uri(output_json: str) -> tuple[str, str | None]:
         return output_json, None
     transfer_uri = payload.pop(_TRANSFER_URI_FIELD)
     return json.dumps(payload), transfer_uri
+
+
+def _record_usage_if_present(call_id: str, event) -> None:
+    """OpenAI reports token usage on the `response` object of each
+    `response.done` event, not once for the whole call - see
+    https://developers.openai.com/api/docs/guides/voice-sip. Duck-typed
+    getattr chain, not attribute access: real SDK response objects and the
+    tests' fakes (tests/test_ai_voice_call_controller.py) both just need to
+    expose `.usage.input_tokens` etc., nothing more."""
+    response = getattr(event, "response", None)
+    usage = getattr(response, "usage", None) if response is not None else None
+    if usage is None:
+        return
+    input_details = getattr(usage, "input_token_details", None)
+    telemetry.record_usage(
+        call_id,
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+        cached_input_tokens=(
+            getattr(input_details, "cached_tokens", None) if input_details is not None else None
+        ),
+        audio_input_seconds=getattr(usage, "audio_input_seconds", None),
+        audio_output_seconds=getattr(usage, "audio_output_seconds", None),
+    )
 
 
 def _tool_succeeded(output_json: str) -> bool:
