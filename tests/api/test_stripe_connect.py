@@ -75,6 +75,35 @@ class _AccountApi:
         return self.record
 
 
+class _FakeV2Accounts:
+    """Fake for ``stripe.StripeClient(...).v2.core.accounts`` - the client
+    create_connected_account now uses for new-account creation (Accounts
+    v2). Every other Connect call in the module keeps using the classic
+    ``stripe.<Resource>`` pattern faked by ``_AccountApi`` etc."""
+
+    def __init__(self, account_id="acct_connect_a"):
+        self.account_id = account_id
+        self.created = []
+
+    def create(self, params):
+        self.created.append(params)
+        return type("V2Account", (), {"id": self.account_id})()
+
+
+def _patch_v2_create(monkeypatch, account_id="acct_connect_a"):
+    """Patch ``app.payments.connect._v2_client`` so
+    ``create_connected_account`` succeeds without a real Stripe account -
+    returns the ``_FakeV2Accounts`` recorder to assert on."""
+    accounts = _FakeV2Accounts(account_id)
+    v2_client = type(
+        "V2Client",
+        (),
+        {"v2": type("V2", (), {"core": type("Core", (), {"accounts": accounts})()})()},
+    )()
+    monkeypatch.setattr("app.payments.connect._v2_client", lambda: v2_client)
+    return accounts
+
+
 class _PaymentMethodDomainApi:
     def __init__(self):
         self.created = []
@@ -89,11 +118,19 @@ def test_connect_account_creation_and_status_refresh(session, garage, monkeypatc
     domains = _PaymentMethodDomainApi()
     stripe = type("Stripe", (), {"Account": api, "PaymentMethodDomain": domains})()
     monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
+    v2_accounts = _patch_v2_create(monkeypatch)
 
     assert create_connected_account(garage) == "acct_connect_a"
     assert create_connected_account(garage) == "acct_connect_a"  # idempotent
-    assert len(api.created) == 1
-    assert api.created[0]["email"] == garage.email
+    # Only the FIRST call actually reaches Stripe - idempotent on the
+    # already-stored account id, exactly like the old v1 flow.
+    assert len(v2_accounts.created) == 1
+    assert v2_accounts.created[0]["contact_email"] == garage.email
+    assert v2_accounts.created[0]["dashboard"] == "express"
+    assert v2_accounts.created[0]["defaults"]["responsibilities"] == {
+        "fees_collector": "stripe",
+        "losses_collector": "stripe",
+    }
 
     settings = refresh_connect_status(garage)
     assert settings.stripe_onboarding_complete is True
@@ -137,6 +174,83 @@ def test_backfill_cli_registers_the_domain_for_an_already_onboarded_garage(
     assert "checked 1 garage" in result.output
 
 
+def test_get_wallet_domain_status_reports_apple_pay_verification_state(
+    session, garage, monkeypatch
+):
+    """Registering a domain doesn't mean Apple Pay is immediately usable -
+    Stripe verifies domain ownership asynchronously. This is the live check
+    that lets staff (and this codebase) tell "registered but not verified
+    yet" apart from "actually working"."""
+    from app.payments.connect import get_wallet_domain_status
+
+    api = _AccountApi()
+
+    class _ListingDomainApi:
+        def list(self, **kwargs):
+            assert kwargs["stripe_account"] == "acct_connect_a"
+            record = {
+                "domain_name": "app.comaz.co.uk",
+                "enabled": True,
+                "apple_pay": {
+                    "status": "pending",
+                    "status_details": {"error_message": None},
+                },
+            }
+            return {"data": [record]}
+
+    stripe = type("Stripe", (), {"Account": api, "PaymentMethodDomain": _ListingDomainApi()})()
+    monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
+    _patch_v2_create(monkeypatch)
+
+    create_connected_account(garage)
+    refresh_connect_status(garage)
+
+    status = get_wallet_domain_status(garage)
+    assert status == {
+        "domain": "app.comaz.co.uk",
+        "enabled": True,
+        "apple_pay_status": "pending",
+        "apple_pay_status_details": None,
+    }
+
+
+def test_wallet_domain_status_is_none_before_charges_are_enabled(session, garage):
+    from app.payments.connect import get_wallet_domain_status
+
+    assert get_wallet_domain_status(garage) is None
+
+
+def test_webhook_registers_the_payment_method_domain_once_charges_become_enabled(
+    session, garage, monkeypatch
+):
+    """Apple Pay must not depend on staff ever opening Payments settings -
+    a real account.updated webhook (the same trigger that flips
+    stripe_charges_enabled) should register the domain on its own."""
+    from app.models.payments.garage_payment_settings import GaragePaymentSettings
+    from app.payments.connect import sync_account_from_webhook
+
+    settings = GaragePaymentSettings(garage_id=garage.id, provider="stripe")
+    settings.stripe_account_id = "acct_webhook_a"
+    session.add(settings)
+    session.commit()
+
+    domains = _PaymentMethodDomainApi()
+    stripe = type("Stripe", (), {"PaymentMethodDomain": domains})()
+    monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
+
+    sync_account_from_webhook(
+        {
+            "account_id": "acct_webhook_a",
+            "charges_enabled": True,
+            "payouts_enabled": True,
+            "details_submitted": True,
+        }
+    )
+
+    assert len(domains.created) == 1
+    assert domains.created[0]["stripe_account"] == "acct_webhook_a"
+
+
 def test_status_refresh_survives_domain_registration_failure(session, garage, monkeypatch):
     """A garage's Stripe status must still refresh correctly even if
     registering the Apple Pay domain fails for some reason - that's a wallet
@@ -149,6 +263,7 @@ def test_status_refresh_survives_domain_registration_failure(session, garage, mo
 
     stripe = type("Stripe", (), {"Account": api, "PaymentMethodDomain": _FailingDomainApi()})()
     monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
+    _patch_v2_create(monkeypatch)
 
     create_connected_account(garage)
     settings = refresh_connect_status(garage)
@@ -174,6 +289,7 @@ def test_connect_status_refresh_accepts_stripe_object(session, garage, monkeypat
     monkeypatch.setattr(
         "app.payments.connect._client", lambda: type("Stripe", (), {"Account": api})()
     )
+    _patch_v2_create(monkeypatch)
 
     create_connected_account(garage)
     settings = refresh_connect_status(garage)
@@ -181,6 +297,37 @@ def test_connect_status_refresh_accepts_stripe_object(session, garage, monkeypat
     assert settings.stripe_onboarding_complete is True
     assert settings.stripe_charges_enabled is True
     assert settings.stripe_payouts_enabled is True
+
+
+def test_connect_start_never_leaks_the_raw_stripe_error_to_the_browser(
+    authenticated_client, monkeypatch
+):
+    """Regression guard for a real incident: a raw Stripe API exception
+    (request id, doc links and all) was shown verbatim on the Payments
+    settings page. The business only ever sees a generic, safe message;
+    the real detail belongs in the platform's own logs."""
+    from app.payments.connect import ConnectError
+
+    def _boom(garage):
+        raise ConnectError(
+            "Stripe no longer recommends Accounts v1 for new Connect integrations. "
+            "Create connected accounts with POST /v2/core/accounts instead: "
+            "https://docs.stripe.com/api/v2/core/accounts (request req_abc123)",
+            code="v1_deprecated",
+        )
+
+    monkeypatch.setattr("app.payments.routes.create_connected_account", _boom)
+
+    response = authenticated_client.post("/api/payments/stripe/connect")
+
+    assert response.status_code == 503
+    body = response.get_json()
+    assert (
+        body["message"]
+        == "We couldn't start Stripe setup. Please try again or contact CoMaz support."
+    )
+    assert "req_abc123" not in body["message"]
+    assert "docs.stripe.com" not in body["message"]
 
 
 def test_connect_routes_are_owner_only_and_tenant_scoped(

@@ -21,6 +21,7 @@ from app.payments.connect import (
     ConnectError,
     create_account_link,
     create_connected_account,
+    get_wallet_domain_status,
     refresh_connect_status,
 )
 from app.payments.schemas import StripeConnectLinkSchema, StripeConnectStatusSchema
@@ -37,12 +38,15 @@ _AUTH_DOC: dict[str, list[dict[str, list[str]]]] = {"security": [{"bearerAuth": 
 
 def _status_payload(garage) -> dict:
     settings = garage.payment_settings
+    wallet_status = get_wallet_domain_status(garage) or {}
     return {
         "provider": settings.provider if settings else None,
         "stripe_account_id": settings.stripe_account_id if settings else None,
         "stripe_onboarding_complete": bool(settings and settings.stripe_onboarding_complete),
         "stripe_charges_enabled": bool(settings and settings.stripe_charges_enabled),
         "stripe_payouts_enabled": bool(settings and settings.stripe_payouts_enabled),
+        "apple_pay_status": wallet_status.get("apple_pay_status"),
+        "apple_pay_status_details": wallet_status.get("apple_pay_status_details"),
     }
 
 
@@ -97,5 +101,20 @@ class StripeConnectStart(MethodView):
             create_connected_account(garage)
             url = create_account_link(garage, return_url=return_url, refresh_url=refresh_url)
         except ConnectError as exc:
-            abort(503, message=str(exc))
+            # The real Stripe error (which can include a raw API exception
+            # message, a request id, and links to Stripe's own API docs -
+            # see the account-creation failure log in
+            # app/payments/connect.py) is never something a business owner
+            # should see verbatim; it belongs in the platform's own logs,
+            # not their browser.
+            current_app.logger.warning(
+                "STRIPE_CONNECT_START_FAILED garage=%s code=%s detail=%s",
+                garage.id,
+                exc.code,
+                str(exc),
+            )
+            abort(
+                503,
+                message="We couldn't start Stripe setup. Please try again or contact CoMaz support.",
+            )
         return {"url": url}

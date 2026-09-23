@@ -4,6 +4,36 @@ CoMaz is the Stripe Connect platform. Each garage gets an Express connected
 account and customer deposits are **Direct Charges** on that account. CoMaz
 does not receive or store a garage's Stripe credentials.
 
+## Accounts v2 migration (new accounts only)
+
+Stripe deprecated `/v1/accounts` for *creating* new connected accounts in
+favour of `/v2/core/accounts` - `app/payments/connect.py::
+create_connected_account` uses the v2 API for every new account from here
+on. Nothing else changed: v1's `Account.retrieve`/`AccountLink`/webhooks all
+keep working unmodified against a v2-created account, because Stripe's v1
+endpoints accept a v2 account id and respond in v1 shape (Stripe's own
+"Accounts v2" docs: "you can still pass the ID of a v2 Account to an
+Accounts v1 API endpoint... the response is structured as a v1 Account").
+Every account created before this change remains an ordinary v1 Express
+account, untouched.
+
+The new account is configured to reproduce a v1 `type="express"` account's
+default behaviour exactly:
+
+| v1 (old) | v2 (new) | Meaning |
+| --- | --- | --- |
+| `type="express"` | `dashboard="express"` | Same limited, CoMaz-branded Express Dashboard. |
+| (default) | `defaults.responsibilities.fees_collector="stripe"` | Stripe deducts its processing fee directly from the connected account's charge - CoMaz takes no platform cut (no `application_fee_amount` is set anywhere in this codebase). |
+| (default) | `defaults.responsibilities.losses_collector="stripe"` | Stripe is liable for the connected account's negative balances, same as a v1 Express account. |
+| `capabilities.card_payments` | `configuration.merchant.capabilities.card_payments` | The only capability CoMaz has ever requested. |
+
+**Before ever using this in Live mode**, verify in Stripe *Test* mode that a
+freshly-created v2 account behaves identically end to end: connect a test
+garage, complete the Stripe-hosted onboarding form, confirm the return
+redirect and `GET /api/payments/stripe/status` correctly report
+`stripe_charges_enabled`/`stripe_payouts_enabled`, and that a test deposit on
+that account still works as a Direct Charge.
+
 ## Deployment variables
 
 Set these only in the backend deployment. Use values all from Test mode or all
