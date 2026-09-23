@@ -41,6 +41,7 @@ from app.models.booking_request import (
 )
 from app.models.conversation.callback_request import CallbackRequest
 from app.models.customer import Customer
+from app.models.garage import Garage
 from app.models.vehicle import Vehicle
 from app.public_booking import availability
 
@@ -202,6 +203,12 @@ def create_booking_request(
         existing = BookingRequest.query.filter_by(voice_call_id=voice_call_id).first()
         if existing is not None:
             return existing, None
+
+    # Voice, public booking, direct staff scheduling, and staff approval all
+    # share this per-garage transaction boundary.  Revalidation without the
+    # lock is only a check-then-write race: another channel could reserve the
+    # same capacity between validate_slot and commit.
+    db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
 
     if preferred_time is not None:
         reason = revalidate_slot(

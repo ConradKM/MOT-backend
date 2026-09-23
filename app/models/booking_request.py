@@ -7,6 +7,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -79,6 +80,17 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     """
 
     __tablename__ = "booking_requests"
+    __table_args__ = (
+        # Public idempotency tokens are meaningful only within the business
+        # addressed by the booking URL.  Do not let a token from another
+        # tenant create a cross-business uniqueness conflict.
+        Index(
+            "uq_booking_request_garage_payment_attempt",
+            "garage_id",
+            "payment_attempt_id",
+            unique=True,
+        ),
+    )
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -99,7 +111,7 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # Opaque browser-generated public booking idempotency token. Deposit
     # submissions use it to resume the provider session; ordinary public
     # submissions use it to prevent a retry creating a second request.
-    payment_attempt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, unique=True, index=True)
+    payment_attempt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     # Opaque OpenAI function-call id for a voice-created request. It makes a
     # retry after a controller/network failure idempotent without storing any
     # caller speech or customer data.
