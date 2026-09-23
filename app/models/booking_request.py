@@ -112,6 +112,15 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # submissions use it to resume the provider session; ordinary public
     # submissions use it to prevent a retry creating a second request.
     payment_attempt_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    # Hash of the server-issued recovery capability for an in-progress public
+    # deposit booking.  The browser receives the original opaque token once
+    # and may keep it in sessionStorage; the database never stores a usable
+    # bearer credential.  This is deliberately separate from the browser's
+    # idempotency UUID: knowing an idempotency key must not reveal a booking,
+    # its customer details, or a Stripe client secret.
+    payment_recovery_token_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
     # Opaque OpenAI function-call id for a voice-created request. It makes a
     # retry after a controller/network failure idempotent without storing any
     # caller speech or customer data.

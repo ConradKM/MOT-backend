@@ -9,6 +9,7 @@ import uuid
 
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
+from app.models.garage import Garage
 from app.models.payments.payment import BookingPayment
 from app.payments.service import expire_stale_payment_holds
 
@@ -81,6 +82,7 @@ def test_deposit_intent_creates_awaiting_payment_hold(client, session, garage):
     assert body["checkout_mode"] == "EMBEDDED"
     assert body["provider_data"]["client_secret"] is not None
     assert body["booking_reference"]
+    assert len(body["recovery_token"]) >= 32
 
     booking_request = BookingRequest.query.filter_by(garage_id=garage.id).one()
     assert booking_request.status == "AWAITING_PAYMENT"
@@ -90,6 +92,98 @@ def test_deposit_intent_creates_awaiting_payment_hold(client, session, garage):
     assert payment.amount_minor == 2000
     assert payment.status == "REQUIRES_PAYMENT"
     assert payment.provider_payment_id is not None
+
+
+def _recover(client, garage, token):
+    return client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-attempt/recover",
+        json={"recovery_token": token},
+    )
+
+
+def test_recovery_returns_the_same_authoritative_hold_and_payment_session(client, session, garage):
+    appt_type = _deposit_type(session, garage)
+    create = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent",
+        json=_payload(appt_type, payment_attempt_id=str(uuid.uuid4())),
+    ).get_json()
+    original = BookingRequest.query.filter_by(booking_reference=create["booking_reference"]).one()
+    original_payment = original.active_payment
+
+    first = _recover(client, garage, create["recovery_token"])
+    second = _recover(client, garage, create["recovery_token"])
+
+    assert first.status_code == second.status_code == 200
+    body = first.get_json()
+    assert body["booking_reference"] == create["booking_reference"]
+    assert body["status"] == "AWAITING_PAYMENT"
+    assert body["hold_expires_at"] == create["hold_expires_at"]
+    assert body["provider_data"]["client_secret"] == create["provider_data"]["client_secret"]
+    assert body["customer_email"] == "alex.turner@example.com"
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+    assert (
+        BookingPayment.query.filter_by(booking_request_id=original.id).one().id
+        == original_payment.id
+    )
+
+
+def test_recovery_is_scoped_to_the_tenant_and_hides_invalid_tokens(client, session, garage):
+    appt_type = _deposit_type(session, garage)
+    create = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=_payload(appt_type)
+    ).get_json()
+    other = Garage(
+        name="Garage B",
+        slug="garage-b",
+        email="b@example.com",
+        phone="+442079460002",
+        address="2 Test Street",
+        timezone="UTC",
+    )
+    session.add(other)
+    session.commit()
+
+    assert _recover(client, other, create["recovery_token"]).status_code == 404
+    assert _recover(client, garage, "x" * 43).status_code == 404
+
+
+def test_recovery_of_paid_booking_never_returns_a_new_payment_session(client, session, garage):
+    appt_type = _deposit_type(session, garage)
+    create = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=_payload(appt_type)
+    ).get_json()
+    booking = BookingRequest.query.filter_by(booking_reference=create["booking_reference"]).one()
+    payment = booking.active_payment
+    payment.status = "SUCCEEDED"
+    booking.status = "PENDING"
+    booking.payment_hold_expires_at = None
+    session.commit()
+
+    recovered = _recover(client, garage, create["recovery_token"])
+    assert recovered.status_code == 200
+    body = recovered.get_json()
+    assert body["status"] == "PENDING"
+    assert body["payment_status"] == "SUCCEEDED"
+    assert body["provider_data"] is None
+    assert BookingPayment.query.filter_by(booking_request_id=booking.id).count() == 1
+
+
+def test_recovery_reports_expired_attempt_without_resurrecting_it(client, session, garage):
+    appt_type = _deposit_type(session, garage)
+    create = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-intent", json=_payload(appt_type)
+    ).get_json()
+    booking = BookingRequest.query.filter_by(booking_reference=create["booking_reference"]).one()
+    expire_stale_payment_holds(
+        garage_id=garage.id, now=datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1)
+    )
+
+    recovered = _recover(client, garage, create["recovery_token"])
+    assert recovered.status_code == 200
+    assert recovered.get_json()["status"] == "EXPIRED"
+    assert recovered.get_json()["provider_data"] is None
+    session.refresh(booking)
+    assert booking.status == "EXPIRED"
 
 
 def test_deposit_intent_percentage_calculation(client, session, garage):
