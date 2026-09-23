@@ -356,8 +356,15 @@ class VoiceTelemetryUsageSchema(Schema):
 class VoiceTelemetryCostSchema(Schema):
     openai_total = fields.Decimal(dump_only=True, allow_none=True, as_string=True)
     openai_is_estimated = fields.Bool(dump_only=True, allow_none=True)
+    openai_priced_calls = fields.Int(dump_only=True)
     twilio_total = fields.Decimal(dump_only=True, allow_none=True, as_string=True)
     twilio_is_estimated = fields.Bool(dump_only=True, allow_none=True)
+    twilio_priced_calls = fields.Int(dump_only=True)
+    # None unless both providers priced at least one call, each in exactly
+    # one currency, and those currencies match - never a figure that adds
+    # apples to oranges. See app/platform_admin/voice_telemetry.py.
+    combined_total = fields.Decimal(dump_only=True, allow_none=True, as_string=True)
+    combined_currency = fields.Str(dump_only=True, allow_none=True)
 
 
 class VoiceTelemetryToolCallsSchema(Schema):

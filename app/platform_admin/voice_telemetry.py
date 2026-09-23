@@ -85,18 +85,59 @@ def voice_telemetry_stats(
     # CoMaz has no OpenAI rate for still gets a Twilio figure (and vice
     # versa in principle), so restricting both sums to "openai cost is not
     # null" would silently drop a real Twilio contribution.
-    openai_cost_total, openai_cost_all_estimated = db.session.execute(
+    (
+        openai_cost_total,
+        openai_cost_all_estimated,
+        openai_priced_calls,
+        openai_currencies,
+    ) = db.session.execute(
         select(
             func.sum(VoiceCallMetrics.openai_cost_amount),
             func.bool_and(VoiceCallMetrics.openai_cost_is_estimated),
+            func.count(),
+            func.count(func.distinct(VoiceCallMetrics.openai_cost_currency)),
         ).where(*filters, VoiceCallMetrics.openai_cost_amount.is_not(None))
     ).one()
-    twilio_cost_total, twilio_cost_all_estimated = db.session.execute(
+    (
+        twilio_cost_total,
+        twilio_cost_all_estimated,
+        twilio_priced_calls,
+        twilio_currencies,
+    ) = db.session.execute(
         select(
             func.sum(VoiceCallMetrics.twilio_cost_amount),
             func.bool_and(VoiceCallMetrics.twilio_cost_is_estimated),
+            func.count(),
+            func.count(func.distinct(VoiceCallMetrics.twilio_cost_currency)),
         ).where(*filters, VoiceCallMetrics.twilio_cost_amount.is_not(None))
     ).one()
+
+    # A combined figure is only meaningful when both providers priced at
+    # least one call and each did so in exactly one currency - "report
+    # components separately instead of lying with arithmetic" the moment
+    # either condition breaks (a mixed-currency period, or one provider
+    # with nothing priced yet).
+    combined_total = None
+    combined_currency = None
+    if (
+        openai_cost_total is not None
+        and twilio_cost_total is not None
+        and openai_currencies == 1
+        and twilio_currencies == 1
+    ):
+        openai_currency = db.session.execute(
+            select(VoiceCallMetrics.openai_cost_currency)
+            .where(*filters, VoiceCallMetrics.openai_cost_amount.is_not(None))
+            .limit(1)
+        ).scalar()
+        twilio_currency = db.session.execute(
+            select(VoiceCallMetrics.twilio_cost_currency)
+            .where(*filters, VoiceCallMetrics.twilio_cost_amount.is_not(None))
+            .limit(1)
+        ).scalar()
+        if openai_currency == twilio_currency:
+            combined_total = openai_cost_total + twilio_cost_total
+            combined_currency = openai_currency
 
     booking_outcomes = _grouped_nonnull(VoiceCallMetrics.booking_outcome, *filters)
     end_reasons = _grouped_nonnull(VoiceCallMetrics.end_reason, *filters)
@@ -121,10 +162,14 @@ def voice_telemetry_stats(
             "openai_is_estimated": bool(openai_cost_all_estimated)
             if openai_cost_total is not None
             else None,
+            "openai_priced_calls": openai_priced_calls,
             "twilio_total": twilio_cost_total,
             "twilio_is_estimated": bool(twilio_cost_all_estimated)
             if twilio_cost_total is not None
             else None,
+            "twilio_priced_calls": twilio_priced_calls,
+            "combined_total": combined_total,
+            "combined_currency": combined_currency,
         },
         "tool_calls": {
             "total": int(total_tool_calls),

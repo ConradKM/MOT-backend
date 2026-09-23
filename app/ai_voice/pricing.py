@@ -140,7 +140,11 @@ TWILIO_INBOUND_RATE_PER_MINUTE = Decimal("0.0034")
 
 
 def _round_money(amount: Decimal) -> Decimal:
-    return amount.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    # 6dp, not 4: a few-second call's share of a per-minute rate is well
+    # under a cent, and rounding that to 4dp before storage would distort
+    # a total summed across many short calls (see VoiceCallMetrics's own
+    # comment on Numeric(14, 6)).
+    return amount.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
 
 def calculate_openai_cost(
