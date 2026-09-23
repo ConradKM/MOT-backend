@@ -137,6 +137,16 @@ def buy_number(garage: Garage, phone_number: str) -> dict:
     The webhook URLs are set in the same call as the purchase rather than in
     a follow-up request, so there is no window where the number is live and
     answering with Twilio's default demo message.
+
+    Reconciles before buying: if Twilio already shows this exact number
+    owned by this subaccount - the purchase succeeded on a previous attempt
+    but the response was lost, or CoMaz's own commit that would have
+    recorded it never landed - that existing resource is adopted instead of
+    buying a second one. This is what makes a retry after a crash or a
+    network timeout recover the already-paid-for number rather than
+    doubling the charge; ``action_buy_voice_number``'s own guard already
+    covers the simpler case of a plain retry once the first purchase *did*
+    get recorded.
     """
     if not is_twilio_configured():
         raise VoiceProvisioningError("Twilio is not configured for this deployment.")
@@ -145,16 +155,44 @@ def buy_number(garage: Garage, phone_number: str) -> dict:
     urls = webhook_urls()
 
     try:
-        number = client.incoming_phone_numbers.create(
-            phone_number=phone_number,
-            friendly_name=f"CoMaz — {garage.name}"[:64],
-            voice_url=urls["voice_url"],
-            voice_method="POST",
-            status_callback=urls["status_callback"],
-            status_callback_method="POST",
-        )
+        existing = client.incoming_phone_numbers.list(phone_number=phone_number, limit=1)
     except TwilioRestException as exc:
-        raise _twilio_error(exc, "Twilio refused to buy that number.") from exc
+        raise _twilio_error(exc, "Twilio could not check for an existing purchase.") from exc
+
+    if existing:
+        # Already owned by this subaccount from an earlier attempt whose
+        # result CoMaz never recorded - reuse it rather than buying again.
+        # (A number owned by a *different* subaccount would never appear
+        # here: this client is scoped to this business's own subaccount.)
+        number = existing[0]
+        try:
+            number = number.update(
+                voice_url=urls["voice_url"],
+                voice_method="POST",
+                status_callback=urls["status_callback"],
+                status_callback_method="POST",
+            )
+        except TwilioRestException as exc:
+            raise _twilio_error(exc, "Twilio refused to reconfigure that number.") from exc
+        logger.info(
+            "[provisioning] reconciled already-owned voice number %s (%s) for garage %s "
+            "instead of buying again",
+            number.phone_number,
+            number.sid,
+            garage.id,
+        )
+    else:
+        try:
+            number = client.incoming_phone_numbers.create(
+                phone_number=phone_number,
+                friendly_name=f"CoMaz — {garage.name}"[:64],
+                voice_url=urls["voice_url"],
+                voice_method="POST",
+                status_callback=urls["status_callback"],
+                status_callback_method="POST",
+            )
+        except TwilioRestException as exc:
+            raise _twilio_error(exc, "Twilio refused to buy that number.") from exc
 
     logger.info(
         "[provisioning] bought voice number %s (%s) for garage %s",
