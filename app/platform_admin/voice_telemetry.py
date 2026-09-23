@@ -3,12 +3,15 @@ quality telemetry for AI-handled voice calls, in the same style as
 ``app/platform_admin/stats.py`` (aggregate in SQL, rates are ``None`` over
 an empty denominator, never ``0``).
 
-Cost totals are reported only from rows that actually carry a measured or
-estimated cost figure - today nothing in ``app/ai_voice`` computes one (see
-app/models/communications/voice_call_metrics.py's docstring), so those
-totals are ``None`` rather than a false zero until that lands. When they
-do land, ``*_is_estimated`` on each contributing row decides whether the
-total is reported as measured or estimated.
+Cost totals are reported only from rows that actually carry a cost figure -
+a business with no calls, or calls under a model CoMaz has no rate for,
+report ``None`` rather than a false zero. Every reported total is
+estimated (see app/ai_voice/pricing.py for exactly why neither OpenAI nor
+Twilio hands this backend a provider-billed figure for this call path
+today); ``openai_is_estimated``/``twilio_is_estimated`` stay in the
+response so a report can never silently start presenting an estimate as an
+actual once reconciliation (pricing.py's reconcile_* functions) is wired
+up for either provider.
 """
 
 from __future__ import annotations
@@ -78,16 +81,22 @@ def voice_telemetry_stats(
         still_open_count,
     ) = totals
 
-    cost_totals = db.session.execute(
+    # Two independent queries, not one shared WHERE: a call under a model
+    # CoMaz has no OpenAI rate for still gets a Twilio figure (and vice
+    # versa in principle), so restricting both sums to "openai cost is not
+    # null" would silently drop a real Twilio contribution.
+    openai_cost_total, openai_cost_all_estimated = db.session.execute(
         select(
             func.sum(VoiceCallMetrics.openai_cost_amount),
             func.bool_and(VoiceCallMetrics.openai_cost_is_estimated),
-            func.sum(VoiceCallMetrics.twilio_cost_amount),
-            func.bool_and(VoiceCallMetrics.twilio_cost_is_estimated),
         ).where(*filters, VoiceCallMetrics.openai_cost_amount.is_not(None))
     ).one()
-    openai_cost_total, openai_cost_all_estimated = cost_totals[0], cost_totals[1]
-    twilio_cost_total, twilio_cost_all_estimated = cost_totals[2], cost_totals[3]
+    twilio_cost_total, twilio_cost_all_estimated = db.session.execute(
+        select(
+            func.sum(VoiceCallMetrics.twilio_cost_amount),
+            func.bool_and(VoiceCallMetrics.twilio_cost_is_estimated),
+        ).where(*filters, VoiceCallMetrics.twilio_cost_amount.is_not(None))
+    ).one()
 
     booking_outcomes = _grouped_nonnull(VoiceCallMetrics.booking_outcome, *filters)
     end_reasons = _grouped_nonnull(VoiceCallMetrics.end_reason, *filters)

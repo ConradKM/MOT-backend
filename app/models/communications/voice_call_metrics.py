@@ -84,12 +84,22 @@ class VoiceCallMetrics(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     audio_input_seconds: Mapped[int | None] = mapped_column(Integer)
     audio_output_seconds: Mapped[int | None] = mapped_column(Integer)
 
-    # --- Cost - see module docstring on measured vs. estimated ---
+    # --- Cost - see module docstring on measured vs. estimated. Every
+    # amount is paired with the exact rate-table version that produced it
+    # (see app/ai_voice/pricing.py) - rates change over time, but a stored
+    # amount never silently drifts to match a newer rate. Recalculating
+    # under a new version is always possible from the raw usage above, and
+    # always produces a new figure under a new version, never an overwrite
+    # of the old one, unless a provider-reported figure is reconciled in
+    # (see pricing.py's reconcile_* functions).
     openai_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    openai_cost_currency: Mapped[str | None] = mapped_column(String(3))
     openai_cost_is_estimated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    openai_pricing_version: Mapped[str | None] = mapped_column(String(60))
     twilio_cost_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     twilio_cost_currency: Mapped[str | None] = mapped_column(String(3))
     twilio_cost_is_estimated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    twilio_pricing_version: Mapped[str | None] = mapped_column(String(60))
 
     # --- Tool calls / booking / escalation outcome - counts and short
     # labels only, never arguments or transcript content ---
