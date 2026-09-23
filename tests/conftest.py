@@ -182,6 +182,7 @@ def garage(session):
         email="contact@garage-a.example",
         phone="+44 20 7946 0001",
         address="1 Test Street, London",
+        timezone="UTC",
     )
     session.add(g)
     session.commit()
@@ -464,6 +465,7 @@ def second_garage(session):
         email="contact@garage-b.example",
         phone="+44 20 7946 0002",
         address="2 Test Street, Manchester",
+        timezone="UTC",
     )
     session.add(g)
     session.commit()

@@ -8,6 +8,7 @@ from app.public_booking.availability import single_day
 
 
 def test_london_wall_clock_slot_converts_correctly_in_gmt_and_bst(garage):
+    garage.timezone = "Europe/London"
     assert local_slot_as_utc(garage, date(2027, 1, 11), time(9)).isoformat() == (
         "2027-01-11T09:00:00+00:00"
     )
@@ -17,6 +18,7 @@ def test_london_wall_clock_slot_converts_correctly_in_gmt_and_bst(garage):
 
 
 def test_london_dst_boundary_keeps_nine_am_as_nine_am_local(garage):
+    garage.timezone = "Europe/London"
     # Europe/London switches to BST on this Sunday. A configured 09:00 is
     # still 09:00 to the business, represented by 08:00 UTC.
     assert local_slot_as_utc(garage, date(2027, 3, 28), time(9)).isoformat() == (
@@ -27,6 +29,7 @@ def test_london_dst_boundary_keeps_nine_am_as_nine_am_local(garage):
 def test_bst_availability_blocks_the_same_persisted_business_local_slot(
     session, garage, garage_schedule, user, customer, appointment_type
 ):
+    garage.timezone = "Europe/London"
     day = date(2027, 7, 12)
     garage_schedule.min_lead_time_hours = 0
     garage_schedule.max_advance_days = 1000

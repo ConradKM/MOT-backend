@@ -21,9 +21,13 @@ def upgrade():
                 "timezone",
                 sa.String(length=64),
                 nullable=False,
-                server_default="Europe/London",
+                # Existing persisted appointment timestamps were historically
+                # interpreted as UTC. Preserve that meaning on migration;
+                # new businesses use the model/server default below.
+                server_default="UTC",
             )
         )
+        batch_op.alter_column("timezone", server_default="Europe/London")
 
 
 def downgrade():
