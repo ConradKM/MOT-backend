@@ -86,8 +86,9 @@ def test_single_day_today_lists_only_valid_future_slots(garage, garage_schedule)
     body = single_day(garage, TODAY, NOW)
     assert body["is_open"] is True
     starts = [s["start"] for s in body["slots"]]
-    # now 10:15 + 2h notice -> first bookable slot start is 12:30.
-    assert starts and starts[0] == "12:30"
+    # now 10:15 + 2h notice = 12:15; with 5-min slots that's itself a valid
+    # start (the cutoff check is inclusive), so it's the first bookable slot.
+    assert starts and starts[0] == "12:15"
     assert "09:00" not in starts and "11:00" not in starts
 
 

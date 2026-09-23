@@ -20,7 +20,7 @@ FUTURE = (datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=2
 def test_get_returns_seeded_defaults(authenticated_client):
     body = authenticated_client.get("/api/garage/schedule").get_json()
 
-    assert body["settings"]["slot_interval_minutes"] == 30
+    assert body["settings"]["slot_interval_minutes"] == 5
     assert body["settings"]["max_advance_days"] == 60
     assert len(body["opening_hours"]) == 7
     assert body["exceptions"] == []
