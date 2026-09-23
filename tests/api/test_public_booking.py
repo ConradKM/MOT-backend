@@ -143,6 +143,17 @@ def test_replayed_plain_booking_attempt_creates_only_one_pending_request(client,
     assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
 
 
+def test_replayed_plain_booking_without_a_token_returns_the_active_request(client, garage):
+    payload = _valid_payload()
+
+    first = client.post(f"/api/public/{garage.slug}/booking-requests", json=payload)
+    replay = client.post(f"/api/public/{garage.slug}/booking-requests", json=payload)
+
+    assert first.status_code == replay.status_code == 201
+    assert replay.get_json()["id"] == first.get_json()["id"]
+    assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+
+
 def test_plain_booking_attempt_id_cannot_be_reused_for_a_changed_slot(client, garage):
     attempt_id = str(uuid.uuid4())
     assert (

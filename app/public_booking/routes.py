@@ -17,7 +17,7 @@ from app.booking_requests.service import resolve_customer_and_vehicle
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
 from app.models.appointments.appointment_type import GarageAppointmentType
-from app.models.booking_request import BookingRequest
+from app.models.booking_request import BOOKING_REQUEST_SOURCE_WEB, BookingRequest
 from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
 from app.payments.money import DepositConfigError, minor_to_decimal
 from app.payments.providers import get_provider
@@ -396,6 +396,33 @@ def _existing_plain_booking_attempt(garage, attempt_id, appt_type, data):
     return booking_request
 
 
+def _matching_active_plain_request(garage, appt_type, data):
+    """Find the active request an accidental no-token retry would duplicate.
+
+    Older/current browser clients may not yet send an attempt UUID for an
+    ordinary (no-deposit) form.  Treat the exact same caller, item, service,
+    date and time as one active intent while it reserves capacity; this is a
+    conservative server-side fallback, not a replacement for the explicit
+    token.  Different vehicle/customer/service/slot selections remain
+    independent bookings.
+    """
+    return (
+        BookingRequest.query.filter_by(
+            garage_id=garage.id,
+            source=BOOKING_REQUEST_SOURCE_WEB,
+            status="PENDING",
+            customer_email=data["customer_email"],
+            customer_phone=data.get("customer_phone"),
+            vehicle_registration=data.get("vehicle_registration"),
+            appointment_type_id=appt_type.id if appt_type else None,
+            preferred_date=data["preferred_date"],
+            preferred_time=data.get("preferred_time"),
+        )
+        .order_by(BookingRequest.created_at.desc())
+        .first()
+    )
+
+
 @public_booking_blp.route("/<slug>/booking-requests")
 class BookingRequestSubmit(MethodView):
     # Rate-limit before parsing anything. Storage / on-off / the limit string
@@ -430,6 +457,11 @@ class BookingRequestSubmit(MethodView):
             return existing
 
         resolved_answers = _validate_answers_or_abort(garage, data, data.get("appointment_type_id"))
+
+        if data.get("payment_attempt_id") is None:
+            existing_duplicate = _matching_active_plain_request(garage, appt_type, data)
+            if existing_duplicate is not None:
+                return existing_duplicate
 
         preferred_time = _lock_and_validate_slot(garage, data, appt_type)
 
