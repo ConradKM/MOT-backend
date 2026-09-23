@@ -275,6 +275,60 @@ def transfer_from_parent(garage: Garage, phone_number_sid: str) -> dict:
     return configure_number(garage, moved.sid)
 
 
+def return_to_parent(garage: Garage, number_sid: str) -> dict:
+    """Move ``number_sid`` out of this business's subaccount and back into
+    CoMaz's shared parent account - the inverse of ``transfer_from_parent``,
+    and the only supported way a number leaves a business: never released
+    or deleted, always moved to a place the existing discovery flow
+    (``list_parent_numbers``) already finds it again.
+
+    Idempotent against a prior attempt that moved the number at Twilio but
+    never got the chance to record it: if this subaccount no longer shows
+    the number as its own, that's treated as "already returned" rather than
+    an error - the caller (``action_return_voice_number_to_parent``) still
+    needs to clear its own stale local state either way, which is exactly
+    what a retry of this action does.
+    """
+    if not is_twilio_configured():
+        raise VoiceProvisioningError("Twilio is not configured for this deployment.")
+
+    client = get_client_for_subaccount_resources(garage)
+    try:
+        current = client.incoming_phone_numbers(number_sid).fetch()
+    except TwilioRestException as exc:
+        raise _twilio_error(
+            exc, "Twilio could not find that number in this business's subaccount."
+        ) from exc
+
+    parent_account_sid = current_app.config["TWILIO_ACCOUNT_SID"]
+    if current.account_sid == parent_account_sid:
+        # Already moved - a prior attempt's Twilio call succeeded but its
+        # result was never recorded. Nothing left to do at the provider.
+        logger.info(
+            "[provisioning] voice number %s (%s) was already back on the parent account for "
+            "garage %s",
+            current.phone_number,
+            current.sid,
+            garage.id,
+        )
+        return {"phone_number": current.phone_number, "sid": current.sid}
+
+    try:
+        moved = client.incoming_phone_numbers(number_sid).update(account_sid=parent_account_sid)
+    except TwilioRestException as exc:
+        raise _twilio_error(
+            exc, "Twilio refused to return that number to CoMaz's parent account."
+        ) from exc
+
+    logger.info(
+        "[provisioning] returned voice number %s (%s) from garage %s to the parent account",
+        moved.phone_number,
+        moved.sid,
+        garage.id,
+    )
+    return {"phone_number": moved.phone_number, "sid": moved.sid}
+
+
 def _capability_list(capabilities: object) -> list[str]:
     """Twilio reports capabilities as a dict of flags; we keep the enabled
     names in a stable order so the console can show "voice, SMS, MMS"."""

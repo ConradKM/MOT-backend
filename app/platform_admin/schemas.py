@@ -1154,6 +1154,10 @@ class VoiceNumberTransferSchema(Schema):
     acknowledge_whatsapp = fields.Bool(load_default=False)
 
 
+class VoiceNumberReturnSchema(Schema):
+    acknowledge_whatsapp = fields.Bool(load_default=False)
+
+
 class VoiceRoutingSchema(Schema):
     escalation_number = fields.Str(load_default=None, allow_none=True, validate=_E164)
     fallback_number = fields.Str(load_default=None, allow_none=True, validate=_E164)

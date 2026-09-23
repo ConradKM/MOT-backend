@@ -39,6 +39,7 @@ from app.communications.provisioning.service import (
     action_reconfigure_whatsapp_webhooks,
     action_refresh_whatsapp_status,
     action_register_sender,
+    action_return_voice_number_to_parent,
     action_set_automation_enabled,
     action_set_communications_enabled,
     action_set_voice_routing,
@@ -89,6 +90,7 @@ from app.platform_admin.schemas import (
     VoiceNumberLookupQuerySchema,
     VoiceNumberLookupResultSchema,
     VoiceNumberPurchaseSchema,
+    VoiceNumberReturnSchema,
     VoiceNumberTransferSchema,
     VoiceRoutingSchema,
     WhatsAppNumberSchema,
@@ -376,6 +378,37 @@ class VoiceNumberTransfer(MethodView):
             ACTION_COMMS_VOICE_NUMBER,
             f"Moved voice number into subaccount for {garage.name}",
             phone_number_sid=data["phone_number_sid"],
+        )
+        return communications_detail(garage)
+
+
+@platform_communications_blp.route(
+    "/tenants/<uuid:garage_id>/communications/voice/number/return-to-parent"
+)
+class VoiceNumberReturnToParent(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.arguments(VoiceNumberReturnSchema)
+    @platform_communications_blp.response(200, CommunicationsDetailSchema)
+    def post(self, data, garage_id):
+        """Move this business's voice number back into CoMaz's shared parent
+        account - never released or deleted, so it becomes discoverable
+        again under "CoMaz account" for whichever business it goes to next.
+
+        The number is never cleared from this business locally until Twilio
+        has confirmed (or already reflects) the move.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            action_return_voice_number_to_parent(
+                garage, acknowledge_whatsapp=data.get("acknowledge_whatsapp", False)
+            )
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc))
+        _audit(
+            garage,
+            ACTION_COMMS_VOICE_NUMBER,
+            f"Returned voice number to CoMaz's parent account for {garage.name}",
         )
         return communications_detail(garage)
 
