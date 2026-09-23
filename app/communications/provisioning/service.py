@@ -192,6 +192,14 @@ def action_buy_voice_number(
             "Create this business's Twilio subaccount before buying a number."
         )
 
+    if settings.voice_phone_number:
+        # Idempotent by design, the same way create_subaccount() already is:
+        # a retried click, a double-submit, or a resumed page load must never
+        # buy a second real number. This business already has one - nothing
+        # to do. Replacing a number is a deliberate, separate operation, not
+        # something this action performs implicitly.
+        return row
+
     previous = row.voice_status
     row.voice_status = states.VOICE_NUMBER_PURCHASING
     db.session.flush()
