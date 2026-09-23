@@ -122,8 +122,11 @@ def test_finish_call_calculates_openai_and_twilio_cost_from_measured_usage(sessi
     assert row.twilio_pricing_version is not None
 
 
-def test_finish_call_leaves_cost_null_for_an_unrecognised_model(session, garage, app):
-    app.config["OPENAI_REALTIME_MODEL"] = "some-future-model"
+def test_finish_call_leaves_cost_null_for_an_unrecognised_model(session, monkeypatch, garage, app):
+    # setitem, not a direct assignment: the app fixture isn't guaranteed to
+    # reset config between tests, and a leaked "some-future-model" here
+    # previously broke an unrelated later test.
+    monkeypatch.setitem(app.config, "OPENAI_REALTIME_MODEL", "some-future-model")
     telemetry.start_call(garage.id, "call_1")
     telemetry.record_usage("call_1", input_tokens=1000, output_tokens=500)
 
