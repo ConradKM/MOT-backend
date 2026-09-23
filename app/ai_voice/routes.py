@@ -28,6 +28,7 @@ from app.models.communications.communication_log import (
     CommunicationLog,
 )
 
+from . import telemetry
 from .call_controller import run_call_controller
 from .config import openai_configured, openai_voice_enabled, openai_webhook_configured
 from .instructions import build_instructions
@@ -127,6 +128,7 @@ def realtime_webhook():
     )
     db.session.commit()
     current_app.logger.info("AI_VOICE_CALL_ACCEPTED callSid=%s garage=%s", call_id, garage.id)
+    telemetry.start_call(garage.id, call_id)
 
     _spawn_call_controller(call_id=call_id, garage=garage, caller_phone=caller_phone)
 

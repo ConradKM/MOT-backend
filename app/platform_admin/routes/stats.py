@@ -14,9 +14,11 @@ from app.platform_admin.schemas import (
     GrowthSchema,
     PeriodQuerySchema,
     PlatformOverviewSchema,
+    VoiceTelemetryStatsSchema,
 )
 from app.platform_admin.security import platform_admin_required
 from app.platform_admin.stats import platform_overview, signup_growth
+from app.platform_admin.voice_telemetry import voice_telemetry_stats
 
 platform_stats_blp = Blueprint(
     "platform_admin_stats",
@@ -46,3 +48,15 @@ class PlatformStatsGrowth(MethodView):
     def get(self, args):
         """Signups per day plus a running total, with empty days filled in."""
         return signup_growth(days=args.get("days") or 90)
+
+
+@platform_stats_blp.route("/voice-telemetry")
+class PlatformVoiceTelemetry(MethodView):
+    @jwt_required()
+    @platform_admin_required
+    @platform_stats_blp.arguments(PeriodQuerySchema, location="query")
+    @platform_stats_blp.response(200, VoiceTelemetryStatsSchema)
+    def get(self, args):
+        """AI voice call usage, cost and quality telemetry across every
+        business - see app/platform_admin/voice_telemetry.py."""
+        return voice_telemetry_stats(None, days=args.get("days") or 30)
