@@ -465,6 +465,22 @@ def test_cancel_appointment_rejects_another_customers_appointment(
     assert appt.status == "BOOKED"
 
 
+def test_voice_cannot_mutate_a_no_show_appointment(session, garage, customer, make_appointment):
+    start = datetime.now(UTC).replace(microsecond=0) + timedelta(days=3)
+    appointment = make_appointment(start)
+    appointment.status = "NO_SHOW"
+    session.commit()
+
+    cancelled, cancel_reason = actions.cancel_appointment(garage, appointment)
+    moved, move_reason = actions.reschedule_appointment(
+        garage, appointment, _future_weekday(days_ahead=10), time(10, 0)
+    )
+
+    assert (cancelled, cancel_reason) == (False, "terminal_appointment")
+    assert (moved, move_reason) == (False, "terminal_appointment")
+    assert appointment.status == "NO_SHOW"
+
+
 def test_reschedule_appointment_moves_the_callers_own_appointment(
     garage, garage_schedule, customer, make_appointment
 ):
