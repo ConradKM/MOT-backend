@@ -20,11 +20,18 @@ from dataclasses import dataclass, field
 from datetime import date as date_cls
 from datetime import time as time_cls
 
+from flask import current_app
+
 from app.booking_flow import vehicle_details
+from app.communications.service import send_sms_message
 from app.conversation import actions
 from app.extensions import db
 from app.models.ai_voice_faq import GarageVoiceFAQ
 from app.models.booking_request import BookingRequest
+from app.models.communications.communication_log import STATUS_SKIPPED_NOT_CONFIGURED
+from app.payments.money import DepositConfigError, calculate_deposit_minor, minor_to_decimal
+from app.payments.providers.base import PaymentProviderError
+from app.payments.service import PaymentUnavailableError
 from app.phone import InvalidPhoneNumberError, normalize_uk_phone
 from app.public_booking import availability
 
@@ -276,11 +283,23 @@ TOOL_SCHEMAS: list[dict] = [
             "required": ["reason"],
         },
     },
+    {
+        "type": "function",
+        "name": "end_call",
+        "description": (
+            "End the call. Call this only once the conversation has clearly concluded - the "
+            "caller said goodbye/bye, said there's nothing else they need, or you've just given "
+            "your own final closing line after finishing what they called for. Say a brief, warm "
+            "closing line in the same turn you call this. Never call this for a mere pause or "
+            "short silence - only when the conversation is genuinely over."
+        ),
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 # Tool names that end the call once handled - the bridge checks this after
 # dispatch to close the session gracefully instead of waiting on more audio.
-CALL_ENDING_TOOLS = frozenset({"request_human_handoff"})
+CALL_ENDING_TOOLS = frozenset({"request_human_handoff", "end_call"})
 
 
 def _parse_date(value: str) -> date_cls | None:
@@ -331,6 +350,26 @@ def _tool_get_business_info(garage, **_args) -> dict:
     }
 
 
+def _deposit_amount(appointment_type) -> str | None:
+    """The configured deposit in major units (e.g. "30.00"), or ``None`` if
+    this type doesn't require one - never guessed/calculated when the
+    underlying config can't support it (mirrors
+    app/payments/service.py::create_deposit_hold's own assumptions)."""
+    if not appointment_type.deposit_required:
+        return None
+    if appointment_type.deposit_type is None or appointment_type.deposit_value is None:
+        return None
+    try:
+        minor = calculate_deposit_minor(
+            deposit_type=appointment_type.deposit_type,
+            deposit_value=appointment_type.deposit_value,
+            base_price=appointment_type.base_price,
+        )
+    except DepositConfigError:
+        return None
+    return str(minor_to_decimal(minor))
+
+
 def _tool_get_appointment_types(garage, **_args) -> dict:
     types = actions.get_appointment_types(garage)
     return {
@@ -343,6 +382,9 @@ def _tool_get_appointment_types(garage, **_args) -> dict:
                 "base_price": str(t.base_price) if t.base_price is not None else None,
                 "default_duration_minutes": t.default_duration_minutes,
                 "vehicle_details": vehicle_details.requirements_for(garage.id, t.id),
+                "deposit_required": t.deposit_required,
+                "deposit_amount": _deposit_amount(t),
+                "deposit_currency": t.deposit_currency if t.deposit_required else None,
             }
             for t in types
         ],
@@ -455,23 +497,27 @@ def _tool_create_booking(
     # the SIP call is trusted for customer linkage.
     customer = actions.find_customer(garage, caller_phone_e164) if caller_phone_e164 else None
 
-    booking_request, reason = actions.create_booking_request(
-        garage,
-        customer=customer,
-        first_name=first_name,
-        last_name=last_name,
-        phone_e164=contact_phone,
-        email=None,
-        vehicle_registration=vehicle["registration"],
-        vehicle_make=vehicle["make"],
-        vehicle_model=vehicle["model"],
-        appointment_type=appointment_type,
-        preferred_date=day,
-        preferred_time=slot_time,
-        notes=notes,
-        voice_tool_call_id=voice_tool_call_id,
-        voice_call_id=voice_call_id,
-    )
+    booking_kwargs = {
+        "customer": customer,
+        "first_name": first_name,
+        "last_name": last_name,
+        "phone_e164": contact_phone,
+        "email": None,
+        "vehicle_registration": vehicle["registration"],
+        "vehicle_make": vehicle["make"],
+        "vehicle_model": vehicle["model"],
+        "appointment_type": appointment_type,
+        "preferred_date": day,
+        "preferred_time": slot_time,
+        "notes": notes,
+        "voice_tool_call_id": voice_tool_call_id,
+        "voice_call_id": voice_call_id,
+    }
+
+    if appointment_type.deposit_required:
+        return _create_deposit_booking(garage, contact_phone=contact_phone, **booking_kwargs)
+
+    booking_request, reason = actions.create_booking_request(garage, **booking_kwargs)
     if booking_request is None:
         return {
             "ok": False,
@@ -488,6 +534,82 @@ def _tool_create_booking(
             if booking_request.preferred_time is not None
             else None
         ),
+    }
+
+
+def _create_deposit_booking(garage, *, contact_phone: str, **booking_kwargs) -> dict:
+    """The deposit-required branch of ``_tool_create_booking``: creates an
+    AWAITING_PAYMENT hold + provider payment session
+    (app/conversation/actions.py::create_deposit_booking_request, which
+    reuses the exact same lifecycle as the public booking form's deposit
+    step), then texts the caller a link to finish paying on their own phone
+    - never asks them to read a card number aloud, and never marks the
+    booking as more complete than it actually is."""
+    appointment_type = booking_kwargs["appointment_type"]
+    try:
+        booking_request, reason = actions.create_deposit_booking_request(garage, **booking_kwargs)
+    except PaymentUnavailableError:
+        return {
+            "ok": False,
+            "error": (
+                "This business can't take deposit payments online right now. "
+                "Offer a human callback instead."
+            ),
+        }
+    except (DepositConfigError, PaymentProviderError):
+        logger.exception("AI_VOICE_DEPOSIT_HOLD_FAILED garage=%s", garage.id)
+        return {
+            "ok": False,
+            "error": (
+                "Couldn't start the deposit payment right now. Offer to try again or a human callback."
+            ),
+        }
+
+    if booking_request is None:
+        return {
+            "ok": False,
+            "error": f"That slot is no longer available ({reason}). Offer to check another time.",
+        }
+
+    deposit_amount = _deposit_amount(appointment_type)
+    recovery_token = getattr(booking_request, "deposit_recovery_token", None)
+    sms_sent = False
+    if recovery_token:
+        base_url = str(current_app.config.get("APP_BASE_URL") or "").rstrip("/")
+        # The public booking wizard's own resume mechanism
+        # (MOT-frontend src/pages/customer/BookingWizard.tsx) already knows
+        # how to pick a token up from ?resume=... and drive it through the
+        # exact same DepositStep/PaymentCheckout UI a browser abandoning
+        # payment mid-flow would land on - no separate payment page.
+        pay_url = f"{base_url}/book/{garage.id}?resume={recovery_token}"
+        body = (
+            f"{garage.name}: Your booking request for {appointment_type.name} on "
+            f"{booking_request.preferred_date.isoformat()} requires a "
+            f"£{deposit_amount} deposit. Pay securely: {pay_url}"
+        )
+        log = send_sms_message(
+            garage=garage,
+            to=contact_phone,
+            body=body,
+            booking_request=booking_request,
+        )
+        sms_sent = log.status not in ("FAILED", STATUS_SKIPPED_NOT_CONFIGURED)
+
+    return {
+        "ok": True,
+        "booking_reference": booking_request.booking_reference,
+        "status": booking_request.status,
+        "service": appointment_type.name,
+        "date": booking_request.preferred_date.isoformat(),
+        "time": (
+            booking_request.preferred_time.strftime("%H:%M")
+            if booking_request.preferred_time is not None
+            else None
+        ),
+        "deposit_required": True,
+        "deposit_amount": deposit_amount,
+        "deposit_currency": appointment_type.deposit_currency,
+        "payment_link_sent_by_sms": sms_sent,
     }
 
 
@@ -594,6 +716,16 @@ def _tool_request_human_handoff(garage, caller_phone_e164: str, *, reason: str, 
     }
 
 
+def _tool_end_call(garage, **_args) -> dict:
+    """No side effect beyond being in CALL_ENDING_TOOLS - it exists purely
+    so the model has an explicit, idempotent way to signal 'hang up now'
+    once it has said its closing line (app/ai_voice/call_controller.py
+    checks CALL_ENDING_TOOLS after dispatch and hangs up after the response
+    finishes playing). Calling it more than once in a call is harmless: the
+    controller only acts on it once, and there is nothing here to repeat."""
+    return {"ok": True}
+
+
 _HANDLERS: dict[str, Callable[..., dict]] = {
     "get_business_info": _tool_get_business_info,
     "get_appointment_types": _tool_get_appointment_types,
@@ -604,6 +736,7 @@ _HANDLERS: dict[str, Callable[..., dict]] = {
     "cancel_appointment": _tool_cancel_appointment,
     "reschedule_appointment": _tool_reschedule_appointment,
     "request_human_handoff": _tool_request_human_handoff,
+    "end_call": _tool_end_call,
 }
 
 # Tools that need the live caller's own phone number (to identify them as a

@@ -76,8 +76,15 @@ def build_instructions(garage, *, now: datetime | None = None, route: str = ROUT
             "service and date; (4) offer only returned times; (5) collect name, contact number and "
             "the vehicle details that service asks for in get_appointment_types (registration, "
             "make, model - only those not marked not_asked; spell a registration back letter by "
-            "letter), read the selected service/date/time and details back, and get an "
-            "explicit confirmation; (6) call create_booking; (7) report only its real returned status. "
+            "letter); before asking for final confirmation, read back the service, date, time, "
+            "and its price from get_appointment_types's base_price - if that service has "
+            "deposit_required true, also say the deposit_amount is needed to secure the booking "
+            "and that you'll text a secure payment link to their contact number; then get an "
+            "explicit confirmation; (6) call create_booking; (7) report only its real returned "
+            "status - if it reports deposit_required true, tell the caller their booking is on "
+            "hold pending that payment (never call it confirmed), confirm whether the payment "
+            "link text was actually sent (payment_link_sent_by_sms), and if not, say you'll get "
+            "the business to contact them about paying the deposit instead of leaving it unsaid. "
             "If a time is unavailable, say so and check another date/time. A booking you create is a "
             "request pending the business's own review, not an instant confirmation - say so honestly, e.g. "
             '"I\'ve sent that request through - the team will confirm it with you shortly."\n\n'
@@ -86,7 +93,12 @@ def build_instructions(garage, *, now: datetime | None = None, route: str = ROUT
             "come back, say so honestly rather than guessing, and offer request_human_handoff. Always "
             "read back the specific appointment and get an explicit yes before calling "
             "cancel_appointment or reschedule_appointment, and check any new time with "
-            "get_available_slots first."
+            "get_available_slots first.\n\n"
+            "Once the conversation has clearly concluded - the caller says bye/goodbye, says there's "
+            "nothing else they need, or you've just given your own closing line after finishing what "
+            "they called for - give a brief, warm closing line and call end_call in that same turn. "
+            "Never call it for a mere pause or short silence; only when the conversation is genuinely "
+            "over."
         )
     )
 

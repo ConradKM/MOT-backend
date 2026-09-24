@@ -31,6 +31,7 @@ def test_tool_schemas_cover_the_required_tools():
         "cancel_appointment",
         "reschedule_appointment",
         "request_human_handoff",
+        "end_call",
     }
     for schema in TOOL_SCHEMAS:
         assert schema["type"] == "function"
@@ -602,6 +603,196 @@ def test_malformed_arguments_is_a_clean_error(garage):
 def test_missing_required_arguments_is_a_clean_error(garage):
     result = json.loads(dispatch_tool(garage, "+447123456789", "create_booking", "{}"))
     assert result["ok"] is False
+
+
+def test_end_call_is_a_call_ending_tool_that_dispatches_cleanly(garage):
+    from app.ai_voice.tools import CALL_ENDING_TOOLS
+
+    assert "end_call" in CALL_ENDING_TOOLS
+    result = json.loads(dispatch_tool(garage, "+447123456789", "end_call", "{}"))
+    assert result == {"ok": True}
+    # Idempotent: calling it again in the same "call" is harmless, never an error.
+    result_again = json.loads(dispatch_tool(garage, "+447123456789", "end_call", "{}"))
+    assert result_again == {"ok": True}
+
+
+def _deposit_appointment_type(
+    session, garage, *, deposit_type="FIXED", deposit_value="20.00", base_price="100.00"
+):
+    from app.models.appointments.appointment_type import GarageAppointmentType
+
+    t = GarageAppointmentType(
+        garage_id=garage.id,
+        name="Full Service",
+        status="ACTIVE",
+        default_duration_minutes=60,
+        base_price=base_price,
+        deposit_required=True,
+        deposit_type=deposit_type,
+        deposit_value=deposit_value,
+    )
+    session.add(t)
+    session.commit()
+    return t
+
+
+def test_get_appointment_types_reports_deposit_fields(session, garage, appointment_type):
+    _deposit_appointment_type(session, garage)
+
+    result = json.loads(dispatch_tool(garage, "+447123456789", "get_appointment_types", "{}"))
+    by_name = {t["name"]: t for t in result["appointment_types"]}
+
+    assert by_name[appointment_type.name]["deposit_required"] is False
+    assert by_name[appointment_type.name]["deposit_amount"] is None
+
+    assert by_name["Full Service"]["deposit_required"] is True
+    assert by_name["Full Service"]["deposit_amount"] == "20.00"
+    assert by_name["Full Service"]["deposit_currency"] == "GBP"
+
+
+def test_get_appointment_types_reports_a_percentage_deposit_amount(session, garage):
+    _deposit_appointment_type(
+        session, garage, deposit_type="PERCENTAGE", deposit_value="25", base_price="200.00"
+    )
+    result = json.loads(dispatch_tool(garage, "+447123456789", "get_appointment_types", "{}"))
+    entry = result["appointment_types"][0]
+    assert entry["deposit_amount"] == "50.00"
+
+
+def test_create_booking_with_fixed_deposit_creates_awaiting_payment_hold_and_texts_link(
+    monkeypatch, session, garage, garage_schedule
+):
+    from app.models.communications.communication_log import CommunicationLog as CommLog
+
+    appt_type = _deposit_appointment_type(session, garage)
+    sent = {}
+
+    def fake_send_sms_message(*, garage, to, body, booking_request=None, **_kw):
+        sent["to"] = to
+        sent["body"] = body
+        sent["booking_request"] = booking_request
+        return CommLog(garage_id=garage.id, channel="SMS", direction="OUTBOUND", status="queued")
+
+    import app.ai_voice.tools as tools_module
+
+    monkeypatch.setattr(tools_module, "send_sms_message", fake_send_sms_message)
+
+    day = _future_weekday()
+    args = json.dumps(
+        {
+            "appointment_type_id": str(appt_type.id),
+            "date": day.isoformat(),
+            "time": "09:00",
+            "first_name": "Alex",
+            "last_name": "Turner",
+            "vehicle_registration": "PB11 REQ",
+        }
+    )
+    result = json.loads(dispatch_tool(garage, "+447123456789", "create_booking", args))
+
+    assert result["ok"] is True
+    assert result["deposit_required"] is True
+    assert result["deposit_amount"] == "20.00"
+    assert result["payment_link_sent_by_sms"] is True
+
+    booking = BookingRequest.query.filter_by(booking_reference=result["booking_reference"]).one()
+    assert booking.status == "AWAITING_PAYMENT"
+    assert booking.payment_hold_expires_at is not None
+    assert booking.payment_recovery_token_hash is not None
+    assert booking.active_payment is not None
+    assert booking.active_payment.status == "REQUIRES_PAYMENT"
+
+    assert sent["to"] == "+447123456789"
+    assert f"/book/{garage.id}?resume=" in sent["body"]
+    assert "20.00" in sent["body"]
+    assert sent["booking_request"] is booking
+
+
+def test_create_booking_deposit_retry_is_idempotent_and_does_not_resend_sms(
+    monkeypatch, session, garage, garage_schedule
+):
+    from app.models.communications.communication_log import CommunicationLog as CommLog
+
+    appt_type = _deposit_appointment_type(session, garage)
+    calls = []
+
+    def fake_send_sms_message(*, garage, to, body, booking_request=None, **_kw):
+        calls.append(body)
+        return CommLog(garage_id=garage.id, channel="SMS", direction="OUTBOUND", status="queued")
+
+    import app.ai_voice.tools as tools_module
+
+    monkeypatch.setattr(tools_module, "send_sms_message", fake_send_sms_message)
+
+    day = _future_weekday()
+    args = json.dumps(
+        {
+            "appointment_type_id": str(appt_type.id),
+            "date": day.isoformat(),
+            "time": "09:00",
+            "first_name": "Alex",
+            "last_name": "Turner",
+            "vehicle_registration": "PB11 REQ",
+        }
+    )
+    from app.ai_voice.tools import VoiceToolState
+
+    state = VoiceToolState()
+    availability_args = json.dumps(
+        {"appointment_type_id": str(appt_type.id), "date": day.isoformat()}
+    )
+    dispatch_tool(garage, "+447123456789", "get_available_slots", availability_args, state=state)
+
+    first = json.loads(
+        dispatch_tool(
+            garage,
+            "+447123456789",
+            "create_booking",
+            args,
+            state=state,
+            tool_call_id="tool-call-1",
+        )
+    )
+    second = json.loads(
+        dispatch_tool(
+            garage,
+            "+447123456789",
+            "create_booking",
+            args,
+            state=state,
+            tool_call_id="tool-call-1",
+        )
+    )
+
+    assert first["booking_reference"] == second["booking_reference"]
+    assert BookingRequest.query.filter_by(garage_id=garage.id, source="CONVERSATION").count() == 1
+    assert len(calls) == 1
+
+
+def test_create_booking_deposit_when_payments_unavailable_reports_a_clean_error(
+    session, garage, garage_schedule
+):
+    from app.models.payments.garage_payment_settings import GaragePaymentSettings
+
+    appt_type = _deposit_appointment_type(session, garage)
+    session.add(GaragePaymentSettings(garage_id=garage.id, provider="stripe", enabled=False))
+    session.commit()
+
+    day = _future_weekday()
+    args = json.dumps(
+        {
+            "appointment_type_id": str(appt_type.id),
+            "date": day.isoformat(),
+            "time": "09:00",
+            "first_name": "Alex",
+            "last_name": "Turner",
+            "vehicle_registration": "PB11 REQ",
+        }
+    )
+    result = json.loads(dispatch_tool(garage, "+447123456789", "create_booking", args))
+
+    assert result["ok"] is False
+    assert BookingRequest.query.filter_by(garage_id=garage.id, source="CONVERSATION").count() == 0
 
 
 def test_voice_instructions_carry_the_business_local_date(garage):
