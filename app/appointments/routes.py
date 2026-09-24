@@ -124,6 +124,43 @@ def _validate_status(status, garage_id):
         abort(422, message="Not a valid appointment status for this business.")
 
 
+def _is_terminal_status(status, garage_id):
+    """Whether a configured status is terminal.
+
+    Existing garages without seeded configuration still use the same terminal
+    semantics as the built-in status set.  ``CANCELLED`` is deliberately
+    handled separately by the transition guard because staff have an existing,
+    capacity-checked reactivation workflow for a cancelled appointment.
+    """
+    configured = GarageAppointmentStatus.query.filter_by(garage_id=garage_id, key=status).first()
+    if configured is not None:
+        return configured.is_terminal
+    return status in {"COMPLETED", "CANCELLED", "NO_SHOW"}
+
+
+def _validate_status_transition(current_status, requested_status, garage_id):
+    """Reject stale or impossible terminal-state transitions.
+
+    Completion and no-show are historical outcomes, so a delayed form submit
+    cannot silently make either live again.  Cancellation is the one explicit
+    exception: the existing staff workflow permits a cancelled appointment to
+    be reactivated after conflict/capacity revalidation.
+    """
+    if requested_status == current_status:
+        return
+
+    if current_status == "CANCELLED":
+        if _is_terminal_status(requested_status, garage_id):
+            abort(
+                409,
+                message="A cancelled appointment must be reactivated before it can change state.",
+            )
+        return
+
+    if _is_terminal_status(current_status, garage_id):
+        abort(409, message="A completed or no-show appointment cannot be moved to another status.")
+
+
 def _validate_time_range(start_time, end_time):
     if start_time >= end_time:
         abort(422, message="start_time must be before end_time.")
@@ -337,6 +374,7 @@ class AppointmentResource(MethodView):
 
         if "status" in data:
             _validate_status(data["status"], garage_id)
+            _validate_status_transition(appointment.status, data["status"], garage_id)
 
         effective_start = data.get("start_time", appointment.start_time)
         effective_end = data.get("end_time", appointment.end_time)
