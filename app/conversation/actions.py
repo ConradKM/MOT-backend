@@ -294,8 +294,8 @@ def cancel_appointment(garage, appointment: Appointment) -> tuple[bool, str | No
     working (Part 14)."""
     if appointment.status == "CANCELLED":
         return False, "already_cancelled"
-    if appointment.status == "COMPLETED":
-        return False, "already_completed"
+    if appointment.status in {"COMPLETED", "NO_SHOW"}:
+        return False, "terminal_appointment"
 
     appointment.status = "CANCELLED"
     db.session.commit()
@@ -328,8 +328,8 @@ def reschedule_appointment(
         return False, "not_found"
     if appointment.status == "CANCELLED":
         return False, "already_cancelled"
-    if appointment.status == "COMPLETED":
-        return False, "already_completed"
+    if appointment.status in {"COMPLETED", "NO_SHOW"}:
+        return False, "terminal_appointment"
 
     duration = appointment.end_time - appointment.start_time
     new_start = local_slot_as_utc(garage, new_day, new_time)
