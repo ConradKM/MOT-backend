@@ -49,12 +49,21 @@ class CustomerList(MethodView):
         search = args.get("search")
         if search:
             pattern = f"%{search}%"
+            # Registrations are normalized on Vehicle (uppercase, no spaces),
+            # while staff naturally search a UK registration with spaces.
+            registration_pattern = f"%{''.join(search.split())}%"
             query = query.filter(
                 db.or_(
                     Customer.first_name.ilike(pattern),
                     Customer.last_name.ilike(pattern),
                     Customer.email.ilike(pattern),
                     Customer.phone.ilike(pattern),
+                    Customer.vehicles.any(
+                        db.and_(
+                            Vehicle.garage_id == garage_id,
+                            Vehicle.registration_number.ilike(registration_pattern),
+                        )
+                    ),
                 )
             )
 

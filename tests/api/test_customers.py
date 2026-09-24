@@ -51,6 +51,36 @@ def test_list_customers_search_filters_by_name(authenticated_user, session, gara
     assert body[0]["first_name"] == "Zach"
 
 
+def test_list_customers_searches_vehicle_registration(authenticated_user, session, garage):
+    from app.models.customer import Customer
+    from app.models.vehicle import Vehicle
+
+    matching = Customer(garage_id=garage.id, first_name="Morgan", last_name="Driver")
+    other = Customer(garage_id=garage.id, first_name="Jamie", last_name="Other")
+    session.add_all([matching, other])
+    session.flush()
+    session.add_all(
+        [
+            Vehicle(
+                garage_id=garage.id,
+                customer_id=matching.id,
+                registration_number="AB12 CDE",
+            ),
+            Vehicle(
+                garage_id=garage.id,
+                customer_id=other.id,
+                registration_number="ZX99 XYZ",
+            ),
+        ]
+    )
+    session.commit()
+
+    response = authenticated_user.client.get("/api/customers/", query_string={"search": "ab12 cde"})
+
+    assert response.status_code == 200
+    assert [customer["id"] for customer in response.get_json()] == [str(matching.id)]
+
+
 def test_retrieve_customer(authenticated_user, customer):
     resp = authenticated_user.client.get(f"/api/customers/{customer.id}")
 
