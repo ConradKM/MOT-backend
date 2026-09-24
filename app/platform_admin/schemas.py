@@ -79,6 +79,8 @@ class TenantSchema(Schema):
     email = fields.Email(dump_only=True, allow_none=True)
     phone = fields.Str(dump_only=True, allow_none=True)
     address = fields.Str(dump_only=True, allow_none=True)
+    address_city = fields.Str(dump_only=True, allow_none=True)
+    address_region = fields.Str(dump_only=True, allow_none=True)
     postcode = fields.Str(dump_only=True, allow_none=True)
     website = fields.Str(dump_only=True, allow_none=True)
 
@@ -209,6 +211,8 @@ class TenantUpdateSchema(Schema):
     email = fields.Email(allow_none=True)
     phone = fields.Str(allow_none=True, validate=validate.Length(max=40))
     address = fields.Str(allow_none=True, validate=validate.Length(max=500))
+    address_city = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    address_region = fields.Str(allow_none=True, validate=validate.Length(max=100))
     postcode = fields.Str(allow_none=True, validate=validate.Length(max=20))
     website = fields.Str(allow_none=True, validate=validate.Length(max=200))
 
