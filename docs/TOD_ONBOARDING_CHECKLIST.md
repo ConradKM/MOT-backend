@@ -72,6 +72,10 @@ Platform Admin action · **[OWNER]** the business owner does this ·
 - [ ] **[OPERATOR]** Review lead time, cancellation window, and any other
   booking rules in the Booking Settings tab. No readiness signal exists
   for this today - review manually.
+- [ ] **[OPERATOR]** Confirm an active staff employee is available to be
+  assigned to appointments. Booking requests are currently approved
+  manually and approval requires an explicit active employee assignment;
+  tenant auto-accept is not enabled.
 
 ## 7. Payments (Stripe Connect) - only if TOD wants deposits
 - [ ] **[OPERATOR]** Start Stripe Connect onboarding from the business's
