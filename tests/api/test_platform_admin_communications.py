@@ -199,6 +199,26 @@ def test_overview_reports_platform_prerequisites_once(platform_client):
             assert item["how_to_fix"]
 
 
+def test_overview_row_shows_openai_voice_status_without_opening_the_tenant(
+    platform_client, garage, session, provisioned
+):
+    """An operator scanning the worklist needs to see OpenAI Voice
+    enablement per business without opening each tenant individually - a
+    business can have a fully working number with OpenAI Voice never
+    turned on, and that must not be invisible at list scope."""
+    body = platform_client.get(OVERVIEW).get_json()
+    row = next(item for item in body["items"] if item["garage_name"] == garage.name)
+    assert row["openai_voice_status"] == states.OPENAI_VOICE_NOT_STARTED
+
+    provisioned.openai_voice_status = states.OPENAI_VOICE_READY
+    session.commit()
+
+    body = platform_client.get(OVERVIEW).get_json()
+    row = next(item for item in body["items"] if item["garage_name"] == garage.name)
+    assert row["openai_voice_status"] == states.OPENAI_VOICE_READY
+    assert row["openai_voice_display_status"] == states.DISPLAY_ONLINE
+
+
 def test_overview_filters_by_status(platform_client, garage, provisioned):
     body = platform_client.get(f"{OVERVIEW}?status=ONLINE").get_json()
     assert body["items"] == []
