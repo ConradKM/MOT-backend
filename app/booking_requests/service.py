@@ -173,6 +173,9 @@ def approve_booking_request(
     )
     if booking_request is None:
         abort(404, message="Booking request not found")
+    # flask-smorest's abort raises at runtime, but its type annotation does
+    # not express that control flow to mypy.
+    assert booking_request is not None
 
     if booking_request.status == "PENDING" and is_request_stale(booking_request):
         booking_request.status = "EXPIRED"
