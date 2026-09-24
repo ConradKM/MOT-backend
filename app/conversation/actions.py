@@ -175,7 +175,7 @@ def create_booking_request(
     last_name: str,
     phone_e164: str,
     email: str | None,
-    vehicle_registration: str,
+    vehicle_registration: str | None,
     vehicle_make: str | None = None,
     vehicle_model: str | None = None,
     vehicle_year: int | None = None,

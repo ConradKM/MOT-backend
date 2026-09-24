@@ -10,6 +10,7 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_flow.field import BookingFlowField
 from app.models.booking_flow.section import BookingFlowSection
 
+from . import vehicle_details
 from .presets import PRESETS, apply_preset
 from .schemas import (
     ApplyPresetSchema,
@@ -18,6 +19,7 @@ from .schemas import (
     BookingFlowQueryArgsSchema,
     BookingFlowSectionSchema,
     BookingFlowSectionUpdateSchema,
+    VehicleDetailsUpdateSchema,
 )
 
 booking_flow_blp = Blueprint(
@@ -310,3 +312,26 @@ class BookingFlowPresets(MethodView):
         db.session.commit()
 
         return sections
+
+
+@booking_flow_blp.route("/vehicle-details")
+class BookingFlowVehicleDetails(MethodView):
+    """Settings > Booking Workflow > Vehicle details: ask for registration,
+    make and model - a switch over ordinary bound fields in the default
+    workflow (app/booking_flow/vehicle_details.py), never a separate model."""
+
+    @jwt_required()
+    @booking_flow_blp.response(200)
+    def get(self):
+        return vehicle_details.get_vehicle_details(get_current_employee().garage_id)
+
+    @jwt_required()
+    @owner_required
+    @booking_flow_blp.arguments(VehicleDetailsUpdateSchema)
+    @booking_flow_blp.response(200)
+    def put(self, data):
+        garage_id = get_current_employee().garage_id
+        try:
+            return vehicle_details.update_vehicle_details(garage_id, data)
+        except vehicle_details.VehicleDetailsError as exc:
+            abort(422, message=str(exc), errors={"json": {exc.field: [str(exc)]}})
