@@ -2,6 +2,7 @@ import base64
 import json
 import os
 from datetime import timedelta
+from typing import ClassVar
 
 from app.branding import PLATFORM_NAME
 
@@ -34,6 +35,10 @@ class Config:
         )
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    # A voice call's control greenlet (app/ai_voice/call_controller.py) holds
+    # its session for the whole call; pre-ping swaps a connection the server
+    # or a proxy dropped while idle instead of failing that call's next tool.
+    SQLALCHEMY_ENGINE_OPTIONS: ClassVar[dict] = {"pool_pre_ping": True}
     JWT_SECRET_KEY = os.getenv("SECRET_KEY", "dev-only-change-me")
 
     # --- CORS (see app/__init__.py) -------------------------------------

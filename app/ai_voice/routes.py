@@ -31,7 +31,7 @@ from app.models.communications.communication_log import (
 from . import telemetry
 from .call_controller import run_call_controller
 from .config import openai_configured, openai_voice_enabled, openai_webhook_configured
-from .instructions import build_instructions
+from .instructions import build_greeting_instructions, build_instructions
 from .openai_sip import OpenAIVoiceError, accept_call, reject_call, verify_webhook
 from .tenant import caller_number_for_sip_call, resolve_business_for_sip_call, sip_header
 from .tools import TOOL_SCHEMAS
@@ -167,7 +167,11 @@ def _spawn_call_controller(*, call_id: str, garage, caller_phone: str) -> None:
             if call_garage is None:
                 return
             run_call_controller(
-                api_key=api_key, call_id=call_id, garage=call_garage, caller_phone=caller_phone
+                api_key=api_key,
+                call_id=call_id,
+                garage=call_garage,
+                caller_phone=caller_phone,
+                greeting_instructions=build_greeting_instructions(call_garage),
             )
 
     gevent.spawn(_run)

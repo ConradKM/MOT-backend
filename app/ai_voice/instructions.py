@@ -9,11 +9,30 @@ as proof that a slot, price, service, or booking state is still current.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 
-def build_instructions(garage) -> str:
+from app.garages.timezones import timezone_for
+
+
+def _date_context(garage, now: datetime | None) -> str:
+    """Today's date in the business's own timezone. Without it the model has
+    no way to turn "tomorrow" or "Saturday" into the YYYY-MM-DD that
+    get_available_slots needs, and guesses (issue #228)."""
+    tz = timezone_for(garage)
+    local = (now or datetime.now(UTC)).astimezone(tz)
+    return (
+        f"Today is {local.strftime('%A')} {local.day} {local.strftime('%B %Y')} "
+        f"({local.date().isoformat()}) and the local time is {local.strftime('%H:%M')} "
+        f"({tz.key}). Resolve every relative date the caller gives (today, tomorrow, "
+        "Saturday, next week) against this date, pass tool dates as YYYY-MM-DD, and read "
+        "a date back to the caller as a weekday and date before checking availability.\n\n"
+    )
+
+
+def build_instructions(garage, *, now: datetime | None = None) -> str:
     """The full system prompt for one call. Rebuilt fresh per call (never
     cached) so a same-day change to hours/services is reflected immediately."""
-    return (
+    return _date_context(garage, now) + (
         f"You are the phone assistant for {garage.name}, a UK vehicle garage business using "
         "CoMaz OS. You are answering a real inbound customer phone call - be warm, concise, "
         "and speak naturally, as a helpful front-of-house receptionist would, not like an IVR "
@@ -44,4 +63,15 @@ def build_instructions(garage) -> str:
         "read back the specific appointment and get an explicit yes before calling "
         "cancel_appointment or reschedule_appointment, and check any new time with "
         "get_available_slots first."
+    )
+
+
+def build_greeting_instructions(garage) -> str:
+    """The first thing the assistant says - sent as the opening
+    ``response.create`` (app/ai_voice/call_controller.py) so a caller is not
+    left in silence after the call connects."""
+    return (
+        f"Greet the caller in one short, warm sentence as the phone assistant for "
+        f"{garage.name}, then ask how you can help - for example with booking an "
+        "appointment. Do not list services or times yet."
     )

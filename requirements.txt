@@ -27,7 +27,10 @@ stripe>=11,<16
 # unwrap() for webhook signature verification, and client.realtime.connect()
 # (a synchronous WebSocket client, not asyncio-based, so it cooperates
 # correctly under gunicorn's gevent worker) for the call-control connection.
-# No separate WebSocket/HTTP library needed - the SDK provides both.
-openai>=2,<3
+# The ``realtime`` extra is REQUIRED: it installs ``websockets``, which
+# client.realtime.connect() imports lazily. Without it every accepted call's
+# control connection crashed on connect (issue #228) - the model answered but
+# could never run a tool. tests/test_ai_voice_dependencies.py guards this.
+openai[realtime]>=2,<3
 pytest>=8.3,<9
 pytest-cov>=6,<7

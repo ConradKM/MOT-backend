@@ -21,6 +21,7 @@ from datetime import date as date_cls
 from datetime import time as time_cls
 
 from app.conversation import actions
+from app.extensions import db
 from app.models.ai_voice_faq import GarageVoiceFAQ
 from app.models.booking_request import BookingRequest
 from app.phone import InvalidPhoneNumberError, normalize_uk_phone
@@ -685,6 +686,9 @@ def dispatch_tool(
         return json.dumps({"ok": False, "error": "Missing or invalid arguments."})
     except Exception:  # a tool failure must never crash the call
         logger.exception("AI_VOICE_TOOL_FAILED tool=%s", name)
+        # The control greenlet reuses one session for the whole call; left in
+        # a failed transaction, every later tool on this call would fail too.
+        db.session.rollback()
         return json.dumps(_TOOL_ERROR)
 
     if name == "get_available_slots" and state is not None:

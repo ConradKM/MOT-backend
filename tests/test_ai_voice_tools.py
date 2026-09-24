@@ -602,3 +602,18 @@ def test_malformed_arguments_is_a_clean_error(garage):
 def test_missing_required_arguments_is_a_clean_error(garage):
     result = json.loads(dispatch_tool(garage, "+447123456789", "create_booking", "{}"))
     assert result["ok"] is False
+
+
+def test_voice_instructions_carry_the_business_local_date(garage):
+    """#228: without today's date the model cannot turn "Saturday" into the
+    YYYY-MM-DD get_available_slots needs. 23:30 UTC on 25 Sep is already
+    Saturday 26 Sep in London (BST)."""
+    from datetime import UTC, datetime
+
+    from app.ai_voice.instructions import build_instructions
+
+    garage.timezone = "Europe/London"
+    text = build_instructions(garage, now=datetime(2026, 9, 25, 23, 30, tzinfo=UTC))
+    assert "Saturday 26 September 2026 (2026-09-26)" in text
+    assert "00:30" in text
+    assert "Europe/London" in text

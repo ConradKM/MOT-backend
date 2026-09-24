@@ -9,17 +9,26 @@ API connection" per https://developers.openai.com/api/docs/guides/voice-sip.
 
 Uses the official ``openai`` SDK's synchronous ``client.realtime.connect()``
 (not a hand-rolled client) - it cooperates correctly under gunicorn's gevent
-worker the same way every blocking call in this codebase already does.
+worker the same way every blocking call in this codebase already does. That
+method needs the ``openai[realtime]`` extra; see requirements.txt (#228).
+
+Without this connection the model can talk but never run a tool, so a
+connection that cannot be (re-)established is treated as an AI failure: the
+caller is handed to the business's configured human destination rather than
+left with an assistant that cannot check availability or book anything.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
+from dataclasses import dataclass, field
 from time import monotonic
 
 from openai import OpenAI
 
+from app.extensions import db
 from app.models.communications.voice_call_metrics import (
     END_REASON_CONNECTION_CLOSED,
     END_REASON_CRASH,
@@ -29,7 +38,7 @@ from app.models.communications.voice_call_metrics import (
 
 from . import telemetry
 from .openai_sip import OpenAIVoiceError, hangup_call, refer_call
-from .tools import CALL_ENDING_TOOLS, VoiceToolState, dispatch_tool
+from .tools import CALL_ENDING_TOOLS, VoiceToolState, _fallback_transfer_uri, dispatch_tool
 
 logger = logging.getLogger(__name__)
 
@@ -37,141 +46,275 @@ logger = logging.getLogger(__name__)
 # to the model - see app/ai_voice/tools.py::_tool_request_human_handoff.
 _TRANSFER_URI_FIELD = "_transfer_uri"
 
+# Re-establishing the control connection after an abnormal close. Tool state
+# and the replay cache live outside the connection, so a reconnect can never
+# repeat a booking. Kept short: a caller waiting on a tool result hears
+# silence while this runs.
+MAX_RECONNECT_ATTEMPTS = 2
+RECONNECT_BACKOFF_SECONDS = (0.25, 0.75)
 
-def run_call_controller(*, api_key: str, call_id: str, garage, caller_phone: str) -> None:
+# How the call ended from the control loop's point of view.
+_ENDED = "ended"  # normal close / call finished / handoff completed
+_LOST = "lost"  # abnormal close - worth reconnecting
+
+
+@dataclass
+class _CallState:
+    tool_state: VoiceToolState = field(default_factory=VoiceToolState)
+    # OpenAI can redeliver a completed function-call event after a transport
+    # hiccup. Replaying its original output is safe; executing a mutating
+    # tool again is not.
+    completed_tool_outputs: dict[str, str] = field(default_factory=dict)
+    end_after_response: bool = False
+    transfer_uri: str | None = None
+    greeted: bool = False
+
+
+def run_call_controller(
+    *,
+    api_key: str,
+    call_id: str,
+    garage,
+    caller_phone: str,
+    greeting_instructions: str | None = None,
+) -> None:
     """Blocks for the lifetime of the call. Call this from its own
     greenlet (see app/ai_voice/routes.py) - never from the webhook request
     itself, which must return quickly. ``garage``/``caller_phone`` are
     fixed for the whole call, resolved once before this is spawned - never
     re-derived from anything the model or a tool argument could claim.
+
+    ``greeting_instructions``, when given, is sent as the first
+    ``response.create`` so the assistant speaks first instead of leaving the
+    caller in silence until they say something.
     """
     client = OpenAI(api_key=api_key)
-    end_after_response = False
-    transfer_uri: str | None = None
-    tool_state = VoiceToolState()
-    # OpenAI can redeliver a completed function-call event after a transport
-    # hiccup. Replaying its original output is safe; executing a mutating
-    # tool again is not.
-    completed_tool_outputs: dict[str, str] = {}
+    state = _CallState()
+    failures = 0
 
-    try:
-        with client.realtime.connect(call_id=call_id) as connection:
-            while True:
-                try:
-                    event = connection.recv()
-                except Exception:  # noqa: BLE001 - the connection closing must never crash the call
-                    logger.info("AI_VOICE_CALL_CONTROL_CLOSED callSid=%s", call_id)
-                    telemetry.finish_call(call_id, end_reason=END_REASON_CONNECTION_CLOSED)
-                    break
-
-                etype = getattr(event, "type", None)
-
-                if etype == "response.function_call_arguments.done":
-                    # getattr, not attribute access: `event` is a large SDK
-                    # union type mypy can't narrow from the string check
-                    # above, and tests exercise this with duck-typed fakes
-                    # (see tests/test_ai_voice_call_controller.py) rather than
-                    # real SDK event instances.
-                    name = getattr(event, "name", "")
-                    arguments = getattr(event, "arguments", "{}")
-                    tool_call_id = getattr(event, "call_id", None)
-                    cache_key = str(tool_call_id) if tool_call_id else None
-                    started = monotonic()
-                    if cache_key and cache_key in completed_tool_outputs:
-                        output = completed_tool_outputs[cache_key]
-                        logger.info(
-                            "AI_VOICE_TOOL_REPLAY callSid=%s garage=%s tool=%s",
-                            call_id,
-                            garage.id,
-                            name,
-                        )
-                    else:
-                        logger.info(
-                            "AI_VOICE_TOOL_CALL callSid=%s garage=%s tool=%s",
-                            call_id,
-                            garage.id,
-                            name,
-                        )
-                        output = dispatch_tool(
-                            garage,
-                            caller_phone,
-                            name,
-                            arguments,
-                            state=tool_state,
-                            tool_call_id=cache_key,
-                            call_id=call_id,
-                        )
-                        if cache_key:
-                            completed_tool_outputs[cache_key] = output
-                    tool_ok = _tool_succeeded(output)
-                    outcome = _tool_outcome(output)
-                    latency_ms = int((monotonic() - started) * 1000)
-                    logger.info(
-                        "AI_VOICE_TOOL_RESULT callSid=%s garage=%s tool=%s ok=%s outcome=%s latency_ms=%d",
-                        call_id,
-                        garage.id,
-                        name,
-                        tool_ok,
-                        outcome,
-                        latency_ms,
-                    )
-                    telemetry.record_tool_call(
-                        call_id, tool=name, outcome=outcome, latency_ms=latency_ms
-                    )
-                    if name == "create_booking":
-                        logger.info(
-                            "AI_VOICE_BOOKING_RESULT callSid=%s garage=%s outcome=%s",
-                            call_id,
-                            garage.id,
-                            outcome,
-                        )
-                        telemetry.record_booking_outcome(call_id, outcome=outcome)
-                    if name == "request_human_handoff" and tool_ok:
-                        telemetry.record_escalation(call_id)
-                    model_output, transfer_uri = _extract_transfer_uri(output)
+    while True:
+        try:
+            with client.realtime.connect(call_id=call_id) as connection:
+                logger.info(
+                    "AI_VOICE_CONTROL_CONNECTED callSid=%s garage=%s reconnect=%d",
+                    call_id,
+                    garage.id,
+                    failures,
+                )
+                failures = 0
+                if greeting_instructions and not state.greeted:
                     connection.send_raw(
                         json.dumps(
                             {
-                                "type": "conversation.item.create",
-                                "item": {
-                                    "type": "function_call_output",
-                                    "call_id": tool_call_id,
-                                    "output": model_output,
-                                },
+                                "type": "response.create",
+                                "response": {"instructions": greeting_instructions},
                             }
                         )
                     )
-                    connection.send_raw(json.dumps({"type": "response.create"}))
-                    if name in CALL_ENDING_TOOLS and tool_ok:
-                        end_after_response = True
+                    state.greeted = True
+                outcome = _pump(
+                    connection,
+                    call_id=call_id,
+                    garage=garage,
+                    caller_phone=caller_phone,
+                    state=state,
+                )
+        except Exception as exc:
+            logger.warning(
+                "AI_VOICE_CONTROL_ERROR callSid=%s garage=%s error=%s",
+                call_id,
+                garage.id,
+                type(exc).__name__,
+            )
+            logger.debug("AI_VOICE_CONTROL_ERROR detail", exc_info=True)
+            outcome = _LOST
 
-                elif etype == "response.done":
-                    _record_usage_if_present(call_id, event)
-                    if end_after_response:
-                        logger.info(
-                            "AI_VOICE_ENDING_CALL callSid=%s reason=handoff transfer=%s",
-                            call_id,
-                            bool(transfer_uri),
-                        )
-                        if transfer_uri:
-                            _safe_refer(call_id, transfer_uri)
-                        else:
-                            _safe_hangup(call_id)
-                        telemetry.finish_call(
-                            call_id,
-                            end_reason=END_REASON_HANDOFF if transfer_uri else END_REASON_HANGUP,
-                        )
-                        break
+        if outcome == _ENDED:
+            return
 
-                elif etype == "error":
-                    logger.warning(
-                        "AI_VOICE_OPENAI_ERROR callSid=%s error=%s",
-                        call_id,
-                        str(getattr(event, "error", event))[:300],
-                    )
+        failures += 1
+        if failures > MAX_RECONNECT_ATTEMPTS:
+            logger.error(
+                "AI_VOICE_CALL_CONTROL_CRASH callSid=%s garage=%s attempts=%d",
+                call_id,
+                garage.id,
+                failures,
+            )
+            _handle_ai_failure(call_id=call_id, garage=garage, caller_phone=caller_phone)
+            telemetry.finish_call(call_id, end_reason=END_REASON_CRASH)
+            return
+        time.sleep(RECONNECT_BACKOFF_SECONDS[min(failures - 1, len(RECONNECT_BACKOFF_SECONDS) - 1)])
+
+
+def _pump(connection, *, call_id: str, garage, caller_phone: str, state: _CallState) -> str:
+    """Handle events until the connection closes. Returns ``_ENDED`` for a
+    normal end of call and ``_LOST`` for an abnormal close worth a
+    reconnect."""
+    while True:
+        try:
+            event = connection.recv()
+        except Exception as exc:  # noqa: BLE001 - the connection closing must never crash the call
+            if _is_abnormal_close(exc):
+                logger.warning("AI_VOICE_CALL_CONTROL_LOST callSid=%s", call_id)
+                return _LOST
+            logger.info("AI_VOICE_CALL_CONTROL_CLOSED callSid=%s", call_id)
+            telemetry.finish_call(call_id, end_reason=END_REASON_CONNECTION_CLOSED)
+            return _ENDED
+
+        etype = getattr(event, "type", None)
+
+        if etype == "response.function_call_arguments.done":
+            _handle_function_call(
+                connection,
+                event,
+                call_id=call_id,
+                garage=garage,
+                caller_phone=caller_phone,
+                state=state,
+            )
+
+        elif etype == "response.done":
+            _record_usage_if_present(call_id, event)
+            if state.end_after_response:
+                logger.info(
+                    "AI_VOICE_ENDING_CALL callSid=%s reason=handoff transfer=%s",
+                    call_id,
+                    bool(state.transfer_uri),
+                )
+                if state.transfer_uri:
+                    _safe_refer(call_id, state.transfer_uri)
+                else:
+                    _safe_hangup(call_id)
+                telemetry.finish_call(
+                    call_id,
+                    end_reason=END_REASON_HANDOFF if state.transfer_uri else END_REASON_HANGUP,
+                )
+                return _ENDED
+
+        elif etype == "error":
+            logger.warning(
+                "AI_VOICE_OPENAI_ERROR callSid=%s error=%s",
+                call_id,
+                str(getattr(event, "error", event))[:300],
+            )
+
+
+def _handle_function_call(
+    connection, event, *, call_id: str, garage, caller_phone: str, state: _CallState
+) -> None:
+    # getattr, not attribute access: `event` is a large SDK union type mypy
+    # can't narrow from the string check above, and tests exercise this with
+    # duck-typed fakes (see tests/test_ai_voice_call_controller.py) rather
+    # than real SDK event instances.
+    name = getattr(event, "name", "")
+    arguments = getattr(event, "arguments", "{}")
+    tool_call_id = getattr(event, "call_id", None)
+    cache_key = str(tool_call_id) if tool_call_id else None
+    started = monotonic()
+    if cache_key and cache_key in state.completed_tool_outputs:
+        output = state.completed_tool_outputs[cache_key]
+        logger.info("AI_VOICE_TOOL_REPLAY callSid=%s garage=%s tool=%s", call_id, garage.id, name)
+    else:
+        logger.info("AI_VOICE_TOOL_CALL callSid=%s garage=%s tool=%s", call_id, garage.id, name)
+        output = dispatch_tool(
+            garage,
+            caller_phone,
+            name,
+            arguments,
+            state=state.tool_state,
+            tool_call_id=cache_key,
+            call_id=call_id,
+        )
+        if cache_key:
+            state.completed_tool_outputs[cache_key] = output
+    tool_ok = _tool_succeeded(output)
+    outcome = _tool_outcome(output)
+    latency_ms = int((monotonic() - started) * 1000)
+    logger.info(
+        "AI_VOICE_TOOL_RESULT callSid=%s garage=%s tool=%s ok=%s outcome=%s latency_ms=%d",
+        call_id,
+        garage.id,
+        name,
+        tool_ok,
+        outcome,
+        latency_ms,
+    )
+    telemetry.record_tool_call(call_id, tool=name, outcome=outcome, latency_ms=latency_ms)
+    if name == "create_booking":
+        logger.info(
+            "AI_VOICE_BOOKING_RESULT callSid=%s garage=%s outcome=%s",
+            call_id,
+            garage.id,
+            outcome,
+        )
+        telemetry.record_booking_outcome(call_id, outcome=outcome)
+    if name == "request_human_handoff" and tool_ok:
+        telemetry.record_escalation(call_id)
+    model_output, transfer_uri = _extract_transfer_uri(output)
+    if transfer_uri:
+        state.transfer_uri = transfer_uri
+    connection.send_raw(
+        json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": model_output,
+                },
+            }
+        )
+    )
+    connection.send_raw(json.dumps({"type": "response.create"}))
+    if name in CALL_ENDING_TOOLS and tool_ok:
+        state.end_after_response = True
+
+
+def _is_abnormal_close(exc: BaseException) -> bool:
+    """A close worth reconnecting: the WebSocket dropped without a clean
+    close handshake, or the network failed underneath it. A normal close
+    (the caller hung up, OpenAI ended the call) is not - reconnecting to a
+    finished call would only fail again."""
+    try:
+        from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
+    except ImportError:  # pragma: no cover - guarded by requirements (#228)
+        return False
+    if isinstance(exc, ConnectionClosedOK):
+        return False
+    return isinstance(exc, (ConnectionClosedError, OSError))
+
+
+def _handle_ai_failure(*, call_id: str, garage, caller_phone: str) -> None:
+    """The control connection is gone for good, so the model can no longer
+    run a tool. Leave a callback request for the team and transfer the
+    caller to the business's own human destination when one is configured.
+    Never raises: this runs on the way out of a failed call."""
+    transfer_uri = None
+    try:
+        db.session.rollback()
+        transfer_uri = _fallback_transfer_uri(garage)
+        if caller_phone:
+            from app.conversation import actions
+
+            customer = actions.find_customer(garage, caller_phone)
+            actions.create_callback_request(
+                garage,
+                customer=customer,
+                phone_e164=caller_phone,
+                reason="The AI phone assistant was unavailable during this call.",
+            )
     except Exception:
-        logger.exception("AI_VOICE_CALL_CONTROL_CRASH callSid=%s", call_id)
-        telemetry.finish_call(call_id, end_reason=END_REASON_CRASH)
+        logger.exception("AI_VOICE_FALLBACK_CALLBACK_FAILED callSid=%s", call_id)
+        db.session.rollback()
+
+    logger.warning(
+        "AI_VOICE_AI_FAILED callSid=%s garage=%s fallback=%s",
+        call_id,
+        garage.id,
+        "transfer" if transfer_uri else "none",
+    )
+    if transfer_uri:
+        _safe_refer(call_id, transfer_uri)
 
 
 def _extract_transfer_uri(output_json: str) -> tuple[str, str | None]:

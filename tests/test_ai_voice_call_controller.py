@@ -424,3 +424,120 @@ def test_failed_booking_can_be_corrected_with_another_real_slot_in_the_same_call
     assert outputs["booking_fixed"]["ok"] is True
     request = BookingRequest.query.filter_by(voice_call_id="provider_call_recover").one()
     assert request.preferred_time.strftime("%H:%M") == "09:00"
+
+
+# --- #228: greeting, reconnect, and AI-failure fallback ---------------------
+
+
+class _AbnormalClose(Exception):
+    pass
+
+
+def test_greeting_is_sent_first_when_requested(monkeypatch, garage):
+    connection = _FakeConnection([])
+    _patch_connection(monkeypatch, connection)
+
+    run_call_controller(
+        api_key="sk-test",
+        call_id="rtc_greet",
+        garage=garage,
+        caller_phone="",
+        greeting_instructions="Say hello.",
+    )
+
+    assert connection.sent == [
+        {"type": "response.create", "response": {"instructions": "Say hello."}}
+    ]
+
+
+def test_abnormal_close_reconnects_and_keeps_the_replay_cache(monkeypatch, garage):
+    """A dropped control socket is re-established; a replayed booking event on
+    the new connection must return the cached output, not book twice."""
+    from websockets.exceptions import ConnectionClosedError
+
+    event = SimpleNamespace(
+        type="response.function_call_arguments.done",
+        call_id="tool_across_reconnect",
+        name="create_booking",
+        arguments="{}",
+    )
+
+    class _DroppingConnection(_FakeConnection):
+        def recv(self):
+            if not self._events:
+                raise ConnectionClosedError(None, None)
+            return self._events.pop(0)
+
+    first = _DroppingConnection([event])
+    second = _FakeConnection([event])
+    fake_client = Mock()
+    fake_client.realtime.connect.side_effect = [first, second]
+    monkeypatch.setattr(call_controller, "OpenAI", Mock(return_value=fake_client))
+    monkeypatch.setattr(call_controller, "RECONNECT_BACKOFF_SECONDS", (0, 0))
+    dispatch = Mock(return_value=json.dumps({"ok": True, "status": "PENDING"}))
+    monkeypatch.setattr(call_controller, "dispatch_tool", dispatch)
+    hangup_mock = Mock()
+    monkeypatch.setattr(call_controller, "hangup_call", hangup_mock)
+
+    run_call_controller(api_key="sk-test", call_id="rtc_drop", garage=garage, caller_phone="")
+
+    assert fake_client.realtime.connect.call_count == 2
+    dispatch.assert_called_once()
+    assert first.sent[0]["item"]["output"] == second.sent[0]["item"]["output"]
+    hangup_mock.assert_not_called()
+
+
+def test_unrecoverable_control_failure_transfers_to_the_human_destination(
+    session, monkeypatch, garage
+):
+    """The production failure mode of #228: the control connection can never
+    be opened. The caller must reach a person, and the team gets a callback
+    request, rather than being left with an AI that cannot run tools."""
+    from app.models.communications.garage_communication_settings import (
+        GarageCommunicationSettings,
+    )
+    from app.models.conversation.callback_request import CallbackRequest
+
+    session.add(
+        GarageCommunicationSettings(
+            garage_id=garage.id,
+            communications_enabled=True,
+            voice_escalation_number="+441234567890",
+        )
+    )
+    session.commit()
+    session.refresh(garage)
+
+    fake_client = Mock()
+    fake_client.realtime.connect.side_effect = RuntimeError(
+        "You need to install `openai[realtime]` to use this method"
+    )
+    monkeypatch.setattr(call_controller, "OpenAI", Mock(return_value=fake_client))
+    monkeypatch.setattr(call_controller, "RECONNECT_BACKOFF_SECONDS", (0, 0))
+    refer_mock = Mock()
+    monkeypatch.setattr(call_controller, "refer_call", refer_mock)
+
+    run_call_controller(
+        api_key="sk-test", call_id="rtc_dead", garage=garage, caller_phone="+447700900123"
+    )
+
+    assert fake_client.realtime.connect.call_count == call_controller.MAX_RECONNECT_ATTEMPTS + 1
+    refer_mock.assert_called_once_with("rtc_dead", "tel:+441234567890")
+    callbacks = CallbackRequest.query.filter_by(garage_id=garage.id).all()
+    assert [c.phone_number for c in callbacks] == ["+447700900123"]
+
+
+def test_a_failed_tool_rolls_back_so_later_tools_still_work(monkeypatch, garage):
+    from app.ai_voice import tools
+    from app.extensions import db
+
+    def _boom(*_args, **_kwargs):
+        # Leave the session in a failed transaction, like a dropped connection.
+        db.session.execute(db.text("SELECT * FROM table_that_does_not_exist"))
+
+    monkeypatch.setitem(tools._HANDLERS, "get_business_faqs", _boom)
+    failed = json.loads(tools.dispatch_tool(garage, "", "get_business_faqs", "{}"))
+    assert failed["ok"] is False
+
+    ok = json.loads(tools.dispatch_tool(garage, "", "get_business_info", "{}"))
+    assert ok["ok"] is True
