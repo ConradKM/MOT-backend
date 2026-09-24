@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, Uuid
+from sqlalchemy import Boolean, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -27,6 +27,9 @@ class Customer(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-
     last_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     email: Mapped[str | None] = mapped_column(String(320))
     phone: Mapped[str | None] = mapped_column(String(40))
+    # Staff-only information that applies to the customer across appointments.
+    # This is deliberately not included in the customer portal schemas.
+    notes: Mapped[str | None] = mapped_column(Text)
     # Set once a customer opts into email + password sign-in (see
     # app/customer_auth/routes.py::CustomerSetPassword) - null until then.
     # Every customer can still always sign in with a booking reference + this
