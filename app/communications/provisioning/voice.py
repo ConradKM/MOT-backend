@@ -49,6 +49,13 @@ class VoiceProvisioningError(RuntimeError):
         self.code = code
 
 
+class MissingBusinessAddressError(VoiceProvisioningError):
+    """The selected number requires a Twilio-registered business address and
+    this tenant's stored address is incomplete. Raised *before* any Twilio
+    purchase call, so the operator sees an actionable prompt instead of a raw
+    provider error."""
+
+
 def _twilio_error(exc: TwilioRestException, fallback: str) -> VoiceProvisioningError:
     return VoiceProvisioningError(
         exc.msg or fallback, code=str(exc.code) if exc.code is not None else None
@@ -116,6 +123,10 @@ def search_available_numbers(
             "region": getattr(number, "region", None),
             "iso_country": iso_country,
             "capabilities": _capability_list(getattr(number, "capabilities", None)),
+            # "none" | "any" | "local" | "foreign" - Twilio's own regulatory
+            # classification of what AddressSid, if any, buy_number() will
+            # need to supply for this specific number.
+            "address_requirements": getattr(number, "address_requirements", "none") or "none",
         }
         for number in found
     ]
@@ -342,6 +353,86 @@ def _capability_list(capabilities: object) -> list[str]:
     return seen
 
 
+def _garage_address_fields(garage: Garage) -> tuple[str, str, str, str] | None:
+    """``(street, city, region, postal_code)`` from this tenant's stored
+    business address, or ``None`` if any required part is missing.
+
+    Deliberately does not attempt to derive city/region from the freeform
+    ``address`` line - a wrong guess would be regulatory data submitted to
+    Twilio, not a cosmetic mistake."""
+    street = (garage.address or "").strip()
+    city = (garage.address_city or "").strip()
+    region = (garage.address_region or "").strip()
+    postal_code = (garage.postcode or "").strip()
+    if not (street and city and region and postal_code):
+        return None
+    return street, city, region, postal_code
+
+
+def _ensure_address(garage: Garage, client, iso_country: str) -> str:
+    """The Twilio AddressSid to buy a regulated number with, reusing an
+    existing matching Address resource in this subaccount rather than
+    creating a new one on every Buy click (Twilio does not deduplicate these
+    itself - two identical Address resources are perfectly legal to it)."""
+    fields = _garage_address_fields(garage)
+    if fields is None:
+        raise MissingBusinessAddressError(
+            "This number requires a registered business address. Add this "
+            "business's street, city, region and postcode under Tenant "
+            "details, then try buying the number again.",
+            code="address_incomplete",
+        )
+    street, city, region, postal_code = fields
+
+    try:
+        existing = client.addresses.list(limit=50)
+    except TwilioRestException as exc:
+        raise _twilio_error(exc, "Twilio could not check for an existing address.") from exc
+
+    for addr in existing:
+        if (
+            (addr.street or "").strip().lower() == street.lower()
+            and (addr.city or "").strip().lower() == city.lower()
+            and (addr.postal_code or "").strip().lower() == postal_code.lower()
+            and addr.iso_country == iso_country
+        ):
+            return addr.sid
+
+    try:
+        created = client.addresses.create(
+            customer_name=garage.name[:100],
+            street=street,
+            city=city,
+            region=region,
+            postal_code=postal_code,
+            iso_country=iso_country,
+        )
+    except TwilioRestException as exc:
+        raise _twilio_error(exc, "Twilio refused to register that business address.") from exc
+
+    logger.info("[provisioning] created Twilio address %s for garage %s", created.sid, garage.id)
+    return created.sid
+
+
+def _address_requirements_for(client, iso_country: str, phone_number: str) -> str:
+    """Re-checks Twilio's own regulatory classification for this exact
+    number at purchase time, rather than trusting a value the operator's
+    browser may have cached from an earlier search."""
+    try:
+        found = client.available_phone_numbers(iso_country).local.list(
+            contains=phone_number, limit=1
+        )
+    except TwilioRestException as exc:
+        raise _twilio_error(exc, "Twilio could not check that number's requirements.") from exc
+    if not found:
+        # No longer listed as available - either already bought (handled by
+        # the reconciliation check right after this) or gone. "none" is safe
+        # here: if it's actually still unbought and does need an address,
+        # Twilio's own purchase call will refuse it, not silently succeed.
+        return "none"
+    return getattr(found[0], "address_requirements", "none") or "none"
+
+
 def buy_number(garage: Garage, phone_number: str) -> dict:
     """Purchase ``phone_number`` into this business's subaccount, already
     pointed at CoMaz's webhooks.
@@ -365,6 +456,7 @@ def buy_number(garage: Garage, phone_number: str) -> dict:
 
     client = get_client_for_subaccount_resources(garage)
     urls = webhook_urls()
+    iso_country = (current_app.config.get("TWILIO_VOICE_COUNTRY") or "GB").upper()
 
     try:
         existing = client.incoming_phone_numbers.list(phone_number=phone_number, limit=1)
@@ -394,15 +486,24 @@ def buy_number(garage: Garage, phone_number: str) -> dict:
             garage.id,
         )
     else:
+        create_kwargs: dict[str, object] = {
+            "phone_number": phone_number,
+            "friendly_name": f"CoMaz — {garage.name}"[:64],
+            "voice_url": urls["voice_url"],
+            "voice_method": "POST",
+            "status_callback": urls["status_callback"],
+            "status_callback_method": "POST",
+        }
+
+        requirements = _address_requirements_for(client, iso_country, phone_number)
+        if requirements != "none":
+            # Raises MissingBusinessAddressError *before* any Twilio spend
+            # if the tenant's address isn't complete enough - a purchase
+            # must never be attempted only to fail on a missing AddressSid.
+            create_kwargs["address_sid"] = _ensure_address(garage, client, iso_country)
+
         try:
-            number = client.incoming_phone_numbers.create(
-                phone_number=phone_number,
-                friendly_name=f"CoMaz — {garage.name}"[:64],
-                voice_url=urls["voice_url"],
-                voice_method="POST",
-                status_callback=urls["status_callback"],
-                status_callback_method="POST",
-            )
+            number = client.incoming_phone_numbers.create(**create_kwargs)
         except TwilioRestException as exc:
             raise _twilio_error(exc, "Twilio refused to buy that number.") from exc
 

@@ -5,9 +5,10 @@ is a developer operation, done here and exposed through
 ``flask update-garage-details`` - part of the same developer-controlled tenant
 configuration as onboarding.
 
-Only ``name``, ``email``, ``phone``, ``address``, ``postcode`` and ``website``
-are editable. ``id``, ``slug`` and ``layout_variant`` are never touched here -
-the slug is immutable and the rest are platform identity, not "details".
+Only ``name``, ``email``, ``phone``, ``address``, ``address_city``,
+``address_region``, ``postcode`` and ``website`` are editable. ``id``,
+``slug`` and ``layout_variant`` are never touched here - the slug is
+immutable and the rest are platform identity, not "details".
 """
 
 from __future__ import annotations
@@ -15,7 +16,16 @@ from __future__ import annotations
 from app.extensions import db
 from app.models.garage import Garage
 
-EDITABLE_FIELDS = ("name", "email", "phone", "address", "postcode", "website")
+EDITABLE_FIELDS = (
+    "name",
+    "email",
+    "phone",
+    "address",
+    "address_city",
+    "address_region",
+    "postcode",
+    "website",
+)
 
 
 class GarageNotFoundError(ValueError):

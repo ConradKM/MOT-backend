@@ -102,6 +102,12 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     phone: Mapped[str | None] = mapped_column(String(40))
     address: Mapped[str | None] = mapped_column(String(500))
     postcode: Mapped[str | None] = mapped_column(String(20))
+    # City/region are separate from the freeform `address` line because
+    # Twilio's regulatory Address resource (required to buy a phone number in
+    # most countries) needs them as distinct fields, not a string it would
+    # have to be parsed out of.
+    address_city: Mapped[str | None] = mapped_column(String(100))
+    address_region: Mapped[str | None] = mapped_column(String(100))
     website: Mapped[str | None] = mapped_column(String(200))
     # IANA timezone used to interpret opening hours and booking wall-clock
     # slots. Timestamps themselves remain UTC in PostgreSQL.
