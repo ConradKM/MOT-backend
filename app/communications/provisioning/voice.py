@@ -396,7 +396,7 @@ def _ensure_address(garage: Garage, client, iso_country: str) -> str:
             and (addr.postal_code or "").strip().lower() == postal_code.lower()
             and addr.iso_country == iso_country
         ):
-            return addr.sid
+            return str(addr.sid)
 
     try:
         created = client.addresses.create(
@@ -411,7 +411,7 @@ def _ensure_address(garage: Garage, client, iso_country: str) -> str:
         raise _twilio_error(exc, "Twilio refused to register that business address.") from exc
 
     logger.info("[provisioning] created Twilio address %s for garage %s", created.sid, garage.id)
-    return created.sid
+    return str(created.sid)
 
 
 def _address_requirements_for(client, iso_country: str, phone_number: str) -> str:
