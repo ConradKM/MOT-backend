@@ -331,6 +331,14 @@ class Config:
     # Twilio SIP trunk's PSTN leg actually carries, so this is the default -
     # see https://developers.openai.com/api/docs/guides/voice-sip.
     OPENAI_REALTIME_AUDIO_FORMAT = os.getenv("OPENAI_REALTIME_AUDIO_FORMAT", "audio/pcmu")
+    # Phone menu (app/communications/ivr): the key that signs the X-CoMaz-*
+    # headers bridging a menu call to the OpenAI SIP agent
+    # (app/ai_voice/sip_handoff.py). Empty = derived from SECRET_KEY, which is
+    # fine for a single deployment; set it to rotate independently.
+    VOICE_SIP_SIGNING_SECRET = os.getenv("VOICE_SIP_SIGNING_SECRET", "")
+    # Twilio <Say> voice/language for menu prompts.
+    IVR_TTS_VOICE = os.getenv("IVR_TTS_VOICE", "Polly.Amy-Neural")
+    IVR_TTS_LANGUAGE = os.getenv("IVR_TTS_LANGUAGE", "en-GB")
 
     # --- Conversation engine (see app/conversation) -----------------------
     # The development conversation simulator (POST /api/conversation/simulate)

@@ -50,8 +50,14 @@ MISSED_CALL_STATUSES = ("no-answer", "busy", "failed", "canceled")
 ENGINE_PROVIDER = "comaz_conversation_engine"
 
 # A VOICE row that represents a physical call rather than one of its
-# transcript turns.
-_CALL_LEVEL_ROW = CommunicationLog.external_provider != ENGINE_PROVIDER
+# transcript turns - or the AI leg a phone-menu call was bridged into
+# (app/ai_voice/routes.py stamps that leg with the Twilio call's call_sid; the
+# Twilio row is the call). A direct-SIP AI call has no call_sid and is still
+# its own call.
+_CALL_LEVEL_ROW = and_(
+    CommunicationLog.external_provider != ENGINE_PROVIDER,
+    or_(CommunicationLog.external_provider != "openai", CommunicationLog.call_sid.is_(None)),
+)
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200

@@ -16,6 +16,8 @@ verification.
 
 from __future__ import annotations
 
+import uuid
+
 import gevent
 from flask import current_app, request
 from flask_smorest import Blueprint
@@ -28,7 +30,7 @@ from app.models.communications.communication_log import (
     CommunicationLog,
 )
 
-from . import telemetry
+from . import sip_handoff, telemetry
 from .call_controller import run_call_controller
 from .config import openai_configured, openai_voice_enabled, openai_webhook_configured
 from .instructions import build_greeting_instructions, build_instructions
@@ -86,9 +88,37 @@ def realtime_webhook():
         current_app.logger.info("AI_VOICE_WEBHOOK_DUPLICATE callSid=%s", call_id)
         return {"received": True}, 200
 
-    garage = resolve_business_for_sip_call(sip_headers)
-    caller_phone = caller_number_for_sip_call(sip_headers)
+    # A call bridged from CoMaz's own phone menu carries a signed handoff
+    # naming its tenant (app/ai_voice/sip_handoff.py); anything else is the
+    # Elastic SIP trunk path and resolves the tenant from Diversion/To as
+    # before. A handoff that is present but fails verification is rejected -
+    # never silently downgraded to header-based resolution.
+    try:
+        handoff = sip_handoff.verify(sip_headers)
+    except sip_handoff.InvalidSipHandoff as exc:
+        current_app.logger.warning("AI_VOICE_HANDOFF_REJECTED callSid=%s reason=%s", call_id, exc)
+        _safe_reject(call_id)
+        return {"received": True}, 200
+
     to_header = sip_header(sip_headers, "To") or ""
+    if handoff is not None:
+        garage = _garage_for_handoff(handoff)
+        caller_phone = handoff.caller or caller_number_for_sip_call(sip_headers)
+        route = handoff.route
+        twilio_call_sid: str | None = handoff.twilio_call_sid
+        # One AI leg per phone-menu call: a replayed handoff can't open a
+        # second assistant session (or a second booking path) for it.
+        if garage is not None and _ivr_leg_exists(garage.id, handoff.twilio_call_sid):
+            current_app.logger.warning(
+                "AI_VOICE_HANDOFF_REPLAYED callSid=%s garage=%s", call_id, garage.id
+            )
+            _safe_reject(call_id)
+            return {"received": True}, 200
+    else:
+        garage = resolve_business_for_sip_call(sip_headers)
+        caller_phone = caller_number_for_sip_call(sip_headers)
+        route = "DIRECT"
+        twilio_call_sid = None
 
     if garage is None:
         current_app.logger.warning(
@@ -106,7 +136,9 @@ def realtime_webhook():
         return {"received": True}, 200
 
     try:
-        accept_call(call_id, instructions=build_instructions(garage), tools=TOOL_SCHEMAS)
+        accept_call(
+            call_id, instructions=build_instructions(garage, route=route), tools=TOOL_SCHEMAS
+        )
     except OpenAIVoiceError:
         current_app.logger.exception(
             "AI_VOICE_ACCEPT_FAILED callSid=%s garage=%s", call_id, garage.id
@@ -121,18 +153,49 @@ def realtime_webhook():
             direction=DIRECTION_INBOUND,
             external_provider="openai",
             external_id=call_id,
+            # The phone-menu call this AI leg belongs to - how the menu's
+            # /ivr/ai-complete step finds out whether the AI handed off or
+            # failed, and why the leg isn't counted as a second call.
+            call_sid=twilio_call_sid,
             from_address=caller_phone or None,
             to_address=to_header or None,
             status="accepted",
         )
     )
     db.session.commit()
-    current_app.logger.info("AI_VOICE_CALL_ACCEPTED callSid=%s garage=%s", call_id, garage.id)
+    current_app.logger.info(
+        "AI_VOICE_CALL_ACCEPTED callSid=%s garage=%s route=%s", call_id, garage.id, route
+    )
     telemetry.start_call(garage.id, call_id)
 
-    _spawn_call_controller(call_id=call_id, garage=garage, caller_phone=caller_phone)
+    _spawn_call_controller(
+        call_id=call_id,
+        garage=garage,
+        caller_phone=caller_phone,
+        route=route,
+        ivr_bridged=twilio_call_sid is not None,
+    )
 
     return {"received": True}, 200
+
+
+def _garage_for_handoff(handoff):
+    from app.models.garage import Garage
+
+    try:
+        garage_id = uuid.UUID(handoff.garage_id)
+    except ValueError:
+        return None
+    return db.session.get(Garage, garage_id)
+
+
+def _ivr_leg_exists(garage_id, twilio_call_sid: str) -> bool:
+    return (
+        CommunicationLog.query.filter_by(
+            garage_id=garage_id, external_provider="openai", call_sid=twilio_call_sid
+        ).first()
+        is not None
+    )
 
 
 def _safe_reject(call_id: str, *, status_code: int | None = None) -> None:
@@ -142,7 +205,9 @@ def _safe_reject(call_id: str, *, status_code: int | None = None) -> None:
         current_app.logger.warning("AI_VOICE_REJECT_FAILED callSid=%s", call_id)
 
 
-def _spawn_call_controller(*, call_id: str, garage, caller_phone: str) -> None:
+def _spawn_call_controller(
+    *, call_id: str, garage, caller_phone: str, route: str = "DIRECT", ivr_bridged: bool = False
+) -> None:
     """Runs the call-control connection for the lifetime of the call, in its
     own greenlet - the webhook itself must return quickly (OpenAI's own
     retry/backoff treats a slow or non-2xx response as a delivery failure).
@@ -171,7 +236,8 @@ def _spawn_call_controller(*, call_id: str, garage, caller_phone: str) -> None:
                 call_id=call_id,
                 garage=call_garage,
                 caller_phone=caller_phone,
-                greeting_instructions=build_greeting_instructions(call_garage),
+                greeting_instructions=build_greeting_instructions(call_garage, route=route),
+                ivr_bridged=ivr_bridged,
             )
 
     gevent.spawn(_run)

@@ -1,5 +1,13 @@
 # OpenAI Realtime voice assistant (direct SIP)
 
+> **Two ways a call reaches the assistant.** (1) *Direct*: the number sits on
+> an Elastic SIP trunk that dials OpenAI - everything below describes this.
+> (2) *Through the business's phone menu* (#230, recommended): the number is
+> **not** on a trunk, so Twilio calls the normal Voice URL
+> (`/api/webhooks/twilio/voice/incoming`), the business's menu plays, and
+> only a caller who picks an AI option is bridged to OpenAI - see
+> [Phone menu (IVR)](#phone-menu-ivr) at the end of this document.
+
 **Trunk provisioning is now per-business and automated** - the "Twilio
 Elastic SIP Trunk setup (manual, one-time per project)" section below
 describes the *original* design (one shared trunk, every business's number
@@ -437,3 +445,76 @@ these four. `tests/test_ai_voice_call_controller.py` drives
   been made as part of this work - see the manual test plan given
   separately for exactly how to validate this before turning it on for a
   real business.
+
+## Phone menu (IVR)
+
+A business's own incoming-call menu, configured by an owner in **Settings >
+Phone menu** (`GET/PUT /api/communications/voice-menu`, stored in
+`garage_voice_ivr_settings`). It runs **before** any AI session, so a caller
+who wants a person never uses the assistant.
+
+```
+Caller dials the business number (Voice URL = /api/webhooks/twilio/voice/incoming)
+  -> menu enabled? no  -> exactly the pre-menu behaviour (ConversationRelay / static / escalation dial)
+                   yes -> <Gather> greeting + "For bookings, press 1. To speak to us, press 2."
+  -> POST /ivr/menu (Digits)
+       AI_BOOKING / AI_FAQ -> <Dial action=/ivr/ai-complete><Sip>
+                                sip:$OPENAI_PROJECT_ID@sip.api.openai.com;transport=tls
+                                ?X-CoMaz-Garage&X-CoMaz-Call&X-CoMaz-Route&X-CoMaz-Caller&X-CoMaz-Ts&X-CoMaz-Sig
+       HUMAN_TRANSFER      -> <Dial action=/ivr/transfer-complete><Number>option target</Number>
+       REPEAT_MENU         -> menu again (bounded)
+       invalid / no input  -> re-prompt up to max_attempts, then the fallback
+  -> OpenAI webhook verifies X-CoMaz-Sig (HMAC, 5 min) - the tenant comes from
+     the signature, never from an unsigned header; a bad signature is rejected,
+     never downgraded; one AI leg per Twilio call (replays rejected)
+  -> AI leg ends -> POST /ivr/ai-complete
+       normal end                     -> hang up
+       AI handed off / AI failed      -> transfer (leg marked by the controller)
+       AI leg never connected         -> transfer
+  -> transfer unanswered -> POST /ivr/transfer-complete -> next fallback, else a
+     CallbackRequest + spoken close. No path drops the caller silently.
+```
+
+**Actions** are a registry (`app/communications/ivr/actions.py`): each entry
+declares whether it takes a transfer `target`, whether it can be the
+fallback, and when it is available. A new action is a registry entry plus
+its TwiML in `app/communications/ivr/twiml.py`; the table does not change.
+
+**Transfer destinations** are only ever business/platform configuration:
+option `target` → menu `fallback_target` → the menu's first transfer option
+→ the platform `voice_escalation_number`. Targets must be UK numbers;
+premium (09), personal (070), 087 and 118 numbers are rejected.
+
+**Telemetry**: `VOICE_IVR_MENU / SELECTED / INVALID / NO_INPUT / AI_DIAL /
+AI_COMPLETE / TRANSFER / TRANSFER_COMPLETE / FALLBACK` and
+`AI_VOICE_CALL_ACCEPTED route=…`, `AI_VOICE_HANDOFF_REJECTED`,
+`AI_VOICE_AI_FAILED fallback=phone_menu` - tenant, CallSid, digit/action and
+outcome only; never the caller's number or speech.
+
+**Env**: `VOICE_SIP_SIGNING_SECRET` (optional - defaults to a key derived
+from `SECRET_KEY`), `IVR_TTS_VOICE` (`Polly.Amy-Neural`), `IVR_TTS_LANGUAGE`
+(`en-GB`). The AI options also need `OPENAI_VOICE_ENABLED`,
+`OPENAI_API_KEY`, `OPENAI_WEBHOOK_SECRET`, `OPENAI_PROJECT_ID`; without them
+the menu routes AI options to the fallback instead.
+
+### Moving a number from direct SIP to the phone menu (Twilio Console)
+
+A number on an Elastic SIP trunk ignores its Voice URL, so the menu can only
+run once the number is taken off the trunk. No purchase, no porting.
+
+1. Twilio Console → the account/subaccount that owns the number → **Elastic
+   SIP Trunking → Trunks** → the trunk carrying the number → **Numbers** →
+   remove the number from the trunk (this only disassociates it; the trunk
+   itself is untouched).
+2. **Phone Numbers → Active numbers** → the number → *Voice Configuration*:
+   "A call comes in" = Webhook, `https://mot-backend.onrender.com/api/webhooks/twilio/voice/incoming`,
+   HTTP POST; "Call status changes" =
+   `https://mot-backend.onrender.com/api/webhooks/twilio/voice/status`. Save.
+3. In CoMaz, as the business owner: **Settings → Phone menu** → turn it on,
+   options e.g. `1` AI booking assistant, `2` Transfer to a person with the
+   business's number → Save.
+4. Call the number: greeting → press 1 (assistant) / press 2 (transfer).
+   Render logs: `VOICE_IVR_*` and `AI_VOICE_*`.
+
+To roll back, re-associate the number with the trunk (step 1 in reverse):
+the menu then simply never runs.

@@ -68,6 +68,11 @@ class _CallState:
     end_after_response: bool = False
     transfer_uri: str | None = None
     greeted: bool = False
+    # Bridged from CoMaz's phone menu (app/communications/ivr): the Twilio
+    # call is still up on the other side of this AI leg, so a handoff or
+    # failure just ends the leg after marking why - the menu's Dial action
+    # then transfers the caller. No SIP REFER needed.
+    ivr_bridged: bool = False
 
 
 def run_call_controller(
@@ -77,6 +82,7 @@ def run_call_controller(
     garage,
     caller_phone: str,
     greeting_instructions: str | None = None,
+    ivr_bridged: bool = False,
 ) -> None:
     """Blocks for the lifetime of the call. Call this from its own
     greenlet (see app/ai_voice/routes.py) - never from the webhook request
@@ -87,9 +93,12 @@ def run_call_controller(
     ``greeting_instructions``, when given, is sent as the first
     ``response.create`` so the assistant speaks first instead of leaving the
     caller in silence until they say something.
+
+    ``ivr_bridged`` marks an AI leg bridged from the business's phone menu -
+    see ``_CallState.ivr_bridged``.
     """
     client = OpenAI(api_key=api_key)
-    state = _CallState()
+    state = _CallState(ivr_bridged=ivr_bridged)
     failures = 0
 
     while True:
@@ -140,7 +149,16 @@ def run_call_controller(
                 garage.id,
                 failures,
             )
-            _handle_ai_failure(call_id=call_id, garage=garage, caller_phone=caller_phone)
+            if state.ivr_bridged:
+                _mark_ivr_leg(call_id, "ai_failed")
+                logger.warning(
+                    "AI_VOICE_AI_FAILED callSid=%s garage=%s fallback=phone_menu",
+                    call_id,
+                    garage.id,
+                )
+                _safe_hangup(call_id)
+            else:
+                _handle_ai_failure(call_id=call_id, garage=garage, caller_phone=caller_phone)
             telemetry.finish_call(call_id, end_reason=END_REASON_CRASH)
             return
         time.sleep(RECONNECT_BACKOFF_SECONDS[min(failures - 1, len(RECONNECT_BACKOFF_SECONDS) - 1)])
@@ -179,8 +197,13 @@ def _pump(connection, *, call_id: str, garage, caller_phone: str, state: _CallSt
                 logger.info(
                     "AI_VOICE_ENDING_CALL callSid=%s reason=handoff transfer=%s",
                     call_id,
-                    bool(state.transfer_uri),
+                    "phone_menu" if state.ivr_bridged else bool(state.transfer_uri),
                 )
+                if state.ivr_bridged:
+                    _mark_ivr_leg(call_id, "handoff")
+                    _safe_hangup(call_id)
+                    telemetry.finish_call(call_id, end_reason=END_REASON_HANDOFF)
+                    return _ENDED
                 if state.transfer_uri:
                     _safe_refer(call_id, state.transfer_uri)
                 else:
@@ -315,6 +338,23 @@ def _handle_ai_failure(*, call_id: str, garage, caller_phone: str) -> None:
     )
     if transfer_uri:
         _safe_refer(call_id, transfer_uri)
+
+
+def _mark_ivr_leg(call_id: str, status: str) -> None:
+    """Record why this AI leg is ending on its CommunicationLog row, which
+    the phone menu's /ivr/ai-complete step reads to decide between hanging
+    up and transferring the caller. Must commit before the hangup below."""
+    from app.models.communications.communication_log import CommunicationLog
+
+    try:
+        db.session.rollback()
+        leg = CommunicationLog.query.filter_by(external_id=call_id).first()
+        if leg is not None:
+            leg.status = status
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.exception("AI_VOICE_LEG_MARK_FAILED callSid=%s", call_id)
 
 
 def _extract_transfer_uri(output_json: str) -> tuple[str, str | None]:
