@@ -197,13 +197,13 @@ def test_business_with_no_owner_is_not_ready(platform_client, garage):
 def test_archived_services_only_does_not_count_as_configured(
     platform_client, garage, user, session
 ):
-    from app.models.appointments.appointment_type import AppointmentType
+    from app.models.appointments.appointment_type import GarageAppointmentType
 
     session.add(
-        AppointmentType(
+        GarageAppointmentType(
             garage_id=garage.id,
             name="Old MOT (archived)",
-            duration_minutes=60,
+            default_duration_minutes=60,
             status="ARCHIVED",
         )
     )
@@ -288,11 +288,19 @@ def test_stripe_payouts_disabled_alone_blocks_deposit_readiness(
 
 
 def test_a_fully_ready_business_reads_ready_on_every_rollup(
-    platform_client, garage, user, appointment_type, session
+    platform_client, garage, user, appointment_type, session, app, monkeypatch
 ):
     """The positive control: once every real prerequisite is genuinely
     satisfied, the checklist must actually say so - a system that can only
     ever report "not ready" is as useless as one that lies positively."""
+    # deposit_configuration_valid also requires the platform's own Stripe
+    # adapter to be configured (STRIPE_SECRET_KEY/STRIPE_WEBHOOK_SECRET) -
+    # a deployment-level fact, not a per-garage one. monkeypatch.setitem,
+    # not a direct assignment: the app fixture isn't guaranteed to reset
+    # config between tests, and a leaked key here would silently change
+    # every later test's Stripe-configured state.
+    monkeypatch.setitem(app.config, "STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setitem(app.config, "STRIPE_WEBHOOK_SECRET", "whsec_test_x")
     session.add(
         GarageOpeningHours(
             garage_id=garage.id,
