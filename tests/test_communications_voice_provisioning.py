@@ -199,7 +199,10 @@ def test_buy_number_creates_and_supplies_an_address_when_required(monkeypatch, g
     assert created["region"] == "Greater London"
     assert created["postal_code"] == "SW1A 1AA"
     assert created["iso_country"] == "GB"
-    assert client.incoming_phone_numbers.create_calls[0]["address_sid"] == "ADnew0000000000000000000000000001"
+    assert (
+        client.incoming_phone_numbers.create_calls[0]["address_sid"]
+        == "ADnew0000000000000000000000000001"
+    )
     assert result["sid"] == "PNnew0000000000000000000000000001"
 
 
@@ -221,7 +224,10 @@ def test_buy_number_reuses_an_existing_matching_address_instead_of_duplicating(m
     result = voice.buy_number(garage, "+441234567890")
 
     assert client.addresses.create_calls == []  # reused, never duplicated
-    assert client.incoming_phone_numbers.create_calls[0]["address_sid"] == "ADexisting000000000000000000001"
+    assert (
+        client.incoming_phone_numbers.create_calls[0]["address_sid"]
+        == "ADexisting000000000000000000001"
+    )
     assert result["sid"] == "PNnew0000000000000000000000000001"
 
 
