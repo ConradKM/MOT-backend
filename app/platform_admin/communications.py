@@ -490,6 +490,7 @@ def _summary_row(
 ) -> dict:
     voice = _voice_view(garage, settings, row)
     wa = _whatsapp_view(garage, settings, row)
+    openai_voice = _openai_voice_view(row)
     overall = _overall_status(voice, wa, settings)
 
     lead = _lead_channel(voice, wa, overall)
@@ -505,6 +506,13 @@ def _summary_row(
         "voice_phone_number": voice["phone_number"],
         "voice_status": voice["status"],
         "voice_display_status": voice["display_status"],
+        # Surfaced separately from voice_status on purpose - a business can
+        # have a fully working number with OpenAI Voice never enabled, and
+        # an operator scanning this worklist needs to see that without
+        # opening each tenant individually (mirrors communications_detail's
+        # own "openai_voice" section at list scope).
+        "openai_voice_status": openai_voice["status"],
+        "openai_voice_display_status": openai_voice["display_status"],
         "whatsapp_number": wa["phone_number"],
         "whatsapp_status": wa["status"],
         "whatsapp_display_status": wa["display_status"],

@@ -1054,6 +1054,8 @@ class CommunicationsSetupSummarySchema(Schema):
     voice_phone_number = fields.Str(dump_only=True, allow_none=True)
     voice_status = fields.Str(dump_only=True)
     voice_display_status = fields.Str(dump_only=True)
+    openai_voice_status = fields.Str(dump_only=True)
+    openai_voice_display_status = fields.Str(dump_only=True)
     whatsapp_number = fields.Str(dump_only=True, allow_none=True)
     whatsapp_status = fields.Str(dump_only=True)
     whatsapp_display_status = fields.Str(dump_only=True)
