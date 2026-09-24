@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from flask import current_app, g
 from flask_smorest import abort
@@ -165,8 +165,11 @@ def approve_booking_request(
     # different pending requests can both pass capacity before either
     # appointment is committed.
     db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
-    booking_request = (
-        BookingRequest.query.filter_by(id=request_id, garage_id=garage_id).with_for_update().first()
+    booking_request = cast(
+        BookingRequest | None,
+        BookingRequest.query.filter_by(id=request_id, garage_id=garage_id)
+        .with_for_update()
+        .first(),
     )
     if booking_request is None:
         abort(404, message="Booking request not found")
