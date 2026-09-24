@@ -327,6 +327,13 @@ class AppointmentResource(MethodView):
 
         if "vehicle_id" in data and data["vehicle_id"] is not None:
             _get_owned_vehicle(data["vehicle_id"], garage_id, effective_customer_id)
+        elif "customer_id" in data and appointment.vehicle_id is not None:
+            # A vehicle is owned by a customer, not merely by the garage.  A
+            # customer-only PATCH must therefore not leave the appointment
+            # pointing at a vehicle belonging to its previous customer.
+            # Callers can explicitly detach the vehicle (vehicle_id: null) or
+            # select one owned by the new customer in the same update.
+            _get_owned_vehicle(appointment.vehicle_id, garage_id, effective_customer_id)
 
         if "status" in data:
             _validate_status(data["status"], garage_id)

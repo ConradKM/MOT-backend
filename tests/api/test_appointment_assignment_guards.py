@@ -12,6 +12,7 @@ from werkzeug.security import generate_password_hash
 
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
+from app.models.customer import Customer
 from app.models.employee import Employee
 
 START = datetime(2026, 11, 10, 9, 0, tzinfo=UTC)
@@ -185,6 +186,43 @@ def test_booking_an_archived_vehicle_reactivates_it(
     assert resp.status_code == 201
     session.refresh(vehicle)
     assert vehicle.is_active is True
+
+
+def test_reassigning_customer_cannot_leave_previous_customers_vehicle_attached(
+    authenticated_user, session, garage, customer, vehicle
+):
+    """A customer-only appointment PATCH must preserve vehicle ownership."""
+    appt_type = _appt_type(session, garage)
+    other_customer = Customer(
+        garage_id=garage.id,
+        first_name="John",
+        last_name="Smith",
+        email="john.smith@example.com",
+    )
+    session.add(other_customer)
+    session.commit()
+
+    appointment = authenticated_user.client.post(
+        "/api/appointments/",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "customer_id": str(customer.id),
+            "vehicle_id": str(vehicle.id),
+            "appointment_type_id": str(appt_type.id),
+            "start_time": START.isoformat(),
+            "end_time": END.isoformat(),
+        },
+    ).get_json()
+
+    response = authenticated_user.client.patch(
+        f"/api/appointments/{appointment['id']}",
+        json={"customer_id": str(other_customer.id)},
+    )
+
+    assert response.status_code == 422
+    persisted = Appointment.query.get(appointment["id"])
+    assert persisted.customer_id == customer.id
+    assert persisted.vehicle_id == vehicle.id
 
 
 def test_staff_create_cannot_bypass_garage_capacity_with_a_second_employee(
