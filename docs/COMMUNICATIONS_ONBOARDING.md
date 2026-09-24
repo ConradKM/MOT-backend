@@ -49,6 +49,11 @@ customer action.
 `NUMBER_PURCHASING` → `NUMBER_ASSIGNED` → `WEBHOOKS_CONFIGURED` → `TESTING` →
 `ONLINE`, plus `ACTION_REQUIRED`, `FAILED`, `DISABLED`.
 
+**OpenAI Voice** (a separate, optional lifecycle stage - a business can be
+`ONLINE` on plain Twilio voice with this never started): `NOT_STARTED` →
+`TRUNK_CREATING` → `NUMBER_ASSOCIATING` → `READY`, plus `ACTION_REQUIRED`,
+`FAILED`. See `app/communications/provisioning/openai_voice_sip.py`.
+
 **WhatsApp:** `NOT_STARTED` → `NUMBER_ENTERED` → `META_SIGNUP_REQUIRED` →
 `META_SIGNUP_IN_PROGRESS` → `META_SIGNUP_COMPLETED` → `WABA_RECEIVED` →
 `TWILIO_SUBACCOUNT_READY` → `SENDER_REGISTRATION_PENDING` → `OTP_REQUIRED` →
@@ -115,12 +120,17 @@ business). All of this is Superadmin-only and every step is audited.
 2. **Create Twilio subaccount.** Creates it under your master account, named
    `CoMaz — <name> (<slug>)`, and stores its Auth Token encrypted. Idempotent -
    clicking twice does not create two subaccounts.
-3. **Buy a voice number.** Optionally give an area code, press *Search
-   numbers*, then *Buy* on the one you want. The number is bought **into the
-   business's subaccount** with CoMaz's webhooks already set, so it is never
-   live-but-unconfigured. This spends money.
-   - Already own a number in that subaccount? Use the API's `already_owned`
-     flag to adopt it instead of buying.
+3. **Get a number.** Either:
+   - **Buy new** - optionally give an area code, press *Search numbers*,
+     then *Buy* on the one you want. Bought **into the business's
+     subaccount** with CoMaz's webhooks already set. This spends money.
+   - **Use existing number** - discovers numbers CoMaz's Twilio account
+     already owns (in this business's own subaccount, in the shared parent
+     account, or confirms a typed-in number is genuinely external) and
+     adopts or transfers it in, no purchase.
+   - **Return number to CoMaz** (on a business that already has one) - moves
+     it back to the shared parent account, never released/deleted, so it
+     becomes discoverable again for a different business.
 4. **Set escalation and fallback.** Where a caller goes when automation cannot
    help, and where they go if CoMaz itself is unreachable. Both E.164. With an
    escalation number set, an inbound call that reaches the static greeting is
@@ -130,6 +140,10 @@ business). All of this is Superadmin-only and every step is audited.
 6. **Mark voice online.** A deliberate operator decision - "the test call
    connected" and "this business is ready for its customers" are different
    claims. This also enables communications for the business.
+7. **Enable OpenAI Voice (optional).** A separate, explicit action from
+   getting the number - fully automated (creates/reuses the business's own
+   SIP trunk, points it at OpenAI, associates the number), no Twilio Console
+   step. See `docs/OPENAI_VOICE_SETUP.md` for the underlying architecture.
 
 Verify in the Twilio console that the number's Voice URL is
 `{PUBLIC_API_BASE_URL}/api/webhooks/twilio/voice/incoming` and its status

@@ -47,45 +47,61 @@ Encrypted at rest via `COMMS_SECRET_KEY` (already configured). Safe to
 retry - clicking it again on a business that already has a subaccount just
 returns the existing one, never creates a second.
 
-## 9. Purchase/assign a dedicated number
-**COMAZ ADMIN DOES, WITH EXPLICIT CONFIRMATION** - search available UK
-numbers ("Search numbers"), then "Buy number" for the chosen one
-(`POST .../communications/voice/number`). This is a real Twilio purchase
-with a real recurring cost - nothing in this system buys a number
-automatically, and it is now provably safe to retry: a business that
-already has a number returns that number unchanged rather than buying a
-second one (fixed in this pass - previously a double-click or retried
-request could have purchased and silently orphaned an extra number).
-The purchased number's voice webhook is pointed at CoMaz automatically in
-the same call - never live-but-unconfigured.
+## 9. Acquire a dedicated number
+**COMAZ ADMIN DOES, WITH EXPLICIT CONFIRMATION** - Platform Admin ->
+business -> Communications -> Voice. Three ways to get a number, all
+idempotent (a business that already has a number is never bought/moved a
+second time):
+- **Buy new**: search available UK numbers, then *Buy* the chosen one
+  (`POST .../communications/voice/number`). A real Twilio purchase with a
+  real recurring cost.
+- **Use existing number**: discovers numbers CoMaz's Twilio account already
+  owns (in this business's own subaccount, in the shared parent account, or
+  flags a number as external if it's genuinely not CoMaz's) and either
+  adopts or transfers it in - no purchase.
+- **Return number to CoMaz**: moves a business's number back to the shared
+  parent account (never released/deleted) so it becomes discoverable again
+  for a different business.
+
+Whichever path is used, the number's voice webhook is pointed at CoMaz
+automatically in the same call - never live-but-unconfigured.
 Do not reuse another business's number. Existing reference numbers
-(`+447402220792`, `+443330382135`) belong to other tenants/testing and must
-never be reassigned.
+(`+447402220792`, `+443330382135`) and the reference SIP trunk
+(`TKf170893068fae837c390ccbd06b06fb9`) belong to other tenants/testing and
+must never be reassigned, modified, or deleted through any of these flows.
 
 ## 10. OpenAI voice activation
-**AUTOMATED BY COMAZ, once the number is attached to the SIP trunk (below)**:
-the OpenAI webhook infrastructure is shared safely across every tenant -
-tenant resolution is per-number
-(`app/ai_voice/tenant.py::resolve_business_for_sip_call`, reading the SIP
-`Diversion`/`To` header, matched against this business's own
-`voice_phone_number`). No per-business OpenAI project or API key is needed.
-An unrecognised number fails closed - it is never routed to a default
-tenant.
+**COMAZ ADMIN DOES, WITH EXPLICIT CONFIRMATION** - Platform Admin ->
+business -> Communications -> Voice -> **Enable OpenAI Voice**. Deliberately
+a separate, explicit action from acquiring the number itself: a business
+can have a fully working Twilio number with OpenAI Voice never turned on.
 
-**COMAZ ADMIN MUST DO MANUALLY (not automated, no Platform Admin action for
-this today)**: the number bought in step 9 defaults to CoMaz's own voice
-webhook (Twilio ConversationRelay), *not* OpenAI. To route this specific
-number through OpenAI instead, associate it with the existing Elastic SIP
-Trunk in the **Twilio Console** (Super Network -> Elastic SIP Trunking ->
-the CoMaz trunk -> Numbers -> add this number). A number belongs to exactly
-one trunk/voice-URL configuration at a time, so this is a one-time,
-one-number action - see `docs/OPENAI_VOICE_SETUP.md`. Skip this step
-entirely if TOD should use CoMaz's existing ConversationRelay voice
-assistant instead of the OpenAI Realtime one; both work, and moving between
-them later is the same one-line Twilio Console change.
+**Fully automated, no Twilio Console step required** (this replaced an
+earlier manual step): this creates (or reuses) the business's own Elastic
+SIP Trunk in its own Twilio subaccount, points it at OpenAI's shared
+Realtime SIP destination, and associates the number - all idempotent, safe
+to retry after a failure. The existing platform reference trunk
+(`TKf170893068fae837c390ccbd06b06fb9`) is never read or touched by this
+action; each business gets its own trunk (Twilio's Trunking API has no
+parent-acts-as-subaccount path, unlike number purchase/management).
+
+Skip this step entirely if the business should use CoMaz's own
+ConversationRelay voice assistant instead of the OpenAI Realtime one - both
+work, and this action is reversible only by leaving it disabled (there is
+no "disable" button; a business simply never enables it, or a fresh
+Platform Admin decision can be made before this step).
 
 Also set an escalation/fallback number in Platform Admin
 (`PUT .../communications/voice/routing`) if the owner wants human handoff.
+
+**Usage/cost visibility**: once calls flow through OpenAI Voice, per-call
+usage (token counts, duration, tool-call/booking/escalation outcomes) and
+an *estimated* OpenAI + Twilio infrastructure cost are captured
+automatically and readable via `GET
+/api/platform-admin/tenants/<id>/voice-telemetry` and
+`GET /api/platform-admin/stats/voice-telemetry` (never a provider-billed
+actual - see `app/ai_voice/pricing.py` for exactly why). **No Platform
+Admin screen renders this yet** - it is API-only today.
 
 ## 11. Public booking verification
 **COMAZ ADMIN DOES**: open the business's public booking link, place a real
@@ -111,7 +127,9 @@ appointment; confirm status transitions correctly.
 no per-business setup needed here).
 
 ## 16. Final GO LIVE check
-**COMAZ ADMIN DOES**: `GET /api/platform-admin/tenants/<id>/readiness` -
-`business_ready` and `ready_to_take_deposits` should both be `true` before
-telling the owner they are live. `communications_ready` is optional - a
-business can go live on public booking alone and add phone/WhatsApp later.
+**COMAZ ADMIN DOES**: Platform Admin -> business -> **Readiness** tab (or
+`GET /api/platform-admin/tenants/<id>/readiness` directly) - "Ready for
+public booking" and "Ready to take deposits" should both read Ready before
+telling the owner they are live. Communications is explicitly optional for
+go-live - a business can go live on public booking alone and add
+phone/WhatsApp/OpenAI Voice later.

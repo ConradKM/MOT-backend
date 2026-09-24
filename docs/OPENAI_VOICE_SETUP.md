@@ -1,5 +1,21 @@
 # OpenAI Realtime voice assistant (direct SIP)
 
+**Trunk provisioning is now per-business and automated** - the "Twilio
+Elastic SIP Trunk setup (manual, one-time per project)" section below
+describes the *original* design (one shared trunk, every business's number
+manually associated with it in the Twilio Console) and is kept only because
+one reference trunk built that way (`TKf170893068fae837c390ccbd06b06fb9`)
+still exists and must never be modified/deleted/repurposed. **A real
+business today does not need that manual step**: Platform Admin's "Enable
+OpenAI Voice" action (Communications -> Voice) creates a dedicated Elastic
+SIP Trunk in that business's own Twilio subaccount, points it at OpenAI,
+and associates the number - all in one click, idempotent, no Twilio Console
+access needed. See `app/communications/provisioning/openai_voice_sip.py`
+for exactly why a shared trunk cannot carry a subaccount-owned number
+(Twilio's Trunking API has no parent-acts-as-subaccount path, unlike number
+purchase/management) and `docs/FIRST_CUSTOMER_RUNBOOK.md` step 10 for the
+day-to-day operator flow.
+
 Supersedes `docs/OPENAI_VOICE.md`, which documented an earlier Media
 Streams design (Twilio relays raw call audio through this backend to an
 OpenAI Realtime WebSocket). That design was abandoned before any of it went
@@ -279,7 +295,7 @@ speculatively.
 | `OPENAI_VOICE_ENABLED` | No | `false` | Master switch. Off = the webhook always returns 503 and no call is ever accepted. |
 | `OPENAI_API_KEY` | Yes, to use this | `""` | Backend-only; never sent to a frontend or logged. |
 | `OPENAI_WEBHOOK_SECRET` | Yes, to use this | `""` | From the OpenAI dashboard's webhook configuration. Verifies `realtime.call.incoming` deliveries. |
-| `OPENAI_PROJECT_ID` | Yes, to use this | `""` | The OpenAI project the Twilio SIP trunk's Origination URI dials (`sip:$OPENAI_PROJECT_ID@sip.api.openai.com;transport=tls`) - not read by this backend's own code, but recorded here since it's part of the same setup. |
+| `OPENAI_PROJECT_ID` | Yes, to use this | `""` | The OpenAI project every trunk's Origination URI dials (`sip:$OPENAI_PROJECT_ID@sip.api.openai.com;transport=tls`) - read directly by `app/communications/provisioning/openai_voice_sip.py` when provisioning a per-tenant trunk. |
 | `OPENAI_REALTIME_MODEL` | No | `gpt-realtime-2.1` | Pin an exact model in production once chosen. |
 | `OPENAI_REALTIME_VOICE` | No | `marin` | One of OpenAI's current Realtime voices. Per-business voice selection is not implemented. |
 | `OPENAI_REALTIME_AUDIO_FORMAT` | No | `audio/pcmu` | Confirmed current for G.711 mu-law SIP calls - see OpenAI's voice-SIP guide. |
@@ -288,7 +304,34 @@ No new Twilio-side environment variables - the existing `TWILIO_*`
 configuration is untouched; this integration only needs
 `PUBLIC_API_BASE_URL` (already required) to give OpenAI a webhook URL.
 
-## Twilio Elastic SIP Trunk setup (manual, one-time per project)
+## Per-tenant trunk provisioning (automated - the current path)
+
+For any real business, this replaces the manual section below entirely.
+Platform Admin -> business -> Communications -> Voice -> **Enable OpenAI
+Voice** does, in one idempotent action
+(`app/communications/provisioning/openai_voice_sip.py::enable_openai_voice`):
+
+1. Creates (or reuses, by friendly name, if retried) an Elastic SIP Trunk
+   in *that business's own Twilio subaccount* - never the shared reference
+   trunk.
+2. Points its Origination URI at
+   `sip:$OPENAI_PROJECT_ID@sip.api.openai.com;transport=tls` (creates or
+   reuses the origination URL entry).
+3. Associates the business's voice number with that trunk (creates or
+   reuses the association).
+
+No Twilio Console access is needed for this. `OPENAI_PROJECT_ID` must still
+be set as a deployment secret (below) - it's read directly by this code
+now, not just recorded for a manual step.
+
+## Twilio Elastic SIP Trunk setup (manual, legacy - reference trunk only)
+
+Describes how the existing reference trunk
+(`TKf170893068fae837c390ccbd06b06fb9`, on the parent Twilio account) was
+originally built, before per-tenant provisioning existed. Kept for
+historical accuracy and because that trunk must never be
+modified/deleted/repurposed - **do not follow these steps for a new
+business**; use "Enable OpenAI Voice" above instead.
 
 1. In the Twilio Console, create a new **Elastic SIP Trunk**
    (Super Network > Elastic SIP Trunking > Trunks).
@@ -367,8 +410,9 @@ these four. `tests/test_ai_voice_call_controller.py` drives
 2. Set `OPENAI_VOICE_ENABLED=true` only once the Twilio trunk and OpenAI
    webhook are both configured (see the two sections above).
 3. Configure the OpenAI webhook URL and copy its signing secret in.
-4. Create the Twilio Elastic SIP Trunk and associate exactly the business
-   number(s) being migrated to this feature.
+4. For each business: Platform Admin -> Communications -> Voice -> Enable
+   OpenAI Voice (see "Per-tenant trunk provisioning" above) - no manual
+   Twilio Console step needed per business.
 5. Make a real test call to a **test** number before migrating any live
    business number - confirm: correct business greeting, accurate
    hours/services, a real available slot offered, a booking actually
