@@ -259,6 +259,7 @@ def create_booking_request(
             appointment_type.default_duration_minutes if appointment_type else None
         ),
         requested_price=appointment_type.base_price if appointment_type else None,
+        requested_appointment_type_name=appointment_type.name if appointment_type else None,
         preferred_date=preferred_date,
         preferred_time=preferred_time,
         notes=notes,

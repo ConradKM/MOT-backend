@@ -84,6 +84,10 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[na
     # need an equivalent snapshot: start_time/end_time are already fixed at
     # creation and never move just because default_duration_minutes changes.
     price_at_booking: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    # The service label shown to the customer and staff at creation.  The
+    # appointment type remains linked for configuration/navigation, but a
+    # later rename must not rewrite historical appointments.
+    appointment_type_name_at_booking: Mapped[str | None] = mapped_column(String(100))
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="appointments")
     employee: Mapped["Employee"] = relationship("Employee", back_populates="appointments")

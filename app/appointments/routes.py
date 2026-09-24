@@ -309,6 +309,7 @@ class AppointmentList(MethodView):
             status=data.get("status") or "BOOKED",
             notes=data.get("notes"),
             price_at_booking=appointment_type.base_price,
+            appointment_type_name_at_booking=appointment_type.name,
         )
 
         db.session.add(appointment)

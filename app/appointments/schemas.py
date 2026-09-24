@@ -24,6 +24,7 @@ class AppointmentSchema(Schema):
     # appointments created before this column existed, or for a type with no
     # price set.
     price_at_booking = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    appointment_type_name_at_booking = fields.Str(dump_only=True, allow_none=True)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
