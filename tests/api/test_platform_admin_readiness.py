@@ -4,6 +4,11 @@ not-ready, exactly as it should before a business's first real deposit."""
 
 from datetime import time
 
+from app.communications.provisioning import states
+from app.models.communications.comms_onboarding import GarageCommunicationsOnboarding
+from app.models.communications.garage_communication_settings import (
+    GarageCommunicationSettings,
+)
 from app.models.garage_schedule import GarageOpeningHours
 from app.models.payments.garage_payment_settings import GaragePaymentSettings
 
@@ -71,3 +76,93 @@ def test_communications_is_optional_for_public_booking_readiness(
     assert body["communications_ready"] is False
     assert body["business_ready"] is True
     assert body["ready_for_public_booking"] is True
+
+
+def test_a_working_voice_number_with_openai_voice_never_enabled_is_not_falsely_ready(
+    platform_client, garage, user, session
+):
+    """The regression this test exists for: the "openai_voice" check used to
+    read the Twilio voice channel's own webhooks_configured flag instead of
+    the OpenAI Voice channel's actual status - so a plain Twilio-only
+    business with webhooks configured (and OpenAI Voice never enabled at
+    all) reported "OpenAI voice: ready", a straightforward false positive.
+    """
+    session.add(
+        GarageCommunicationSettings(
+            garage_id=garage.id,
+            twilio_subaccount_sid="ACtest0000000000000000000000000001",
+            voice_phone_number="+441234567890",
+            voice_number_sid="PNtest0000000000000000000000000001",
+        )
+    )
+    session.add(
+        GarageCommunicationsOnboarding(
+            garage_id=garage.id,
+            voice_status=states.VOICE_WEBHOOKS_CONFIGURED,
+            voice_webhooks_configured=True,
+            openai_voice_status=states.OPENAI_VOICE_NOT_STARTED,
+        )
+    )
+    session.commit()
+
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/readiness").json
+
+    communications = {c["key"]: c["ok"] for c in body["communications"]}
+    assert communications["voice_routing"] is True
+    # NOT_STARTED is a legitimate resting state (optional, never blocks
+    # readiness on its own) - it must read true, but for the honest reason
+    # ("never enabled"), not by accident via the voice channel's own flag.
+    assert communications["openai_voice"] is True
+
+
+def test_a_stuck_openai_voice_attempt_is_not_falsely_ready(platform_client, garage, user, session):
+    session.add(
+        GarageCommunicationSettings(
+            garage_id=garage.id,
+            twilio_subaccount_sid="ACtest0000000000000000000000000001",
+            voice_phone_number="+441234567890",
+            voice_number_sid="PNtest0000000000000000000000000001",
+        )
+    )
+    session.add(
+        GarageCommunicationsOnboarding(
+            garage_id=garage.id,
+            voice_status=states.VOICE_WEBHOOKS_CONFIGURED,
+            voice_webhooks_configured=True,
+            openai_voice_status=states.OPENAI_VOICE_ACTION_REQUIRED,
+        )
+    )
+    session.commit()
+
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/readiness").json
+
+    communications = {c["key"]: c["ok"] for c in body["communications"]}
+    assert communications["voice_routing"] is True
+    assert communications["openai_voice"] is False
+    assert body["communications_ready"] is False
+
+
+def test_openai_voice_actually_ready_reads_ready(platform_client, garage, user, session):
+    session.add(
+        GarageCommunicationSettings(
+            garage_id=garage.id,
+            twilio_subaccount_sid="ACtest0000000000000000000000000001",
+            voice_phone_number="+441234567890",
+            voice_number_sid="PNtest0000000000000000000000000001",
+            communications_enabled=True,
+        )
+    )
+    session.add(
+        GarageCommunicationsOnboarding(
+            garage_id=garage.id,
+            voice_status=states.VOICE_ONLINE,
+            voice_webhooks_configured=True,
+            openai_voice_status=states.OPENAI_VOICE_READY,
+        )
+    )
+    session.commit()
+
+    body = platform_client.get(f"/api/platform-admin/tenants/{garage.id}/readiness").json
+
+    communications = {c["key"]: c["ok"] for c in body["communications"]}
+    assert communications["openai_voice"] is True
