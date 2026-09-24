@@ -14,15 +14,23 @@ preferred time has passed doesn't stay PENDING (and therefore reserved and
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from flask import current_app, g
 from flask_smorest import abort
 
+from app.appointments.checklists.service import snapshot_checklist_for_appointment
+from app.communications.events import BOOKING_REQUEST_APPROVED, emit_event
 from app.extensions import db
 from app.garages.timezones import local_day_for, local_slot_as_utc, timezone_for
+from app.models.appointments.appointment import Appointment
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
+from app.models.employee import Employee
+from app.models.garage import Garage
 from app.models.vehicle import Vehicle
 from app.public_booking.availability import resolve_settings, slot_capacity_usage
 
@@ -139,6 +147,175 @@ def resolve_customer_and_vehicle(
         vehicle.is_active = True
 
     return customer, vehicle
+
+
+def approve_booking_request(
+    *, reviewer: Employee, request_id: uuid.UUID, data: Mapping[str, Any]
+) -> BookingRequest:
+    """Authoritatively approve one pending request into one appointment.
+
+    This is the sole manual-approval transaction. It owns the garage/request
+    locks and all revalidation before an appointment is made, so a future
+    automatic path can reuse this operation rather than inventing another
+    booking-to-appointment flow. Callers must provide an explicit, valid
+    employee assignment; this function intentionally does not select one.
+    """
+    garage_id = reviewer.garage_id
+    # Use the same per-garage lock as public booking submission. Without it,
+    # different pending requests can both pass capacity before either
+    # appointment is committed.
+    db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
+    booking_request = (
+        BookingRequest.query.filter_by(id=request_id, garage_id=garage_id).with_for_update().first()
+    )
+    if booking_request is None:
+        abort(404, message="Booking request not found")
+
+    if booking_request.status == "PENDING" and is_request_stale(booking_request):
+        booking_request.status = "EXPIRED"
+        db.session.commit()
+        abort(
+            409,
+            message="This request's preferred time has already passed - it has expired and can no longer be approved.",
+        )
+    if booking_request.status != "PENDING":
+        abort(
+            409, message=f"This booking request has already been {booking_request.status.lower()}."
+        )
+
+    appointment_type_id = data.get("appointment_type_id") or booking_request.appointment_type_id
+    if appointment_type_id is None:
+        abort(422, message="appointment_type_id is required to create the appointment.")
+    appointment_type = GarageAppointmentType.query.filter_by(
+        id=appointment_type_id, garage_id=garage_id
+    ).first()
+    if appointment_type is None or appointment_type.status != "ACTIVE":
+        abort(422, message="appointment_type_id is not an active type for this business.")
+
+    assigned_employee_id = data.get("employee_id")
+    if assigned_employee_id is None:
+        abort(422, message="employee_id is required to schedule the appointment.")
+    assigned_employee = Employee.query.filter_by(
+        id=assigned_employee_id, garage_id=garage_id
+    ).first()
+    if assigned_employee is None:
+        abort(422, message="employee_id does not belong to your business.")
+    if not assigned_employee.is_active:
+        abort(422, message="This employee's account is deactivated.")
+
+    start_time, end_time = _resolve_appointment_slot(booking_request, data, appointment_type)
+    _assert_no_conflict(assigned_employee_id, start_time, end_time)
+    _assert_capacity_available(booking_request.garage, booking_request, start_time, end_time)
+
+    customer, vehicle = resolve_customer_and_vehicle(
+        garage_id,
+        customer_id=booking_request.customer_id,
+        customer_email=booking_request.customer_email,
+        first_name=booking_request.customer_first_name,
+        last_name=booking_request.customer_last_name,
+        phone=booking_request.customer_phone,
+        vehicle_registration=booking_request.vehicle_registration,
+        vehicle_make=booking_request.vehicle_make,
+        vehicle_model=booking_request.vehicle_model,
+        vehicle_year=booking_request.vehicle_year,
+        vehicle_mileage=booking_request.vehicle_mileage,
+    )
+    appointment = Appointment(
+        garage_id=garage_id,
+        employee_id=assigned_employee_id,
+        customer_id=customer.id,
+        vehicle_id=None if vehicle is None else vehicle.id,
+        appointment_type_id=appointment_type.id,
+        start_time=start_time,
+        end_time=end_time,
+        status="BOOKED",
+        notes=booking_request.notes,
+        price_at_booking=(
+            booking_request.requested_price
+            if booking_request.requested_price is not None
+            else appointment_type.base_price
+        ),
+        appointment_type_name_at_booking=(
+            booking_request.requested_appointment_type_name or appointment_type.name
+        ),
+    )
+    db.session.add(appointment)
+    db.session.flush()
+    snapshot_checklist_for_appointment(appointment)
+
+    booking_request.status = "APPROVED"
+    booking_request.appointment_type_id = appointment_type.id
+    booking_request.customer_id = customer.id
+    booking_request.vehicle_id = None if vehicle is None else vehicle.id
+    booking_request.appointment_id = appointment.id
+    booking_request.reviewed_by_employee_id = reviewer.id
+    booking_request.reviewed_at = datetime.now(UTC)
+    if data.get("staff_notes") is not None:
+        booking_request.staff_notes = data["staff_notes"]
+
+    db.session.commit()
+    emit_event(
+        BOOKING_REQUEST_APPROVED,
+        garage=booking_request.garage,
+        booking_request=booking_request,
+        appointment=appointment,
+    )
+    return booking_request
+
+
+def _resolve_appointment_slot(booking_request, data, appointment_type):
+    start_time = data.get("start_time")
+    if start_time is None and booking_request.preferred_time is not None:
+        start_time = local_slot_as_utc(
+            booking_request.garage, booking_request.preferred_date, booking_request.preferred_time
+        )
+    if start_time is None:
+        abort(
+            422,
+            message="start_time is required - the request has no preferred time to fall back on.",
+        )
+    end_time = data.get("end_time")
+    if end_time is None:
+        duration_minutes = (
+            booking_request.requested_duration_minutes
+            if booking_request.requested_duration_minutes is not None
+            else appointment_type.default_duration_minutes
+        )
+        if duration_minutes is None:
+            abort(
+                422, message="end_time is required - this appointment type has no default duration."
+            )
+        end_time = start_time + timedelta(minutes=duration_minutes)
+    if start_time >= end_time:
+        abort(422, message="start_time must be before end_time.")
+    return start_time, end_time
+
+
+def _assert_no_conflict(employee_id, start_time, end_time):
+    clash = Appointment.query.filter(
+        Appointment.employee_id == employee_id,
+        Appointment.status != "CANCELLED",
+        Appointment.start_time < end_time,
+        Appointment.end_time > start_time,
+    ).first()
+    if clash is not None:
+        abort(409, message="The selected employee already has an appointment during this time.")
+
+
+def _assert_capacity_available(garage, booking_request, start_time, end_time):
+    duration_min = int((end_time - start_time).total_seconds() // 60)
+    used, capacity = slot_capacity_usage(
+        garage,
+        start_time.date(),
+        start_time,
+        duration_min,
+        exclude_request_id=booking_request.id,
+    )
+    if used >= capacity:
+        abort(
+            409,
+            message="This time is no longer available - capacity has already been taken by another appointment or request.",
+        )
 
 
 def is_request_stale(booking_request: BookingRequest, now: datetime | None = None) -> bool:
