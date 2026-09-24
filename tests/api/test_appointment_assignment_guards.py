@@ -163,6 +163,16 @@ def test_appointment_snapshots_the_types_price_at_creation(
     appt_id = resp.get_json()["id"]
     refetched = authenticated_user.client.get(f"/api/appointments/{appt_id}").get_json()
     assert refetched["price_at_booking"] == "149.99"
+    assert refetched["appointment_type_name_at_booking"] == "MOT"
+
+    appt_type.name = "Annual inspection"
+    session.commit()
+    assert (
+        authenticated_user.client.get(f"/api/appointments/{appt_id}").get_json()[
+            "appointment_type_name_at_booking"
+        ]
+        == "MOT"
+    )
 
 
 def test_booking_an_archived_vehicle_reactivates_it(

@@ -301,6 +301,7 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status, a
             appt_type.default_duration_minutes if appt_type is not None else None
         ),
         requested_price=appt_type.base_price if appt_type is not None else None,
+        requested_appointment_type_name=appt_type.name if appt_type is not None else None,
         preferred_date=data["preferred_date"],
         preferred_time=preferred_time,
         preferred_employee_note=data.get("preferred_employee_note"),
@@ -364,7 +365,10 @@ def _recovery_response(booking_request, payment, session=None):
         "remaining_balance": remaining_balance,
         "hold_expires_at": booking_request.payment_hold_expires_at,
         "appointment_type_id": booking_request.appointment_type_id,
-        "appointment_type_name": appointment_type.name if appointment_type else None,
+        "appointment_type_name": (
+            booking_request.requested_appointment_type_name
+            or (appointment_type.name if appointment_type else None)
+        ),
         "preferred_date": booking_request.preferred_date,
         "preferred_time": booking_request.preferred_time,
         "requested_duration_minutes": booking_request.requested_duration_minutes,

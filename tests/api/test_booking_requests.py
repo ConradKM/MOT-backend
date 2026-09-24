@@ -233,6 +233,30 @@ def test_approve_preserves_the_request_price_when_the_service_was_edited(
     assert str(appointment.price_at_booking) == "54.85"
 
 
+def test_approve_preserves_the_request_service_name_when_the_type_is_renamed(
+    authenticated_user, session, garage, booking_request
+):
+    appt_type = _make_type(session, garage, base_price="54.85")
+    booking_request.appointment_type_id = appt_type.id
+    booking_request.requested_appointment_type_name = "MOT"
+    session.commit()
+
+    appt_type.name = "Annual inspection"
+    session.commit()
+    response = authenticated_user.client.post(
+        f"/api/booking-requests/{booking_request.id}/approve",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "start_time": START,
+            "end_time": "2026-11-03T09:45:00+00:00",
+        },
+    )
+
+    assert response.status_code == 200
+    appointment = db.session.get(Appointment, response.get_json()["appointment_id"])
+    assert appointment.appointment_type_name_at_booking == "MOT"
+
+
 def test_approve_creates_the_appointments_checklist_instance(
     authenticated_user, session, garage, booking_request
 ):

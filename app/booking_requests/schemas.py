@@ -120,6 +120,7 @@ class BookingRequestSchema(Schema):
     # edited (or the type is deleted) afterwards. Null on requests submitted
     # before this column existed, or with no type chosen.
     requested_duration_minutes = fields.Int(dump_only=True, allow_none=True)
+    requested_appointment_type_name = fields.Str(dump_only=True, allow_none=True)
     # What the customer answered to this business's own configured questions.
     # Empty for a request from the conversational channel, which cannot ask
     # them - `answers_collected` is what distinguishes that from a business

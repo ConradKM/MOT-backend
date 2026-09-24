@@ -168,6 +168,10 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # (see service.py for the display fallback).
     requested_duration_minutes: Mapped[int | None] = mapped_column(Integer)
     requested_price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    # The service label the customer selected.  Keep it alongside the price
+    # and duration snapshots so a later catalogue rename does not rewrite a
+    # pending, approved, or recovered booking.
+    requested_appointment_type_name: Mapped[str | None] = mapped_column(String(100))
     preferred_date: Mapped[date] = mapped_column(Date, nullable=False)
     preferred_time: Mapped[time | None] = mapped_column(Time)
     preferred_employee_note: Mapped[str | None] = mapped_column(String(200))

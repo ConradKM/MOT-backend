@@ -311,6 +311,9 @@ class BookingRequestApprove(MethodView):
                 if booking_request.requested_price is not None
                 else appointment_type.base_price
             ),
+            appointment_type_name_at_booking=(
+                booking_request.requested_appointment_type_name or appointment_type.name
+            ),
         )
         db.session.add(appointment)
         db.session.flush()
