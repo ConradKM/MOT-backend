@@ -356,8 +356,11 @@ class AppointmentResource(MethodView):
         if "employee_id" in data:
             _get_owned_employee(data["employee_id"], garage_id)
 
+        replacement_appointment_type = None
         if "appointment_type_id" in data:
-            _get_owned_appointment_type(data["appointment_type_id"], garage_id)
+            replacement_appointment_type = _get_owned_appointment_type(
+                data["appointment_type_id"], garage_id
+            )
 
         effective_customer_id = data.get("customer_id", appointment.customer_id)
         if "customer_id" in data:
@@ -409,6 +412,15 @@ class AppointmentResource(MethodView):
 
         for field, value in data.items():
             setattr(appointment, field, value)
+
+        if replacement_appointment_type is not None:
+            # This is an explicit change to what the customer is booked for,
+            # not a later catalogue edit.  Carry the replacement service's
+            # immutable customer-facing values with it, otherwise the
+            # appointment would point at one type while displaying the old
+            # type's name and price.
+            appointment.price_at_booking = replacement_appointment_type.base_price
+            appointment.appointment_type_name_at_booking = replacement_appointment_type.name
 
         db.session.commit()
 
