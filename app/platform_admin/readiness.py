@@ -90,10 +90,16 @@ def _payments_checks(garage: Garage) -> list[dict]:
 
 
 def _communications_checks(garage: Garage) -> list[dict]:
+    from app.communications.provisioning.states import (
+        OPENAI_VOICE_NOT_STARTED,
+        OPENAI_VOICE_READY,
+    )
+
     from .communications import communications_detail
 
     detail = communications_detail(garage)
     voice = detail["voice"]
+    openai_voice_status = detail["openai_voice"]["status"]
     return [
         _check(
             "twilio_subaccount",
@@ -105,7 +111,13 @@ def _communications_checks(garage: Garage) -> list[dict]:
         _check(
             "openai_voice",
             "OpenAI voice",
-            voice["status"] in ("ONLINE",) or bool(voice.get("webhooks_configured")),
+            # Deliberately separate from voice_routing above - OpenAI Voice
+            # is its own optional lifecycle stage (a business can be fully
+            # online on plain Twilio voice with it never enabled), so
+            # NOT_STARTED is a legitimate resting state, not a blocker.
+            # Only a genuinely stuck attempt (ACTION_REQUIRED/FAILED) - or
+            # an in-progress one - counts against readiness.
+            openai_voice_status in (OPENAI_VOICE_NOT_STARTED, OPENAI_VOICE_READY),
         ),
         _check(
             "communications_enabled",
