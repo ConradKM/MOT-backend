@@ -20,6 +20,8 @@ handlers themselves.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
+from hashlib import sha256
+from secrets import token_urlsafe
 
 from sqlalchemy.exc import IntegrityError
 
@@ -44,6 +46,7 @@ from app.models.conversation.callback_request import CallbackRequest
 from app.models.customer import Customer
 from app.models.garage import Garage
 from app.models.vehicle import Vehicle
+from app.payments.service import create_deposit_hold, payment_hold_deadline
 from app.public_booking import availability
 
 # Re-exported for callers that only need "is this a real, currently
@@ -284,6 +287,121 @@ def create_booking_request(
                 return existing, None
         raise
 
+    emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
+    return booking_request, None
+
+
+def create_deposit_booking_request(
+    garage,
+    *,
+    customer: Customer | None = None,
+    first_name: str,
+    last_name: str,
+    phone_e164: str,
+    email: str | None,
+    vehicle_registration: str | None,
+    vehicle_make: str | None = None,
+    vehicle_model: str | None = None,
+    vehicle_year: int | None = None,
+    vehicle_mileage: int | None = None,
+    appointment_type: GarageAppointmentType,
+    preferred_date: date,
+    preferred_time: time | None,
+    notes: str | None = None,
+    now: datetime | None = None,
+    voice_tool_call_id: str | None = None,
+    voice_call_id: str | None = None,
+) -> tuple[BookingRequest | None, str | None]:
+    """The voice-channel counterpart of :func:`create_booking_request` for a
+    deposit-required appointment type: creates an AWAITING_PAYMENT hold plus
+    a provider payment session (app/payments/service.py::create_deposit_hold)
+    instead of an immediately-PENDING request - the exact same lifecycle the
+    public booking form's deposit step uses
+    (app/public_booking/routes.py::DepositIntentCreate), never a second
+    payment mechanism.
+
+    On success, the plaintext recovery token (needed once, to build the SMS
+    payment link - never persisted itself, only its hash) is attached as
+    ``booking_request.deposit_recovery_token`` for the caller to read
+    immediately; nothing else in the codebase relies on that attribute
+    existing. Raises whatever :func:`create_deposit_hold` raises
+    (``PaymentUnavailableError``, ``DepositConfigError``,
+    ``PaymentProviderError``) - the caller is responsible for deciding how to
+    tell the customer, exactly like the public booking route does.
+    """
+    if voice_tool_call_id:
+        existing = BookingRequest.query.filter_by(voice_tool_call_id=voice_tool_call_id).first()
+        if existing is not None:
+            return existing, None
+    if voice_call_id:
+        existing = BookingRequest.query.filter_by(voice_call_id=voice_call_id).first()
+        if existing is not None:
+            return existing, None
+
+    db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
+
+    if preferred_time is not None:
+        reason = revalidate_slot(
+            garage, preferred_date, preferred_time, appointment_type=appointment_type, now=now
+        )
+        if reason is not None:
+            return None, reason
+
+    booking_request = BookingRequest(
+        garage_id=garage.id,
+        source=BOOKING_REQUEST_SOURCE_CONVERSATION,
+        status="AWAITING_PAYMENT",
+        booking_reference=unique_booking_reference(db.session),
+        voice_tool_call_id=voice_tool_call_id,
+        voice_call_id=voice_call_id,
+        customer_id=customer.id if customer else None,
+        customer_first_name=first_name,
+        customer_last_name=last_name,
+        customer_email=email,
+        customer_phone=phone_e164,
+        vehicle_registration=vehicle_registration,
+        vehicle_make=vehicle_make,
+        vehicle_model=vehicle_model,
+        vehicle_year=vehicle_year,
+        vehicle_mileage=vehicle_mileage,
+        appointment_type_id=appointment_type.id,
+        requested_duration_minutes=appointment_type.default_duration_minutes,
+        requested_price=appointment_type.base_price,
+        requested_appointment_type_name=appointment_type.name,
+        preferred_date=preferred_date,
+        preferred_time=preferred_time,
+        notes=notes,
+    )
+    booking_request.payment_hold_expires_at = payment_hold_deadline(now)
+    recovery_token = token_urlsafe(32)
+    booking_request.payment_recovery_token_hash = sha256(recovery_token.encode()).hexdigest()
+
+    db.session.add(booking_request)
+    db.session.flush()
+
+    try:
+        create_deposit_hold(
+            garage=garage, appointment_type=appointment_type, booking_request=booking_request
+        )
+    except Exception:
+        db.session.rollback()
+        raise
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        if voice_tool_call_id:
+            existing = BookingRequest.query.filter_by(voice_tool_call_id=voice_tool_call_id).first()
+            if existing is not None:
+                return existing, None
+        if voice_call_id:
+            existing = BookingRequest.query.filter_by(voice_call_id=voice_call_id).first()
+            if existing is not None:
+                return existing, None
+        raise
+
+    booking_request.deposit_recovery_token = recovery_token
     emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
     return booking_request, None
 
