@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import date as date_cls
 from datetime import time as time_cls
 
+from app.booking_flow import vehicle_details
 from app.conversation import actions
 from app.extensions import db
 from app.models.ai_voice_faq import GarageVoiceFAQ
@@ -107,8 +108,10 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "name": "get_appointment_types",
         "description": (
-            "Authoritative CoMaz source for services, prices, and durations. You MUST call it "
-            "before naming, describing, pricing, or booking a service."
+            "Authoritative CoMaz source for services, prices, durations, and which vehicle "
+            "details (registration, make, model) each service asks for - 'required', "
+            "'optional' or 'not_asked'. You MUST call it before naming, describing, pricing, "
+            "or booking a service."
         ),
         "parameters": {"type": "object", "properties": {}, "required": []},
     },
@@ -143,8 +146,10 @@ TOOL_SCHEMAS: list[dict] = [
             "Submit a CoMaz booking request for staff review - never an instant confirmation. "
             "Only call after get_appointment_types and get_available_slots have identified the "
             "selected service and real slot, the caller has explicitly confirmed all details, "
-            "and you have their name, contact number, and vehicle registration. The server "
-            "rechecks live availability; report only the returned result and status."
+            "and you have their name, contact number, and every vehicle detail that service "
+            "marks 'required' in get_appointment_types (ask for 'optional' ones, never for "
+            "'not_asked' ones). The server rechecks live availability; report only the "
+            "returned result and status."
         ),
         "parameters": {
             "type": "object",
@@ -162,6 +167,8 @@ TOOL_SCHEMAS: list[dict] = [
                     ),
                 },
                 "vehicle_registration": {"type": "string"},
+                "vehicle_make": {"type": "string"},
+                "vehicle_model": {"type": "string"},
                 "notes": {"type": "string", "description": "Anything else worth telling staff."},
             },
             "required": [
@@ -170,7 +177,6 @@ TOOL_SCHEMAS: list[dict] = [
                 "time",
                 "first_name",
                 "last_name",
-                "vehicle_registration",
             ],
         },
     },
@@ -292,6 +298,13 @@ def _parse_time(value: str) -> time_cls | None:
         return None
 
 
+def _clean(value, max_length: int, *, upper: bool = False) -> str | None:
+    text = " ".join(str(value or "").split())[:max_length]
+    if upper:
+        text = text.upper()
+    return text or None
+
+
 def _find_appointment_type(garage, appointment_type_id: str):
     for t in actions.get_appointment_types(garage):
         if str(t.id) == str(appointment_type_id):
@@ -329,6 +342,7 @@ def _tool_get_appointment_types(garage, **_args) -> dict:
                 "description": t.description,
                 "base_price": str(t.base_price) if t.base_price is not None else None,
                 "default_duration_minutes": t.default_duration_minutes,
+                "vehicle_details": vehicle_details.requirements_for(garage.id, t.id),
             }
             for t in types
         ],
@@ -390,7 +404,9 @@ def _tool_create_booking(
     time: str,
     first_name: str,
     last_name: str,
-    vehicle_registration: str,
+    vehicle_registration: str | None = None,
+    vehicle_make: str | None = None,
+    vehicle_model: str | None = None,
     phone: str | None = None,
     notes: str | None = None,
     voice_tool_call_id: str | None = None,
@@ -405,6 +421,30 @@ def _tool_create_booking(
     slot_time = _parse_time(time)
     if day is None or slot_time is None:
         return {"ok": False, "error": "date must be YYYY-MM-DD and time must be HH:MM."}
+
+    # Required exactly when this business's own booking form requires it for
+    # this service - never more (a business that doesn't book vehicles is
+    # never made to collect a registration). Details the caller volunteered
+    # are kept; make/model only against a registration, as on the public form
+    # (app/booking_flow/answers.py::tracked_item_kwargs).
+    requirements = vehicle_details.requirements_for(garage.id, appointment_type.id)
+    vehicle = {
+        "registration": _clean(vehicle_registration, 20, upper=True),
+        "make": _clean(vehicle_make, 100),
+        "model": _clean(vehicle_model, 100),
+    }
+    missing = [
+        key
+        for key, need in requirements.items()
+        if need == vehicle_details.REQUIRED and not vehicle[key]
+    ]
+    if missing:
+        return {
+            "ok": False,
+            "error": f"Ask the caller for their vehicle {' and '.join(missing)} first.",
+        }
+    if not vehicle["registration"]:
+        vehicle["make"] = vehicle["model"] = None
 
     try:
         contact_phone = normalize_uk_phone((phone or caller_phone_e164 or "").strip())
@@ -422,7 +462,9 @@ def _tool_create_booking(
         last_name=last_name,
         phone_e164=contact_phone,
         email=None,
-        vehicle_registration=vehicle_registration,
+        vehicle_registration=vehicle["registration"],
+        vehicle_make=vehicle["make"],
+        vehicle_model=vehicle["model"],
         appointment_type=appointment_type,
         preferred_date=day,
         preferred_time=slot_time,

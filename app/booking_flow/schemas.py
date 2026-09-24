@@ -109,3 +109,14 @@ class BookingFlowQueryArgsSchema(Schema):
 
 class ApplyPresetSchema(Schema):
     preset = fields.Str(required=True)
+
+
+class VehicleDetailFieldSchema(Schema):
+    enabled = fields.Bool(required=True)
+    required = fields.Bool(load_default=False)
+
+
+class VehicleDetailsUpdateSchema(Schema):
+    registration = fields.Nested(VehicleDetailFieldSchema)
+    make = fields.Nested(VehicleDetailFieldSchema)
+    model = fields.Nested(VehicleDetailFieldSchema)
