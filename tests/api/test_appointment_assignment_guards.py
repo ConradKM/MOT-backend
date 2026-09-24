@@ -175,6 +175,44 @@ def test_appointment_snapshots_the_types_price_at_creation(
     )
 
 
+def test_changing_an_appointments_service_refreshes_its_service_snapshots(
+    authenticated_user, session, garage, customer
+):
+    original_type = _appt_type(session, garage, base_price="54.85")
+    replacement_type = GarageAppointmentType(
+        garage_id=garage.id,
+        name="Full service",
+        status="ACTIVE",
+        base_price="149.99",
+    )
+    session.add(replacement_type)
+    session.commit()
+
+    appointment = authenticated_user.client.post(
+        "/api/appointments/",
+        json={
+            "employee_id": str(authenticated_user.user.id),
+            "customer_id": str(customer.id),
+            "appointment_type_id": str(original_type.id),
+            "start_time": START.isoformat(),
+            "end_time": END.isoformat(),
+        },
+    ).get_json()
+    assert appointment["appointment_type_name_at_booking"] == "MOT"
+    assert appointment["price_at_booking"] == "54.85"
+
+    response = authenticated_user.client.patch(
+        f"/api/appointments/{appointment['id']}",
+        json={"appointment_type_id": str(replacement_type.id)},
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["appointment_type_id"] == str(replacement_type.id)
+    assert body["appointment_type_name_at_booking"] == "Full service"
+    assert body["price_at_booking"] == "149.99"
+
+
 def test_booking_an_archived_vehicle_reactivates_it(
     authenticated_user, session, garage, customer, vehicle
 ):
