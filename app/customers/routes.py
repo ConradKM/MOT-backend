@@ -81,6 +81,7 @@ class CustomerList(MethodView):
             last_name=data["last_name"],
             email=data.get("email"),
             phone=data.get("phone"),
+            notes=data.get("notes"),
         )
 
         db.session.add(customer)

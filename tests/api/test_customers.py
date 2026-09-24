@@ -23,6 +23,20 @@ def test_create_customer(authenticated_user):
     assert "updated_at" in body
 
 
+def test_create_customer_persists_internal_notes(authenticated_user):
+    resp = authenticated_user.client.post(
+        "/api/customers/",
+        json={
+            "first_name": "Alice",
+            "last_name": "Smith",
+            "notes": "Prefers a call before any work starts.",
+        },
+    )
+
+    assert resp.status_code == 201
+    assert resp.get_json()["notes"] == "Prefers a call before any work starts."
+
+
 def test_list_customers(authenticated_user, customer):
     resp = authenticated_user.client.get("/api/customers/")
 
@@ -95,6 +109,23 @@ def test_update_customer(authenticated_user, customer):
 
     assert resp.status_code == 200
     assert resp.get_json()["first_name"] == "Updated"
+
+
+def test_update_customer_notes_and_clear_them(authenticated_user, customer, session):
+    note = "Keep keys at reception."
+    updated = authenticated_user.client.patch(f"/api/customers/{customer.id}", json={"notes": note})
+
+    assert updated.status_code == 200
+    assert updated.get_json()["notes"] == note
+    session.refresh(customer)
+    assert customer.notes == note
+
+    cleared = authenticated_user.client.patch(f"/api/customers/{customer.id}", json={"notes": None})
+
+    assert cleared.status_code == 200
+    assert cleared.get_json()["notes"] is None
+    session.refresh(customer)
+    assert customer.notes is None
 
 
 def test_delete_customer_with_no_history_is_hard_deleted(authenticated_user, customer):
@@ -181,6 +212,16 @@ def test_create_customer_invalid_data_types(authenticated_user):
     )
 
     assert resp.status_code == 422
+
+
+def test_customer_notes_have_a_reasonable_length_limit(authenticated_user):
+    resp = authenticated_user.client.post(
+        "/api/customers/",
+        json={"first_name": "A", "last_name": "B", "notes": "x" * 5001},
+    )
+
+    assert resp.status_code == 422
+    assert "notes" in resp.get_json()["errors"]["json"]
 
 
 def test_retrieve_customer_nonexistent_id_returns_404(authenticated_user):
@@ -270,6 +311,16 @@ def test_user_a_cannot_modify_garage_b_customer(authenticated_user, second_custo
     assert resp.status_code == 404
     session.refresh(second_customer)
     assert second_customer.first_name != "Hacked"
+
+
+def test_user_a_cannot_update_garage_b_customer_notes(authenticated_user, second_customer, session):
+    resp = authenticated_user.client.patch(
+        f"/api/customers/{second_customer.id}", json={"notes": "Private note"}
+    )
+
+    assert resp.status_code == 404
+    session.refresh(second_customer)
+    assert second_customer.notes is None
 
 
 def test_user_a_cannot_delete_garage_b_customer(authenticated_user, second_customer, session):

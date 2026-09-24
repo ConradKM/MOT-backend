@@ -73,6 +73,7 @@ def test_account_returns_the_signed_in_customers_profile(customer_client, custom
     body = resp.get_json()
     assert body["customer"]["id"] == str(customer.id)
     assert body["customer"]["garage_name"] == garage.name
+    assert "notes" not in body["customer"]
 
 
 def test_account_lists_vehicles_with_mot_history(customer_client, vehicle, mot_record):

@@ -10,6 +10,9 @@ class CustomerSchema(Schema):
 
     email = fields.Email(allow_none=True)
     phone = fields.Str(allow_none=True, validate=validate.Length(max=40))
+    # Persistent internal notes for authorised business staff. Customer-facing
+    # APIs use separate schemas and must never expose this field.
+    notes = fields.Str(allow_none=True, validate=validate.Length(max=5000))
 
     # Archived (soft-deleted) rather than hard-deleted once they have
     # vehicles/appointments - see app/customers/routes.py::CustomerResource.delete.
@@ -28,6 +31,7 @@ class CustomerUpdateSchema(Schema):
     last_name = fields.Str(validate=validate.Length(min=1, max=100))
     email = fields.Email(allow_none=True)
     phone = fields.Str(allow_none=True, validate=validate.Length(max=40))
+    notes = fields.Str(allow_none=True, validate=validate.Length(max=5000))
 
 
 class CustomerQueryArgsSchema(Schema):
