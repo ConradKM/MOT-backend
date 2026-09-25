@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.extensions import db
 from app.models.communications.voice_ivr_settings import GarageVoiceIvrSettings
 
+from .. import telephony
 from . import actions
 from .actions import IvrValidationError
 
@@ -30,29 +31,41 @@ def active_menu(garage) -> GarageVoiceIvrSettings | None:
 
 
 def platform_transfer_number(garage) -> str | None:
+    """The platform-configured human destination a transfer option without
+    its own number uses: the primary destination (a phone number or SIP
+    address), else the legacy escalation/fallback number."""
     comm = getattr(garage, "communication_settings", None)
     if comm is None:
         return None
+    if comm.human_primary_type and comm.human_primary_destination:
+        return str(comm.human_primary_destination)
     return comm.voice_escalation_number or comm.voice_fallback_number or None
 
 
 def transfer_target(
     garage, settings: GarageVoiceIvrSettings | None, option: dict | None = None
 ) -> str | None:
-    """Where a transfer goes: the option's own number, then the menu's
-    fallback number, then the menu's first transfer option's number (the
-    business's own "speak to us" line), then the platform-set escalation
-    number. Only ever business/platform configuration - never caller or AI
-    input."""
-    if option and option.get("target"):
-        return str(option["target"])
-    if settings is not None:
-        if settings.fallback_target:
-            return settings.fallback_target
-        for candidate in settings.options or []:
-            if candidate.get("action") == actions.HUMAN_TRANSFER and candidate.get("target"):
-                return str(candidate["target"])
-    return platform_transfer_number(garage)
+    """The first destination a transfer rings - the head of
+    telephony.human_destinations, which also owns the full ordered chain,
+    loop prevention and the attempt limit."""
+    chain = telephony.human_destinations(garage, settings, option)
+    return chain[0].value if chain else None
+
+
+def _reject_comaz_numbers(options: list[dict], fallback_target: str | None) -> None:
+    """An owner's transfer number may never be one that rings CoMaz itself -
+    their own forwarded public number, a CoMaz number, or another business's
+    - or the caller would loop straight back into a phone menu."""
+    routed = telephony.comaz_routed_numbers()
+    message = (
+        "That number rings this phone system itself, so callers would loop back "
+        "to the menu. Use a phone the team actually answers."
+    )
+    for index, option in enumerate(options):
+        if option.get("target") and option["target"] in routed:
+            raise IvrValidationError(message, field=f"options.{index}.target")
+    if fallback_target and fallback_target in routed:
+        raise IvrValidationError(message, field="fallback_target")
 
 
 def option_for_digit(settings: GarageVoiceIvrSettings, digit: str) -> dict | None:
@@ -111,6 +124,7 @@ def update_settings(garage, data: dict) -> GarageVoiceIvrSettings:
         if raw_fallback_target
         else None
     )
+    _reject_comaz_numbers(options, fallback_target)
 
     max_attempts = data.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
     if not isinstance(max_attempts, int) or not (

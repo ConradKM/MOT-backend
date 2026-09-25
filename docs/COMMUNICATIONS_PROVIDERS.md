@@ -150,9 +150,10 @@ the runtime capability contract does not claim recording support today.
 Browser calling requires a WebRTC gateway, browser SDK/transport adapter, secure
 short-lived credentials, microphone/media handling, call-state events, mute,
 hang-up and DTMF. Until implemented, `browser_calling` stays false. Provisioning
-and porting DIDs, webhook/event signing, recording/transcription, and carrier
-configuration are separate work. This change buys/configures none of them and
-adds no SIP secrets or media implementation.
+DIDs, webhook/event signing, recording/transcription, and carrier configuration
+are separate work (see docs/EXISTING_NUMBER_VOICE_ONBOARDING.md for how an
+existing number connects - CoMaz never ports a number). This change
+buys/configures none of them and adds no SIP secrets or media implementation.
 
 ## Regression coverage
 

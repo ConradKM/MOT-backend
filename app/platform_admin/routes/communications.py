@@ -43,6 +43,7 @@ from app.communications.provisioning.service import (
     action_return_voice_number_to_parent,
     action_set_automation_enabled,
     action_set_communications_enabled,
+    action_set_telephony,
     action_set_voice_routing,
     action_set_whatsapp_number,
     action_start_embedded_signup,
@@ -83,6 +84,7 @@ from app.platform_admin.schemas import (
     ExistingVoiceNumbersSchema,
     SenderRegistrationSchema,
     SubaccountAttachSchema,
+    TelephonyUpdateSchema,
     TestCallResultSchema,
     TestCallSchema,
     TestMessageResultSchema,
@@ -477,17 +479,51 @@ class VoiceRouting(MethodView):
     def put(self, data, garage_id):
         """Set the human escalation number and the outage fallback number."""
         garage = _require_tenant(garage_id)
-        action_set_voice_routing(
-            garage,
-            escalation_number=data.get("escalation_number"),
-            fallback_number=data.get("fallback_number"),
-        )
+        try:
+            action_set_voice_routing(
+                garage,
+                escalation_number=data.get("escalation_number"),
+                fallback_number=data.get("fallback_number"),
+            )
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc))
         _audit(
             garage,
             ACTION_COMMS_VOICE_CONFIGURE,
             f"Set voice escalation/fallback for {garage.name}",
             escalation_number=data.get("escalation_number"),
             fallback_number=data.get("fallback_number"),
+        )
+        return communications_detail(garage)
+
+
+@platform_communications_blp.route("/tenants/<uuid:garage_id>/communications/voice/telephony")
+class VoiceTelephony(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.arguments(TelephonyUpdateSchema)
+    @platform_communications_blp.response(200, CommunicationsDetailSchema)
+    def put(self, data, garage_id):
+        """Set how this business's callers reach CoMaz - SIP / BYOC
+        (recommended for an existing number), call forwarding (the fallback)
+        or a new CoMaz number - and its ordered human handoff destinations.
+
+        Configuration only: nothing is changed at Twilio or the business's
+        carrier, so this can be prepared ahead of the carrier cutover and
+        set back the same way. CoMaz never ports numbers, so there is no
+        porting mode."""
+        garage = _require_tenant(garage_id)
+        try:
+            action_set_telephony(garage, data)
+        except ProvisioningActionError as exc:
+            if exc.code:
+                abort(422, message=str(exc), errors={"field": exc.code})
+            abort(422, message=str(exc))
+        _audit(
+            garage,
+            ACTION_COMMS_VOICE_CONFIGURE,
+            f"Set telephony ({data.get('telephony_mode')}) for {garage.name}",
+            **{key: data.get(key) for key in TelephonyUpdateSchema().fields},
         )
         return communications_detail(garage)
 

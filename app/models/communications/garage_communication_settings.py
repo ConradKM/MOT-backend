@@ -21,7 +21,7 @@ already draws around business identity fields. See
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -49,6 +49,12 @@ class GarageCommunicationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  #
         ),
         UniqueConstraint("voice_phone_number", name="uq_garage_communication_settings_voice"),
         UniqueConstraint("whatsapp_sender", name="uq_garage_communication_settings_whatsapp"),
+        # A business's existing public number is a tenant key for SIP/BYOC
+        # routing (app/communications/tenant_resolution.py), so two
+        # businesses can never claim the same one.
+        UniqueConstraint(
+            "public_business_number", name="uq_garage_communication_settings_public_number"
+        ),
     )
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
@@ -92,5 +98,33 @@ class GarageCommunicationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  #
     # unreachable or errors - the last line of defence, so an outage rings a
     # real phone instead of dropping the call. E.164, NULL = none.
     voice_fallback_number: Mapped[str | None] = mapped_column(String(20))
+
+    # How callers reach CoMaz for this business - see
+    # app/communications/telephony.py and docs/EXISTING_NUMBER_VOICE_ONBOARDING.md.
+    # SIP_BYOC / PSTN_FORWARD / NEW_COMAZ_NUMBER; NULL = set up before modes
+    # existed, which behaves exactly like NEW_COMAZ_NUMBER.
+    telephony_mode: Mapped[str | None] = mapped_column(String(20))
+    # The number the business's customers know, E.164. Separate from
+    # ``voice_phone_number`` (CoMaz's own ingress number): under PSTN_FORWARD
+    # this forwards *to* the ingress number, and under SIP_BYOC the carrier
+    # keeps it and delivers calls for it over SIP, so it is also the tenant
+    # key for those calls.
+    public_business_number: Mapped[str | None] = mapped_column(String(20))
+    # SIP_BYOC only. The BYOC Trunk ("BY...") used to send a PSTN human
+    # transfer back out through the business's own carrier, and the SIP
+    # Domain ("SD...") its carrier delivers inbound calls to - an inbound
+    # SIP call is only accepted for this business when it arrived on this
+    # domain. Neither is a secret.
+    byoc_trunk_sid: Mapped[str | None] = mapped_column(String(64))
+    byoc_sip_domain_sid: Mapped[str | None] = mapped_column(String(64))
+    # Where a caller who needs a person goes, in order. Type is SIP_URI (a
+    # PBX hunt group/extension - preferred for SIP_BYOC) or PSTN_NUMBER.
+    # NULL primary = the legacy escalation/fallback numbers above are used.
+    human_primary_type: Mapped[str | None] = mapped_column(String(20))
+    human_primary_destination: Mapped[str | None] = mapped_column(String(255))
+    human_secondary_type: Mapped[str | None] = mapped_column(String(20))
+    human_secondary_destination: Mapped[str | None] = mapped_column(String(255))
+    # Ring time per human destination before moving on. NULL = default.
+    human_transfer_timeout_seconds: Mapped[int | None] = mapped_column(Integer)
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="communication_settings")

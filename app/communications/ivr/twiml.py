@@ -14,6 +14,7 @@ never the caller's number or anything they said.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 from flask import current_app
@@ -21,15 +22,21 @@ from twilio.twiml.voice_response import Gather, VoiceResponse
 
 from app.ai_voice import sip_handoff
 
+from .. import telephony
 from . import actions, service
 
 logger = logging.getLogger(__name__)
 
 WEBHOOK_BASE = "/api/webhooks/twilio/voice/ivr"
 GATHER_TIMEOUT_SECONDS = 6
-TRANSFER_TIMEOUT_SECONDS = 25
+# Kept for callers that only need the default; the live value is per
+# business (telephony.transfer_timeout).
+TRANSFER_TIMEOUT_SECONDS = telephony.DEFAULT_TRANSFER_TIMEOUT_SECONDS
 # REPEAT_MENU presses are not failed attempts, but they must still end.
 MAX_REPEATS = 3
+# A callback request this recent, for this caller, already covers this call -
+# a failed transfer after the assistant logged one must not log a second.
+CALLBACK_DEDUP_WINDOW = timedelta(minutes=30)
 
 CLOSING_LINE = (
     "Sorry, we can't take your call right now. We've noted your number and "
@@ -158,9 +165,14 @@ def run_action(
     call_sid: str,
     caller: str,
     tried: set[str] | None = None,
+    human_index: int = 0,
 ) -> bool:
     """Append the TwiML for ``action`` to ``response``. False when the
-    action can't run right now (so the caller falls back instead)."""
+    action can't run right now (so the caller falls back instead).
+
+    ``human_index`` is which entry of the business's human destination
+    chain (telephony.human_destinations) a HUMAN_TRANSFER dials - 0 for the
+    first attempt, then whatever /ivr/transfer-complete says is next."""
     tried = tried or set()
     if action in actions.AI_ACTIONS:
         if not actions.ai_voice_available():
@@ -182,21 +194,81 @@ def run_action(
         return True
 
     if action == actions.HUMAN_TRANSFER:
-        target = service.transfer_target(garage, settings, option)
-        if not target:
-            logger.warning("VOICE_IVR_NO_TRANSFER_TARGET callSid=%s garage=%s", call_sid, garage.id)
-            return False
-        logger.info("VOICE_IVR_TRANSFER callSid=%s garage=%s", call_sid, garage.id)
-        _say(response, "Putting you through now.")
-        dial = response.dial(
-            action=_url("transfer-complete", tried=",".join(sorted(tried | {"HUMAN"}))),
-            method="POST",
-            timeout=TRANSFER_TIMEOUT_SECONDS,
+        return dial_human(
+            response,
+            garage,
+            settings,
+            option=option,
+            call_sid=call_sid,
+            caller=caller,
+            tried=tried,
+            index=human_index,
         )
-        dial.number(target)
-        return True
 
     return False
+
+
+def dial_human(
+    response: VoiceResponse,
+    garage,
+    settings,
+    *,
+    option: dict | None,
+    call_sid: str,
+    caller: str,
+    tried: set[str],
+    index: int,
+) -> bool:
+    """Ring entry ``index`` of the business's human destination chain.
+
+    The ``<Dial>`` reports back to /ivr/transfer-complete with the next
+    index, so an unanswered, busy or failed attempt moves on to the next
+    destination - and after the last one, to a logged callback. The chain is
+    finite (telephony.MAX_HUMAN_DESTINATIONS) and each index is tried once.
+    Nothing says the caller is connected until Twilio reports it."""
+    chain = telephony.human_destinations(garage, settings, option)
+    if index >= len(chain):
+        if index == 0:
+            logger.warning("VOICE_IVR_NO_TRANSFER_TARGET callSid=%s garage=%s", call_sid, garage.id)
+        return False
+    destination = chain[index]
+    logger.info(
+        "VOICE_IVR_TRANSFER callSid=%s garage=%s attempt=%d of=%d kind=%s source=%s",
+        call_sid,
+        garage.id,
+        index + 1,
+        len(chain),
+        destination.kind,
+        destination.source,
+    )
+    _say(
+        response,
+        "Putting you through now."
+        if index == 0
+        else "Sorry for the wait. Trying someone else now.",
+    )
+    dial = response.dial(
+        action=_url(
+            "transfer-complete",
+            tried=",".join(sorted(tried | {"HUMAN"})),
+            hi=index + 1,
+            od=(option or {}).get("digit"),
+        ),
+        method="POST",
+        timeout=telephony.transfer_timeout(garage),
+    )
+    if destination.kind == telephony.DEST_SIP_URI:
+        dial.sip(destination.value)
+    else:
+        byoc = telephony.pstn_byoc_trunk(garage)
+        if byoc:
+            dial.number(destination.value, byoc=byoc)
+        else:
+            dial.number(destination.value)
+    telephony.record_transfer_attempt(
+        garage, call_sid=call_sid, caller=caller, destination=destination, index=index
+    )
+    return True
 
 
 def fallback(
@@ -208,6 +280,7 @@ def fallback(
     reason: str,
     exclude: set[str] | None = None,
     tried: set[str] | None = None,
+    detail: str | None = None,
 ) -> VoiceResponse:
     """The configured safe fallback, then a person, then a logged callback -
     in that order, skipping anything already tried on this call."""
@@ -248,24 +321,54 @@ def fallback(
             )
             return response
 
-    return close_with_callback(garage, call_sid=call_sid, caller=caller, reason=reason)
+    return close_with_callback(
+        garage, call_sid=call_sid, caller=caller, reason=reason, detail=detail
+    )
 
 
-def close_with_callback(garage, *, call_sid: str, caller: str, reason: str) -> VoiceResponse:
+def _recent_open_callback(garage, caller: str):
+    from app.models.conversation.callback_request import STATUS_PENDING, CallbackRequest
+
+    since = datetime.now(UTC) - CALLBACK_DEDUP_WINDOW
+    return (
+        CallbackRequest.query.filter(
+            CallbackRequest.garage_id == garage.id,
+            CallbackRequest.phone_number == caller,
+            CallbackRequest.status == STATUS_PENDING,
+            CallbackRequest.created_at >= since,
+        )
+        .order_by(CallbackRequest.created_at.desc())
+        .first()
+    )
+
+
+def close_with_callback(
+    garage, *, call_sid: str, caller: str, reason: str, detail: str | None = None
+) -> VoiceResponse:
     """Nothing could take the call: leave the team a callback request and
-    tell the caller so, rather than dropping them."""
+    tell the caller so, rather than dropping them.
+
+    At most one open callback per caller per call: one logged in the last
+    few minutes already covers this. ``detail`` is the assistant's own
+    staff-facing summary of what the caller needed, when there is one."""
     logged = False
     if caller:
         try:
             from app.conversation import actions as conversation_actions
 
-            conversation_actions.create_callback_request(
-                garage,
-                customer=conversation_actions.find_customer(garage, caller),
-                phone_e164=caller,
-                reason="Phone menu: the caller couldn't be connected to the team or assistant.",
-            )
-            logged = True
+            if _recent_open_callback(garage, caller) is not None:
+                logged = True
+            else:
+                text = "Phone menu: the caller couldn't be connected to the team or assistant."
+                if detail:
+                    text = f"{text} They needed: {detail}"[:1000]
+                conversation_actions.create_callback_request(
+                    garage,
+                    customer=conversation_actions.find_customer(garage, caller),
+                    phone_e164=caller,
+                    reason=text,
+                )
+                logged = True
         except Exception:
             from app.extensions import db
 

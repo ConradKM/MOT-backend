@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from typing import cast as type_cast
 
 from sqlalchemy import Date, case, cast, func, select
 
@@ -222,7 +223,7 @@ def _checklist_stats(garage_id: uuid.UUID, since: datetime) -> dict:
             func.count().filter(per_checklist.c.item_count == per_checklist.c.checked_count),
         )
     ).one()
-    items, checked_items, fully_complete = totals
+    items, checked_items, fully_complete = type_cast("tuple[int, int, int]", totals)
 
     return {
         "started": started or 0,

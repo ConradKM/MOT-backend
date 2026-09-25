@@ -968,6 +968,32 @@ class PlatformReadinessSchema(Schema):
     background_jobs = fields.List(fields.Nested(PrerequisiteSchema), dump_only=True)
 
 
+class HumanChainEntrySchema(Schema):
+    kind = fields.Str(dump_only=True)
+    destination = fields.Str(dump_only=True)
+    source = fields.Str(dump_only=True)
+
+
+class TelephonySetupSchema(Schema):
+    """How callers reach CoMaz for this business and where a caller who
+    needs a person goes (app/communications/telephony.py::describe). No
+    secrets: SIDs and numbers only."""
+
+    telephony_mode = fields.Str(dump_only=True)
+    telephony_mode_configured = fields.Bool(dump_only=True)
+    public_business_number = fields.Str(dump_only=True, allow_none=True)
+    comaz_ingress_number = fields.Str(dump_only=True, allow_none=True)
+    byoc_sip_domain_sid = fields.Str(dump_only=True, allow_none=True)
+    byoc_trunk_sid = fields.Str(dump_only=True, allow_none=True)
+    human_primary_type = fields.Str(dump_only=True, allow_none=True)
+    human_primary_destination = fields.Str(dump_only=True, allow_none=True)
+    human_secondary_type = fields.Str(dump_only=True, allow_none=True)
+    human_secondary_destination = fields.Str(dump_only=True, allow_none=True)
+    human_transfer_timeout_seconds = fields.Int(dump_only=True)
+    phone_menu_enabled = fields.Bool(dump_only=True)
+    effective_human_chain = fields.List(fields.Nested(HumanChainEntrySchema), dump_only=True)
+
+
 class VoiceSetupSchema(Schema):
     status = fields.Str(dump_only=True, validate=validate.OneOf(VOICE_STATUSES))
     status_label = fields.Str(dump_only=True)
@@ -989,6 +1015,7 @@ class VoiceSetupSchema(Schema):
     last_test_at = fields.DateTime(dump_only=True, allow_none=True)
     online_at = fields.DateTime(dump_only=True, allow_none=True)
     last_error = fields.Nested(ProviderErrorSchema, dump_only=True, allow_none=True)
+    telephony = fields.Nested(TelephonySetupSchema, dump_only=True)
 
 
 class OpenAIVoiceSetupSchema(Schema):
@@ -1225,6 +1252,29 @@ class VoiceNumberReturnSchema(Schema):
 class VoiceRoutingSchema(Schema):
     escalation_number = fields.Str(load_default=None, allow_none=True, validate=_E164)
     fallback_number = fields.Str(load_default=None, allow_none=True, validate=_E164)
+
+
+class TelephonyUpdateSchema(Schema):
+    """The whole existing-number telephony configuration, replaced as one
+    document. Detailed rules (per-mode requirements, loop prevention, SIP
+    URI shape) are enforced by app/communications/telephony.py and reported
+    as a 422 naming the field."""
+
+    telephony_mode = fields.Str(
+        required=True, validate=validate.OneOf(("SIP_BYOC", "PSTN_FORWARD", "NEW_COMAZ_NUMBER"))
+    )
+    public_business_number = fields.Str(load_default=None, allow_none=True)
+    byoc_sip_domain_sid = fields.Str(load_default=None, allow_none=True)
+    byoc_trunk_sid = fields.Str(load_default=None, allow_none=True)
+    human_primary_type = fields.Str(
+        load_default=None, allow_none=True, validate=validate.OneOf(("SIP_URI", "PSTN_NUMBER"))
+    )
+    human_primary_destination = fields.Str(load_default=None, allow_none=True)
+    human_secondary_type = fields.Str(
+        load_default=None, allow_none=True, validate=validate.OneOf(("SIP_URI", "PSTN_NUMBER"))
+    )
+    human_secondary_destination = fields.Str(load_default=None, allow_none=True)
+    human_transfer_timeout_seconds = fields.Int(load_default=None, allow_none=True, strict=True)
 
 
 class TestCallSchema(Schema):

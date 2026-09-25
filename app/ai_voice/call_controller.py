@@ -73,6 +73,10 @@ class _CallState:
     # failure just ends the leg after marking why - the menu's Dial action
     # then transfers the caller. No SIP REFER needed.
     ivr_bridged: bool = False
+    # The assistant's staff-facing reason for a handoff, kept on the AI
+    # leg's row so the phone menu can attach it to a callback request if
+    # nobody answers the transfer.
+    handoff_reason: str | None = None
 
 
 def run_call_controller(
@@ -200,7 +204,7 @@ def _pump(connection, *, call_id: str, garage, caller_phone: str, state: _CallSt
                     "phone_menu" if state.ivr_bridged else bool(state.transfer_uri),
                 )
                 if state.ivr_bridged:
-                    _mark_ivr_leg(call_id, "handoff")
+                    _mark_ivr_leg(call_id, "handoff", detail=state.handoff_reason)
                     _safe_hangup(call_id)
                     telemetry.finish_call(call_id, end_reason=END_REASON_HANDOFF)
                     return _ENDED
@@ -247,6 +251,7 @@ def _handle_function_call(
             state=state.tool_state,
             tool_call_id=cache_key,
             call_id=call_id,
+            ivr_bridged=state.ivr_bridged,
         )
         if cache_key:
             state.completed_tool_outputs[cache_key] = output
@@ -273,6 +278,7 @@ def _handle_function_call(
         telemetry.record_booking_outcome(call_id, outcome=outcome)
     if name == "request_human_handoff" and tool_ok:
         telemetry.record_escalation(call_id)
+        state.handoff_reason = _handoff_reason(arguments)
     model_output, transfer_uri = _extract_transfer_uri(output)
     if transfer_uri:
         state.transfer_uri = transfer_uri
@@ -340,7 +346,16 @@ def _handle_ai_failure(*, call_id: str, garage, caller_phone: str) -> None:
         _safe_refer(call_id, transfer_uri)
 
 
-def _mark_ivr_leg(call_id: str, status: str) -> None:
+def _handoff_reason(arguments_json: str) -> str | None:
+    try:
+        reason = json.loads(arguments_json or "{}").get("reason")
+    except (ValueError, TypeError, AttributeError):
+        return None
+    text = str(reason or "").strip()[:500]
+    return text or None
+
+
+def _mark_ivr_leg(call_id: str, status: str, *, detail: str | None = None) -> None:
     """Record why this AI leg is ending on its CommunicationLog row, which
     the phone menu's /ivr/ai-complete step reads to decide between hanging
     up and transferring the caller. Must commit before the hangup below."""
@@ -351,6 +366,8 @@ def _mark_ivr_leg(call_id: str, status: str) -> None:
         leg = CommunicationLog.query.filter_by(external_id=call_id).first()
         if leg is not None:
             leg.status = status
+            if detail:
+                leg.body = detail
             db.session.commit()
     except Exception:
         db.session.rollback()
