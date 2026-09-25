@@ -77,6 +77,16 @@ Platform Admin action · **[OWNER]** the business owner does this ·
   manually and approval requires an explicit active employee assignment;
   tenant auto-accept is not enabled.
 
+## 6a. Customer records
+- [ ] **[OWNER/OPERATOR]** Show TOD staff the Customers area before go-live:
+  vehicle registrations are stored against each vehicle (not duplicated on
+  the customer), and customer search accepts a registration with or without
+  its display spaces.
+- [ ] **[OWNER/OPERATOR]** Confirm staff understand that Customer Notes are
+  internal, persistent plain-text notes for authorised business staff only.
+  They are not included in public booking or customer-portal responses;
+  do not use them for information a customer should receive.
+
 ## 7. Payments (Stripe Connect) - only if TOD wants deposits
 - [ ] **[OPERATOR]** Start Stripe Connect onboarding from the business's
   Payments settings, send the owner the link.
