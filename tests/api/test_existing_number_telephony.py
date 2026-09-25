@@ -919,7 +919,7 @@ def test_admin_rejects_invalid_telephony(platform_client, garage, comms, payload
     resp = _put(platform_client, garage, **payload)
     assert resp.status_code == 422, resp.get_json()
     if field:
-        assert resp.get_json()["errors"]["field"] == field
+        assert field in resp.get_json()["errors"]["json"]
 
 
 def test_admin_rejects_a_public_number_another_business_owns(
@@ -947,7 +947,7 @@ def test_admin_rejects_another_tenants_number_as_a_destination(
         human_primary_destination=INGRESS_B,
     )
     assert resp.status_code == 422
-    assert resp.get_json()["errors"]["field"] == "human_primary_destination"
+    assert "human_primary_destination" in resp.get_json()["errors"]["json"]
 
 
 def test_forward_mode_needs_a_comaz_ingress_first(platform_client, session, garage):
@@ -962,7 +962,7 @@ def test_forward_mode_needs_a_comaz_ingress_first(platform_client, session, gara
         human_primary_destination=MOBILE_A,
     )
     assert resp.status_code == 422
-    assert resp.get_json()["errors"]["field"] == "telephony_mode"
+    assert "telephony_mode" in resp.get_json()["errors"]["json"]
 
 
 def test_support_admins_cannot_change_telephony(support_client, garage, comms):

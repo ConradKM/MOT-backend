@@ -486,7 +486,7 @@ class VoiceRouting(MethodView):
                 fallback_number=data.get("fallback_number"),
             )
         except ProvisioningActionError as exc:
-            abort(422, message=str(exc))
+            abort(422, message=str(exc), errors={"json": {exc.code or "_schema": [str(exc)]}})
         _audit(
             garage,
             ACTION_COMMS_VOICE_CONFIGURE,
@@ -516,9 +516,7 @@ class VoiceTelephony(MethodView):
         try:
             action_set_telephony(garage, data)
         except ProvisioningActionError as exc:
-            if exc.code:
-                abort(422, message=str(exc), errors={"field": exc.code})
-            abort(422, message=str(exc))
+            abort(422, message=str(exc), errors={"json": {exc.code or "_schema": [str(exc)]}})
         _audit(
             garage,
             ACTION_COMMS_VOICE_CONFIGURE,

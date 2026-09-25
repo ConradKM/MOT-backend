@@ -466,6 +466,7 @@ def test_voice_routing_rejects_a_number_that_rings_this_business_itself(
         json={"escalation_number": settings.voice_phone_number},
     )
     assert response.status_code == 422
+    assert "escalation_number" in response.get_json()["errors"]["json"]
 
 
 def test_marking_voice_online_requires_configured_webhooks(

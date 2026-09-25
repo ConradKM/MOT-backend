@@ -496,7 +496,7 @@ def action_set_voice_routing(
             try:
                 telephony.validate_pstn_destination(value, field=field)
             except telephony.TelephonyValidationError as exc:
-                raise ProvisioningActionError(str(exc), code="invalid_human_destination") from exc
+                raise ProvisioningActionError(str(exc), code=exc.field or field) from exc
 
     row = ensure_onboarding(garage)
     settings = ensure_settings(garage)
