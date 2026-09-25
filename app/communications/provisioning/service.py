@@ -484,11 +484,46 @@ def action_set_voice_routing(
 ) -> GarageCommunicationsOnboarding:
     """Set where a call goes when automation cannot handle it, and where it
     goes if CoMaz itself is unreachable. Both are plain configuration - no
-    provider call is involved."""
+    provider call is involved. Neither may be a number that rings CoMaz
+    itself (app/communications/telephony.py)."""
+    from app.communications import telephony
+
+    for field, value in (
+        ("escalation_number", escalation_number),
+        ("fallback_number", fallback_number),
+    ):
+        if value:
+            try:
+                telephony.validate_pstn_destination(value, field=field)
+            except telephony.TelephonyValidationError as exc:
+                raise ProvisioningActionError(str(exc), code="invalid_human_destination") from exc
+
     row = ensure_onboarding(garage)
     settings = ensure_settings(garage)
     settings.voice_escalation_number = escalation_number or None
     settings.voice_fallback_number = fallback_number or None
+    db.session.commit()
+    return row
+
+
+def action_set_telephony(garage: Garage, data: dict) -> GarageCommunicationsOnboarding:
+    """Record how this business's callers reach CoMaz (SIP / BYOC, call
+    forwarding, or a new CoMaz number) and where a caller who needs a person
+    goes. Configuration only - no provider call is made, so it can be
+    prepared before the carrier side exists and set back just as easily.
+    The whole configuration is validated before anything is written
+    (app/communications/telephony.py::validate_configuration)."""
+    from app.communications import telephony
+
+    row = ensure_onboarding(garage)
+    settings = ensure_settings(garage)
+    try:
+        values = telephony.validate_configuration(garage, data)
+    except telephony.TelephonyValidationError as exc:
+        db.session.rollback()
+        raise ProvisioningActionError(str(exc), code=exc.field) from exc
+    for column, value in values.items():
+        setattr(settings, column, value)
     db.session.commit()
     return row
 

@@ -447,15 +447,25 @@ def test_voice_routing_is_stored_and_used_for_escalation(
 ):
     response = platform_client.put(
         f"{COMMS.format(garage_id=garage.id)}/voice/routing",
-        json={"escalation_number": "+447700900999", "fallback_number": "+447700900888"},
+        json={"escalation_number": "+447911123999", "fallback_number": "+447911123888"},
     )
     assert response.status_code == 200
     body = response.get_json()
-    assert body["voice"]["escalation_number"] == "+447700900999"
-    assert body["voice"]["fallback_number"] == "+447700900888"
+    assert body["voice"]["escalation_number"] == "+447911123999"
+    assert body["voice"]["fallback_number"] == "+447911123888"
 
     session.refresh(settings)
-    assert settings.voice_escalation_number == "+447700900999"
+    assert settings.voice_escalation_number == "+447911123999"
+
+
+def test_voice_routing_rejects_a_number_that_rings_this_business_itself(
+    platform_client, session, garage, provisioned, settings
+):
+    response = platform_client.put(
+        f"{COMMS.format(garage_id=garage.id)}/voice/routing",
+        json={"escalation_number": settings.voice_phone_number},
+    )
+    assert response.status_code == 422
 
 
 def test_marking_voice_online_requires_configured_webhooks(

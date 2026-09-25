@@ -18,8 +18,9 @@ from flask_smorest import Blueprint, abort
 from twilio.twiml.voice_response import VoiceResponse
 
 from app.models.communications.communication_log import DIRECTION_INBOUND, CommunicationLog
-from app.phone import InvalidPhoneNumberError, normalize_uk_phone
+from app.phone import e164_from_address
 
+from . import telephony
 from .config import is_twilio_configured
 from .events import MISSED_CALL, emit_event
 from .ivr import service as ivr_service
@@ -28,8 +29,12 @@ from .providers.twilio import TwilioVoiceProvider
 from .queries import MISSED_CALL_STATUSES
 from .security import validate_twilio_request
 from .service import apply_status_event, record_inbound_event
-from .tenant_resolution import resolve_garage_by_voice_number
+from .tenant_resolution import resolve_garage_for_call_step, resolve_garage_for_inbound_call
 from .voice_relay import build_incoming_call_twiml, conversationrelay_enabled
+
+# A parent call in one of these has ended - anything it was still ringing
+# for a person has ended with it.
+_CALL_ENDED_STATUSES = frozenset({"completed", "busy", "failed", "no-answer", "canceled"})
 
 twilio_voice_blp = Blueprint(
     "twilio_voice",
@@ -52,7 +57,7 @@ def incoming_call():
     to_number = event.to_address
     call_sid = event.interaction_id
 
-    garage = resolve_garage_by_voice_number(to_number)
+    garage = resolve_garage_for_inbound_call(request.form)
 
     reply = VoiceResponse()
     if garage is None:
@@ -60,14 +65,28 @@ def incoming_call():
         # Twilio console setup) rather than an error - always answer with
         # valid TwiML, never a non-2xx, so the caller hears a clean message.
         current_app.logger.warning(
-            "[twilio:voice] incoming call to unrecognised number %s (CallSid=%s)",
+            "[twilio:voice] incoming call to unrecognised number %s (CallSid=%s sip=%s)",
             to_number,
             call_sid,
+            bool(request.form.get("SipDomainSid")),
         )
         reply.say("Sorry, this number is not currently in service.")
         return Response(str(reply), mimetype="text/xml")
 
     record_inbound_event(garage, event)
+    caller = telephony.caller_identity(request.form.get("From"), garage)
+    _log_ingress(garage, call_sid, caller)
+
+    # One of this business's own transfers to a person is ringing CoMaz
+    # again (the destination forwards back to the public number). Refuse it
+    # as busy: the transfer that caused it then sees "busy" and moves on to
+    # its next destination or a callback, instead of the call looping.
+    if telephony.transfer_loop_suspected(garage, caller):
+        current_app.logger.warning(
+            "VOICE_TRANSFER_LOOP_BLOCKED callSid=%s garage=%s", call_sid, garage.id
+        )
+        reply.reject(reason="busy")
+        return _twiml(reply)
 
     # The business's own phone menu runs before any AI session, so a caller
     # who wants a person never enters the assistant. A menu that fails to
@@ -108,59 +127,63 @@ def incoming_call():
         garage.id,
         conversationrelay_enabled(),
     )
-    escalation = _escalation_number(garage)
-    if escalation:
-        # A business that has nominated a human destination should never hear
-        # "being configured" - forward the caller instead. Set from Platform
-        # Admin > Communications; see app/communications/provisioning.
-        reply.say(f"Thank you for calling {garage.name}. Connecting you now.")
-        reply.dial(escalation)
-        return Response(str(reply), mimetype="text/xml")
+    # A business that has nominated a human destination should never hear
+    # "being configured" - put the caller through the same human chain the
+    # phone menu uses, so an unanswered transfer still moves on and ends in a
+    # logged callback rather than silence.
+    reply.say(f"Thank you for calling {garage.name}.")
+    if ivr_twiml.dial_human(
+        reply,
+        garage,
+        ivr_service.get_settings(garage.id),
+        option=None,
+        call_sid=call_sid or "",
+        caller=caller,
+        tried=set(),
+        index=0,
+    ):
+        return _twiml(reply)
 
-    reply.say(
-        f"Thank you for calling {garage.name}. "
-        "Our automated booking service is currently being configured."
-    )
+    reply.say("Our automated booking service is currently being configured.")
     return Response(str(reply), mimetype="text/xml")
 
 
-def _escalation_number(garage) -> str | None:
-    """This business's human escalation destination, if it has set one.
+def _log_ingress(garage, call_sid: str | None, caller: str) -> None:
+    """Which way in this call used - never the caller's number itself.
 
-    Platform-controlled configuration (Platform Admin > Communications), not
-    something a garage user can write - the same boundary every other column
-    on ``GarageCommunicationSettings`` sits behind.
-    """
+    ``ForwardedFrom`` (PSTN_FORWARD) is reported only as whether it matches
+    the business's public number: carriers don't all send it, and it is
+    never used to choose the tenant."""
     settings = garage.communication_settings
-    if settings is None:
-        return None
-    return settings.voice_escalation_number or settings.voice_fallback_number or None
+    forwarded = e164_from_address(request.form.get("ForwardedFrom"))
+    public = settings.public_business_number if settings else None
+    current_app.logger.info(
+        "VOICE_INGRESS callSid=%s garage=%s mode=%s sip=%s forwarded_from=%s caller=%s",
+        call_sid,
+        garage.id,
+        telephony.mode_of(settings),
+        bool(request.form.get("SipDomainSid")),
+        "public" if forwarded and forwarded == public else ("other" if forwarded else "none"),
+        "present" if caller else "withheld",
+    )
 
 
 def _twiml(response: VoiceResponse) -> Response:
     return Response(str(response), mimetype="text/xml")
 
 
-def _caller_e164(raw: str) -> str:
-    """The caller's number in E.164, or "" when withheld/unparseable - only
-    ever used for a callback request and the signed AI handoff."""
-    try:
-        return normalize_uk_phone(raw)
-    except InvalidPhoneNumberError:
-        return raw if raw.startswith("+") and raw[1:].isdigit() else ""
-
-
 def _ivr_call():
     """Shared guard for every /ivr/* step: signed by Twilio, and the tenant
-    re-resolved from the number the caller dialled - never from anything in
-    the query string."""
+    pinned when the call came in (or re-resolved from the call itself) -
+    never from anything in the query string."""
     if not is_twilio_configured():
         abort(503, message="Twilio is not configured for this deployment.")
     if not validate_twilio_request(request):
         abort(403, message="Invalid Twilio signature.")
     form = request.form
-    garage = resolve_garage_by_voice_number(form.get("To", ""))
-    return garage, form.get("CallSid", ""), _caller_e164(form.get("From", ""))
+    garage = resolve_garage_for_call_step(form)
+    caller = telephony.caller_identity(form.get("From"), garage) if garage is not None else ""
+    return garage, form.get("CallSid", ""), caller
 
 
 def _not_in_service() -> Response:
@@ -242,26 +265,68 @@ def ivr_ai_complete():
     )
     return _twiml(
         ivr_twiml.fallback(
-            garage, settings, call_sid=call_sid, caller=caller, reason=reason, tried=_tried()
+            garage,
+            settings,
+            call_sid=call_sid,
+            caller=caller,
+            reason=reason,
+            tried=_tried(),
+            # The assistant's own staff-facing note of what the caller
+            # needed (app/ai_voice/call_controller.py), for the callback
+            # request if nobody can take the call.
+            detail=(leg.body if leg is not None and leg_status == "handoff" else None),
         )
     )
 
 
 @twilio_voice_blp.route("/ivr/transfer-complete", methods=["POST"])
 def ivr_transfer_complete():
-    """A transfer to a person ended. Unanswered → the next safe fallback."""
+    """A transfer to a person ended. Answered → done. Otherwise the next
+    human destination in the business's chain (``hi``, set by the TwiML that
+    started this attempt), and after the last one the safe fallback - which
+    ends in a logged callback, never a dropped call."""
     garage, call_sid, caller = _ivr_call()
     if garage is None:
         return _not_in_service()
     dial_status = request.form.get("DialCallStatus", "")
+    next_index = request.args.get("hi")
+    telephony.finish_transfer_attempt(
+        garage,
+        call_sid=call_sid,
+        dial_status=dial_status,
+        index=(_int_arg("hi", 1) - 1) if next_index is not None else None,
+        dial_call_sid=request.form.get("DialCallSid"),
+        sip_response_code=request.form.get("DialSipResponseCode"),
+    )
     current_app.logger.info(
-        "VOICE_IVR_TRANSFER_COMPLETE callSid=%s garage=%s dial=%s", call_sid, garage.id, dial_status
+        "VOICE_IVR_TRANSFER_COMPLETE callSid=%s garage=%s dial=%s sip=%s",
+        call_sid,
+        garage.id,
+        dial_status,
+        request.form.get("DialSipResponseCode") or "-",
     )
     if dial_status in _DIAL_CONNECTED:
         reply = VoiceResponse()
         reply.hangup()
         return _twiml(reply)
     settings = ivr_service.get_settings(garage.id)
+    if next_index is not None:
+        # Only this business's own menu option can be named here, and only
+        # to rebuild the same chain the first attempt used.
+        digit = (request.args.get("od") or "")[:1]
+        option = ivr_service.option_for_digit(settings, digit) if settings and digit else None
+        reply = VoiceResponse()
+        if ivr_twiml.dial_human(
+            reply,
+            garage,
+            settings,
+            option=option,
+            call_sid=call_sid,
+            caller=caller,
+            tried=_tried(),
+            index=_int_arg("hi", 0),
+        ):
+            return _twiml(reply)
     return _twiml(
         ivr_twiml.fallback(
             garage,
@@ -270,8 +335,20 @@ def ivr_transfer_complete():
             caller=caller,
             reason=f"transfer_{dial_status or 'unknown'}",
             tried=_tried(),
+            detail=_ai_handoff_detail(garage, call_sid),
         )
     )
+
+
+def _ai_handoff_detail(garage, call_sid: str) -> str | None:
+    """What the assistant said the caller needed, when this call's AI leg
+    handed off - so a callback logged after nobody answered says why."""
+    if not call_sid:
+        return None
+    leg = CommunicationLog.query.filter_by(
+        garage_id=garage.id, external_provider="openai", call_sid=call_sid
+    ).first()
+    return leg.body if leg is not None and leg.status == "handoff" else None
 
 
 @twilio_voice_blp.route("/status", methods=["POST"])
@@ -288,6 +365,8 @@ def voice_status():
     event = TwilioVoiceProvider().normalise_status(request.form)
     status = event.status
     log = apply_status_event(event)
+    if status in _CALL_ENDED_STATUSES:
+        telephony.close_open_transfers(event.interaction_id)
     # A call that never connected (see queries.py::MISSED_CALL_STATUSES) is
     # exactly what the MISSED_CALL automation rule exists for - only for a
     # call that came IN, never one CoMaz OS itself placed.

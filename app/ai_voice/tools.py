@@ -266,11 +266,15 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "name": "request_human_handoff",
         "description": (
-            "Use this when you cannot safely help the caller yourself - a request outside "
-            "what your other tools cover, a complaint, something ambiguous after you've tried "
-            "to clarify, or the caller asks for a person. This logs a callback request for "
-            "the business's team and ends the call politely - say a brief, warm closing line "
-            "in the same turn you call this."
+            "Hand the caller to the business's team. Use it whenever a person is needed "
+            "rather than guessing: the caller asks for a person or doesn't want the "
+            "assistant; you still can't understand them after a couple of tries; a "
+            "booking, lookup or payment step fails or can't be completed; the request is "
+            "something your other tools don't cover; the information they need isn't "
+            "available from your tools; or you're not sure of the right answer. In the same "
+            "turn, say one short line such as \"I'll try to put you through to the team "
+            'now" - never say they are connected, or that someone will definitely answer: '
+            "if nobody is free, the team is asked to call them back."
         ),
         "parameters": {
             "type": "object",
@@ -688,16 +692,18 @@ def _tool_reschedule_appointment(
 
 
 def _fallback_transfer_uri(garage) -> str | None:
-    """A business's own nominated human-escalation number, if it's set one -
-    the same fields the ConversationRelay path already uses for this
-    (app/communications/voice_webhooks.py::_escalation_number). Returned as
-    a ``tel:`` URI, the shape OpenAI's SIP REFER call expects (see
-    app/ai_voice/openai_sip.py::refer_call)."""
-    settings = getattr(garage, "communication_settings", None)
-    if settings is None:
-        return None
-    number = settings.voice_escalation_number or settings.voice_fallback_number
-    return f"tel:{number}" if number else None
+    """The first of the business's human destinations
+    (app/communications/telephony.py::human_destinations - loop-checked,
+    never a number that rings CoMaz itself) as a SIP REFER target: ``tel:``
+    for a phone number, the ``sip:`` URI itself for a PBX destination.
+
+    Only the legacy direct-trunk path uses this. REFER is blind, so it can't
+    move on to a second destination - a call that comes through the phone
+    menu is handed back to it instead (app/ai_voice/call_controller.py)."""
+    from app.communications import telephony
+
+    chain = telephony.human_destinations(garage)
+    return telephony.refer_uri(chain[0]) if chain else None
 
 
 def _tool_request_human_handoff(garage, caller_phone_e164: str, *, reason: str, **_args) -> dict:
@@ -763,12 +769,18 @@ def dispatch_tool(
     state: VoiceToolState | None = None,
     tool_call_id: str | None = None,
     call_id: str | None = None,
+    ivr_bridged: bool = False,
 ) -> str:
     """Execute one tool call by name, tenant-scoped to ``garage``. Always
     returns a JSON string (never raises) - the caller (app/ai_voice/call_controller.py)
     sends this straight back to OpenAI as the function_call_output, so a
     tool failure becomes something the model can react to in speech rather
-    than a dropped call."""
+    than a dropped call.
+
+    ``ivr_bridged``: the call came through the business's phone menu, which
+    stays on the line and transfers the caller itself once this AI leg ends,
+    so a handoff logs nothing here - the phone menu logs a callback (with
+    the assistant's reason) only if nobody answers."""
     handler = _HANDLERS.get(name)
     if handler is None:
         return json.dumps({"ok": False, "error": f"Unknown tool: {name}"})
@@ -780,6 +792,9 @@ def dispatch_tool(
 
     if not isinstance(arguments, dict):
         return json.dumps({"ok": False, "error": "Tool arguments must be an object."})
+
+    if name == "request_human_handoff" and ivr_bridged:
+        return json.dumps({"ok": True, "status": "transferring"})
 
     if name in {"cancel_appointment", "reschedule_appointment"}:
         if arguments.get("confirmed") is not True:

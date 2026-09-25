@@ -36,6 +36,7 @@ from app.models.customer import Customer
 
 from .config import garage_communications_enabled
 from .providers import get_messaging_provider, get_voice_provider
+from .telephony import TRANSFER_PROVIDER
 
 # The garage's own definition of "missed" - a Twilio CallStatus for an
 # inbound call that never connected. Not exhaustive of every Twilio value,
@@ -53,9 +54,11 @@ ENGINE_PROVIDER = "comaz_conversation_engine"
 # transcript turns - or the AI leg a phone-menu call was bridged into
 # (app/ai_voice/routes.py stamps that leg with the Twilio call's call_sid; the
 # Twilio row is the call). A direct-SIP AI call has no call_sid and is still
-# its own call.
+# its own call. A human-transfer attempt (app/communications/telephony.py) is
+# part of its call too, never a call of its own.
 _CALL_LEVEL_ROW = and_(
     CommunicationLog.external_provider != ENGINE_PROVIDER,
+    CommunicationLog.external_provider != TRANSFER_PROVIDER,
     or_(CommunicationLog.external_provider != "openai", CommunicationLog.call_sid.is_(None)),
 )
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from app.communications.tenant_resolution import resolve_garage_by_voice_number
 from app.models.garage import Garage
-from app.phone import InvalidPhoneNumberError, normalize_uk_phone
+from app.phone import InvalidPhoneNumberError, normalize_uk_phone, phone_from_sip_uri
 
 
 def _header_field(header, field: str) -> str | None:
@@ -32,33 +32,6 @@ def sip_header(sip_headers: list, name: str) -> str | None:
             value = _header_field(header, "value")
             return str(value) if value is not None else None
     return None
-
-
-def phone_from_sip_uri(value: str | None) -> str | None:
-    """The phone-number portion of a ``sip:+18005551212@host`` / ``tel:...``
-    URI. This (and every SIP header) is untrusted caller-supplied metadata
-    per OpenAI's own guidance - it only ever drives a business lookup below,
-    never an authorization decision by itself.
-
-    Real SIP headers (unlike the bare-URI shape it's easy to test with) are
-    routinely the RFC 3261 name-addr form - the URI wrapped in ``<...>``,
-    with header parameters like ``;tag=`` or ``;reason=`` *outside* the
-    brackets, e.g. ``<sip:+441234567890@host>;tag=abc``. Strip that wrapper
-    first; a real Diversion/To header parsed without doing this yields
-    garbage (see the ``;tag=``/``;reason=`` suffix ending up glued onto the
-    "number" otherwise)."""
-    if not value:
-        return None
-    value = value.strip()
-    if value.startswith("<"):
-        end = value.find(">")
-        value = value[1:end] if end != -1 else value[1:]
-    for prefix in ("sips:", "sip:", "tel:"):
-        if value.lower().startswith(prefix):
-            value = value[len(prefix) :]
-            break
-    number = value.split("@", 1)[0].split(";", 1)[0]
-    return number or None
 
 
 def resolve_business_for_sip_call(sip_headers: list) -> Garage | None:

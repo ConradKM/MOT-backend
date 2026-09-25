@@ -67,3 +67,54 @@ def normalize_uk_phone(raw: str) -> str:
     if not phonenumbers.is_valid_number(parsed):
         raise InvalidPhoneNumberError("Enter a valid UK phone number.")
     return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+
+
+def phone_from_sip_uri(value: str | None) -> str | None:
+    """The phone-number portion of a ``sip:+18005551212@host`` / ``tel:...``
+    URI - or of a bare number, which is returned as-is.
+
+    Real SIP headers are routinely the RFC 3261 name-addr form - the URI
+    wrapped in ``<...>``, with parameters like ``;tag=`` *outside* the
+    brackets, e.g. ``<sip:+441234567890@host>;tag=abc`` - so that wrapper is
+    stripped first. The result is untrusted caller/network metadata: it may
+    only ever drive a lookup, never an authorisation decision by itself."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.startswith("<"):
+        end = value.find(">")
+        value = value[1:end] if end != -1 else value[1:]
+    for prefix in ("sips:", "sip:", "tel:"):
+        if value.lower().startswith(prefix):
+            value = value[len(prefix) :]
+            break
+    number = value.split("@", 1)[0].split(";", 1)[0]
+    return number or None
+
+
+def e164_from_address(raw: str | None) -> str | None:
+    """E.164 for a number as Twilio reports it on a call - ``+44...`` for a
+    PSTN call, possibly ``sip:+44...@domain`` or a carrier's national/
+    ``44...`` form for one delivered over SIP. ``None`` when it isn't a
+    number at all (withheld, ``anonymous``, a client identity).
+
+    Falls back to the value as-is when it's already a well-formed
+    ``+<digits>`` string that ``normalize_uk_phone`` itself rejects - e.g. a
+    number outside any range currently allocated by Ofcom, which is exactly
+    what a test/reserved caller ID (the ``+447700900xxx`` drama range) is.
+    Twilio itself does no such allocation check on the caller id it reports,
+    so neither should this."""
+    number = phone_from_sip_uri(raw)
+    if not number:
+        return None
+    digits = number.lstrip("+")
+    if not number.startswith("+") and digits.isdigit() and digits.startswith("44"):
+        # Carriers commonly send the UK DID as 44xxxxxxxxxx with no '+';
+        # parsed with a GB default that would read as a national number.
+        number = f"+{digits}"
+    try:
+        return normalize_uk_phone(number)
+    except InvalidPhoneNumberError:
+        if number.startswith("+") and number[1:].isdigit():
+            return number
+        return None
