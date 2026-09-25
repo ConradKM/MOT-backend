@@ -15,6 +15,7 @@ from .schemas import (
     CapacitySummarySchema,
     GarageDetailsUpdateSchema,
     BookingRequestSettingsSchema,
+    BookingRequestAutoAcceptSchema,
     GarageSchema,
 )
 
@@ -86,6 +87,23 @@ class BookingRequestSettings(MethodView):
     def put(self, data):
         garage = get_current_employee().garage
         garage.auto_accept_booking_requests = data["auto_accept_booking_requests"]
+        if not garage.auto_accept_booking_requests:
+            garage.auto_accept_booking_requests_enabled = False
+        db.session.commit()
+        return garage
+
+
+@garages_blp.route("/booking-request-settings/auto-accept")
+class BookingRequestAutoAccept(MethodView):
+    @jwt_required()
+    @owner_required
+    @garages_blp.arguments(BookingRequestAutoAcceptSchema)
+    @garages_blp.response(200, GarageSchema)
+    def put(self, data):
+        garage = get_current_employee().garage
+        if not garage.auto_accept_booking_requests:
+            abort(409, message="Allow automatic acceptance before enabling auto-accept.")
+        garage.auto_accept_booking_requests_enabled = data["auto_accept_booking_requests_enabled"]
         db.session.commit()
         return garage
 

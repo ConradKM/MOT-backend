@@ -121,6 +121,9 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     auto_accept_booking_requests: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    auto_accept_booking_requests_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # --- business logo (see app/garages/logo.py) -----------------------------
     # The bytes live in object storage; this row holds only the reference -

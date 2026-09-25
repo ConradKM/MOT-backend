@@ -280,7 +280,11 @@ def auto_accept_booking_request(*, garage_id: uuid.UUID, request_id: uuid.UUID) 
     A request that cannot be assigned remains PENDING for staff review.
     """
     garage = db.session.get(Garage, garage_id)
-    if garage is None or not garage.auto_accept_booking_requests:
+    if (
+        garage is None
+        or not garage.auto_accept_booking_requests
+        or not garage.auto_accept_booking_requests_enabled
+    ):
         return None
 
     request = BookingRequest.query.filter_by(id=request_id, garage_id=garage_id).first()
