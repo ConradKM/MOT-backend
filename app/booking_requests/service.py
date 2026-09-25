@@ -270,7 +270,9 @@ def approve_booking_request(
     return booking_request
 
 
-def auto_accept_booking_request(*, garage_id: uuid.UUID, request_id: uuid.UUID) -> BookingRequest | None:
+def auto_accept_booking_request(
+    *, garage_id: uuid.UUID, request_id: uuid.UUID
+) -> BookingRequest | None:
     """Accept a new request only when the configured tenant can safely do so.
 
     A stable active-employee ordering is the assignment policy: the first
@@ -294,7 +296,9 @@ def auto_accept_booking_request(*, garage_id: uuid.UUID, request_id: uuid.UUID) 
     if appointment_type is None or appointment_type.status != "ACTIVE":
         return None
 
-    duration_minutes = request.requested_duration_minutes or appointment_type.default_duration_minutes
+    duration_minutes = (
+        request.requested_duration_minutes or appointment_type.default_duration_minutes
+    )
     if duration_minutes is None:
         # A legacy request without a duration can still be reviewed manually.
         return None
@@ -310,7 +314,9 @@ def auto_accept_booking_request(*, garage_id: uuid.UUID, request_id: uuid.UUID) 
     if used >= capacity:
         return None
 
-    candidates = Employee.query.filter_by(garage_id=garage_id, is_active=True).order_by(Employee.id).all()
+    candidates = (
+        Employee.query.filter_by(garage_id=garage_id, is_active=True).order_by(Employee.id).all()
+    )
     for employee in candidates:
         clash = Appointment.query.filter(
             Appointment.employee_id == employee.id,
