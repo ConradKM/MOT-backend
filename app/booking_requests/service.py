@@ -256,6 +256,7 @@ def approve_booking_request(
     booking_request.appointment_id = appointment.id
     booking_request.reviewed_by_employee_id = reviewer.id
     booking_request.reviewed_at = datetime.now(UTC)
+    booking_request.accepted_automatically = bool(data.get("accepted_automatically", False))
     if data.get("staff_notes") is not None:
         booking_request.staff_notes = data["staff_notes"]
 
@@ -267,6 +268,61 @@ def approve_booking_request(
         appointment=appointment,
     )
     return booking_request
+
+
+def auto_accept_booking_request(*, garage_id: uuid.UUID, request_id: uuid.UUID) -> BookingRequest | None:
+    """Accept a new request only when the configured tenant can safely do so.
+
+    A stable active-employee ordering is the assignment policy: the first
+    employee without an overlapping appointment is selected.  The actual
+    transition is still delegated to :func:`approve_booking_request`, which
+    takes the same garage/request locks and repeats every authoritative check.
+    A request that cannot be assigned remains PENDING for staff review.
+    """
+    garage = db.session.get(Garage, garage_id)
+    if garage is None or not garage.auto_accept_booking_requests:
+        return None
+
+    request = BookingRequest.query.filter_by(id=request_id, garage_id=garage_id).first()
+    if request is None or request.status != "PENDING" or request.preferred_time is None:
+        return None
+    appointment_type = request.appointment_type
+    if appointment_type is None or appointment_type.status != "ACTIVE":
+        return None
+
+    duration_minutes = request.requested_duration_minutes or appointment_type.default_duration_minutes
+    if duration_minutes is None:
+        # A legacy request without a duration can still be reviewed manually.
+        return None
+    start_time = local_slot_as_utc(garage, request.preferred_date, request.preferred_time)
+    end_time = start_time + timedelta(minutes=duration_minutes)
+
+    # A capacity check is only a fast fail before assignment selection.  The
+    # approval service repeats it under the garage lock before writing.
+    duration_min = int((end_time - start_time).total_seconds() // 60)
+    used, capacity = slot_capacity_usage(
+        garage, start_time.date(), start_time, duration_min, exclude_request_id=request.id
+    )
+    if used >= capacity:
+        return None
+
+    candidates = Employee.query.filter_by(garage_id=garage_id, is_active=True).order_by(Employee.id).all()
+    for employee in candidates:
+        clash = Appointment.query.filter(
+            Appointment.employee_id == employee.id,
+            Appointment.status != "CANCELLED",
+            Appointment.start_time < end_time,
+            Appointment.end_time > start_time,
+        ).first()
+        if clash is not None:
+            continue
+        approved = approve_booking_request(
+            reviewer=employee,
+            request_id=request.id,
+            data={"employee_id": employee.id, "accepted_automatically": True},
+        )
+        return approved
+    return None
 
 
 def _resolve_appointment_slot(booking_request, data, appointment_type):

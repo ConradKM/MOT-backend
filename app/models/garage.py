@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import Boolean, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -113,6 +113,13 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     # slots. Timestamps themselves remain UTC in PostgreSQL.
     timezone: Mapped[str] = mapped_column(
         String(64), nullable=False, default="Europe/London", server_default="Europe/London"
+    )
+
+    # Owner-controlled booking-request automation.  It is deliberately off for
+    # every existing business; automatic approval still performs the same
+    # capacity, schedule and employee-conflict checks as staff approval.
+    auto_accept_booking_requests: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
 
     # --- business logo (see app/garages/logo.py) -----------------------------

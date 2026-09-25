@@ -14,6 +14,7 @@ from .details import update_garage_details
 from .schemas import (
     CapacitySummarySchema,
     GarageDetailsUpdateSchema,
+    BookingRequestSettingsSchema,
     GarageSchema,
 )
 
@@ -69,6 +70,24 @@ class GarageCapacitySummary(MethodView):
     def get(self):
         garage = get_current_employee().garage
         return capacity_summary(garage)
+
+
+@garages_blp.route("/booking-request-settings")
+class BookingRequestSettings(MethodView):
+    @jwt_required()
+    @garages_blp.response(200, GarageSchema)
+    def get(self):
+        return get_current_employee().garage
+
+    @jwt_required()
+    @owner_required
+    @garages_blp.arguments(BookingRequestSettingsSchema)
+    @garages_blp.response(200, GarageSchema)
+    def put(self, data):
+        garage = get_current_employee().garage
+        garage.auto_accept_booking_requests = data["auto_accept_booking_requests"]
+        db.session.commit()
+        return garage
 
 
 @public_garages_blp.route("/")
