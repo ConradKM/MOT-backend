@@ -1,14 +1,14 @@
 """Add tenant-scoped booking-request auto-accept controls.
 
-Revision ID: d8e9f0a1b2c3
-Revises: c7d8e9f0a1b2
+Revision ID: a9b7c6d5e4f3
+Revises: d8e9f0a1b2c3
 """
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "d8e9f0a1b2c3"
-down_revision = "c7d8e9f0a1b2"
+revision = "a9b7c6d5e4f3"
+down_revision = "d8e9f0a1b2c3"
 branch_labels = None
 depends_on = None
 
