@@ -87,6 +87,12 @@ class Config:
     # The availability calendar is a read endpoint the wizard polls as the
     # customer clicks around - a much looser limit than the write path.
     PUBLIC_AVAILABILITY_RATELIMIT = os.getenv("PUBLIC_AVAILABILITY_RATELIMIT", "60 per minute")
+    # Walk-in queue (app/queueing/routes.py), keyed per client IP *per
+    # business*. Join/leave are writes - same budget as a booking submit.
+    # Status is polled by the customer's live page (every ~20s), so it needs
+    # headroom for a few open tabs.
+    PUBLIC_QUEUE_JOIN_RATELIMIT = os.getenv("PUBLIC_QUEUE_JOIN_RATELIMIT", "5 per hour;20 per day")
+    PUBLIC_QUEUE_STATUS_RATELIMIT = os.getenv("PUBLIC_QUEUE_STATUS_RATELIMIT", "30 per minute")
 
     # --- Garage onboarding (see app/garages/onboarding.py) --------------
     # The supported way to create a tenant is the `flask onboard-garage` CLI.

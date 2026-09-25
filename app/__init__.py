@@ -226,6 +226,7 @@ def create_app(config_class=Config):
         create_platform_admin_command,
         list_platform_admins_command,
     )
+    from .queueing.cli import sweep_walkin_queue_command
     from .tasks.cli import send_due_reminders_command
 
     app.cli.add_command(create_platform_admin_command)
@@ -239,6 +240,7 @@ def create_app(config_class=Config):
     app.cli.add_command(dev_info_command)
     app.cli.add_command(backfill_payment_method_domains_command)
     app.cli.add_command(send_due_reminders_command)
+    app.cli.add_command(sweep_walkin_queue_command)
 
     from .ai_voice.faqs.routes import voice_faqs_blp
     from .ai_voice.routes import openai_voice_blp
@@ -273,6 +275,7 @@ def create_app(config_class=Config):
     from .payments.webhooks import payment_webhooks_blp
     from .platform_admin.routes import PLATFORM_ADMIN_BLUEPRINTS
     from .public_booking.routes import public_booking_blp
+    from .queueing.routes import public_queue_blp, queue_blp
     from .roles.routes import roles_blp
     from .vehicles.routes import vehicles_blp
 
@@ -292,6 +295,8 @@ def create_app(config_class=Config):
     api.register_blueprint(public_garages_blp)
     api.register_blueprint(public_booking_blp)
     api.register_blueprint(booking_requests_blp)
+    api.register_blueprint(public_queue_blp)
+    api.register_blueprint(queue_blp)
     api.register_blueprint(booking_flow_blp)
     api.register_blueprint(communications_blp)
     api.register_blueprint(voice_menu_blp)
@@ -369,6 +374,7 @@ def create_app(config_class=Config):
         feature_flag,
         impersonation,
     )
+    from .models.queueing import queue_entry, queue_settings, reserved_window  # noqa: F401
 
     register_default_handlers()
     register_email_handlers()
