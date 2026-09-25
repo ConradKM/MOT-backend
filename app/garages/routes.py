@@ -12,10 +12,10 @@ from app.public_booking.schemas import PublicGarageDetailSchema
 from .capacity import capacity_summary
 from .details import update_garage_details
 from .schemas import (
+    BookingRequestAutoAcceptSchema,
+    BookingRequestSettingsSchema,
     CapacitySummarySchema,
     GarageDetailsUpdateSchema,
-    BookingRequestSettingsSchema,
-    BookingRequestAutoAcceptSchema,
     GarageSchema,
 )
 
