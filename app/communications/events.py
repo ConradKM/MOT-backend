@@ -48,6 +48,12 @@ CALLBACK_REQUESTED = "CALLBACK_REQUESTED"
 # ::CustomerSetPassword) - "created an account" from their point of view, even
 # though the Customer row itself already existed from booking.
 ACCOUNT_CREATED = "ACCOUNT_CREATED"
+# A walk-in joined the live queue (see app/queueing/service.py::join_queue).
+# Context carries ``queue_entry`` and the one-time ``status_token``, which is
+# never persisted in plain form - the join text is its only other copy.
+QUEUE_ENTRY_JOINED = "QUEUE_ENTRY_JOINED"
+# Staff (or the no-show auto-skip) called a walk-in forward - "you're next".
+QUEUE_ENTRY_CALLED = "QUEUE_ENTRY_CALLED"
 
 EVENT_TYPES = (
     BOOKING_REQUEST_CREATED,
@@ -62,6 +68,8 @@ EVENT_TYPES = (
     MISSED_CALL,
     CALLBACK_REQUESTED,
     ACCOUNT_CREATED,
+    QUEUE_ENTRY_JOINED,
+    QUEUE_ENTRY_CALLED,
 )
 
 EventHandler = Callable[..., None]

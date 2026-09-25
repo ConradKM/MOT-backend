@@ -5,7 +5,9 @@ the garage's ``garage_schedule_settings`` / ``garage_opening_hours`` /
 ``garage_schedule_exceptions`` rows (or the in-code defaults when a garage has
 none), its live non-cancelled ``appointments``, and its still-PENDING or
 AWAITING_PAYMENT ``booking_requests`` (the latter is a deposit payment hold -
-see app/payments/service.py). Nothing is mocked or hard-coded.
+see app/payments/service.py), and its ``walkin_reserved_windows`` - bays the
+business has withheld from public booking so walk-ins aren't starved (see
+app/models/queueing/reserved_window.py). Nothing is mocked or hard-coded.
 
 Timezone note: like the rest of the codebase (see
 app/appointments/routes.py::_day_bounds and
@@ -23,6 +25,7 @@ from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.employee import Employee
+from app.models.queueing.reserved_window import WalkInReservedWindow
 
 # Levels a day can report - the calendar maps these to its green / amber / red
 # (plus text + icon) indicators.
@@ -120,6 +123,17 @@ def _day_hours(day: date, hours_map, exceptions) -> tuple[time, time] | None:
     return (opens_at, closes_at)
 
 
+def open_interval(garage, day: date) -> tuple[datetime, datetime] | None:
+    """``day``'s effective opening hours as UTC instants, after one-off
+    exceptions - or None when the business is closed that day. The walk-in
+    queue's view of "today" (see app/queueing/service.py), resolved through
+    exactly the same rules as the booking calendar."""
+    hrs = _day_hours(day, resolve_opening_hours(garage), resolve_exceptions(garage, day, day))
+    if hrs is None:
+        return None
+    return local_slot_as_utc(garage, day, hrs[0]), local_slot_as_utc(garage, day, hrs[1])
+
+
 def _minutes(t: time) -> int:
     return t.hour * 60 + t.minute
 
@@ -145,6 +159,36 @@ def _load_day_usage(garage, day: date):
         BookingRequest.preferred_time.isnot(None),
     ).all()
     return appointments, pending
+
+
+def _load_reserved_windows(garage, day: date) -> list[tuple[datetime, datetime, int]]:
+    """``(start, end, reserved_capacity)`` UTC intervals of every walk-in
+    window - recurring (by weekday) or one-off (by date) - that applies on
+    ``day``."""
+    rows = WalkInReservedWindow.query.filter(
+        WalkInReservedWindow.garage_id == garage.id,
+        (WalkInReservedWindow.weekday == day.weekday()) | (WalkInReservedWindow.date == day),
+    ).all()
+    return [
+        (
+            local_slot_as_utc(garage, day, row.starts_at),
+            local_slot_as_utc(garage, day, row.ends_at),
+            row.reserved_capacity,
+        )
+        for row in rows
+    ]
+
+
+def _reserved_at(windows, slot_start: datetime, slot_end: datetime) -> int:
+    """Bays withheld from public booking anywhere in ``[slot_start,
+    slot_end)``. A booking needs its bay for its whole span, so a window
+    touching any part of it counts; overlapping windows take the largest
+    reservation rather than summing (two "keep one bay free" rules still
+    mean one bay)."""
+    return max(
+        (n for w_start, w_end, n in windows if w_start < slot_end and w_end > slot_start),
+        default=0,
+    )
 
 
 def _pending_request_duration(pending_request: BookingRequest, settings: "_Settings") -> int:
@@ -213,6 +257,7 @@ def day_slots(
     lead_cutoff = now + timedelta(hours=settings.min_lead_time_hours)
 
     appointments, pending = _load_day_usage(garage, day)
+    windows = _load_reserved_windows(garage, day)
 
     slots = []
     m = _minutes(opens_at)
@@ -222,7 +267,8 @@ def day_slots(
         slot_start = local_slot_as_utc(garage, day, slot_time)
         if slot_start >= lead_cutoff:
             used = _slot_usage(garage, appointments, pending, slot_start, duration, settings)
-            remaining = capacity - used
+            slot_end = slot_start + timedelta(minutes=duration)
+            remaining = capacity - _reserved_at(windows, slot_start, slot_end) - used
             if remaining <= 0:
                 status = SLOT_BOOKED
             elif 0 < remaining <= threshold:
@@ -417,6 +463,7 @@ def slot_capacity_usage(
     duration_min: int,
     exclude_request_id=None,
     exclude_appointment_id=None,
+    include_walkin_reservations: bool = True,
 ) -> tuple[int, int]:
     """``(used, capacity)`` for one candidate slot - the same accounting
     :func:`validate_slot` uses for its capacity check, exposed so other
@@ -428,9 +475,22 @@ def slot_capacity_usage(
     ``exclude_appointment_id`` does the equivalent for a staff reschedule or
     reactivation, so the appointment is not treated as a collision with its
     own current slot.
+
+    The returned capacity is what *public booking* may use: bays withheld by
+    a walk-in reserved window are taken off it. Staff scheduling passes
+    ``include_walkin_reservations=False`` - an owner deliberately booking
+    someone into a walk-in window is overriding their own rule, not being
+    bypassed by a customer.
     """
     settings = resolve_settings(garage)
     capacity = slot_capacity(garage, settings)
+    if include_walkin_reservations:
+        slot_end = slot_start + timedelta(minutes=duration_min)
+        # Windows are wall-clock rules, so look them up by the slot's own
+        # business-local day - callers pass ``start_time.date()`` (a UTC
+        # date), which differs near midnight for non-UTC businesses.
+        windows = _load_reserved_windows(garage, local_day_for(garage, slot_start))
+        capacity -= _reserved_at(windows, slot_start, slot_end)
     appointments, pending = _load_day_usage(garage, day)
     if exclude_request_id is not None:
         pending = [p for p in pending if p.id != exclude_request_id]

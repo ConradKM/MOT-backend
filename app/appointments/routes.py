@@ -213,6 +213,8 @@ def _check_capacity(garage, start_time, end_time, exclude_appointment_id=None):
         start_time,
         duration_minutes,
         exclude_appointment_id=exclude_appointment_id,
+        # Walk-in reserved windows protect bays from *public* booking only.
+        include_walkin_reservations=False,
     )
     if used >= capacity:
         abort(
