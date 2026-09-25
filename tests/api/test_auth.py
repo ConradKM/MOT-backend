@@ -50,7 +50,7 @@ def test_register_seeds_the_default_schedule(client, session):
     garage = Garage.query.filter_by(name="New Garage").first()
 
     settings = GarageScheduleSettings.query.filter_by(garage_id=garage.id).first()
-    assert settings is not None and settings.slot_interval_minutes == 30
+    assert settings is not None and settings.slot_interval_minutes == 5
     hours = GarageOpeningHours.query.filter_by(garage_id=garage.id).all()
     assert len(hours) == 7
     assert {h.weekday for h in hours if h.is_closed} == {5, 6}

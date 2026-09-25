@@ -16,7 +16,7 @@ from app.models.garage_schedule import GarageOpeningHours, GarageScheduleSetting
 # min_lead_time_hours defaults to 2 so same-day bookings work out of the box
 # (a garage can raise it in Settings > Availability).
 DEFAULT_SETTINGS = {
-    "slot_interval_minutes": 30,
+    "slot_interval_minutes": 5,
     "default_appointment_minutes": 60,
     "min_lead_time_hours": 2,
     "max_advance_days": 60,

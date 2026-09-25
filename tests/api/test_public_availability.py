@@ -125,8 +125,8 @@ def test_day_slots_listed_for_an_open_weekday(client, garage):
     body = client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()
 
     assert body["is_open"] is True
-    # 09:00-17:00, 30-min interval, 60-min duration -> 09:00 .. 16:00 = 15 slots
-    assert len(body["slots"]) == 15
+    # 09:00-17:00, 5-min interval, 60-min duration -> 09:00 .. 16:00 = 85 slots
+    assert len(body["slots"]) == 85
     first = body["slots"][0]
     assert first["start"] == "09:00"
     assert set(first) == {"start", "status", "remaining", "capacity"}
@@ -293,7 +293,7 @@ def test_lead_time_hides_near_slots(client, session, garage, garage_schedule):
     garage_schedule.min_lead_time_hours = 0
     session.commit()
     body = client.get(f"/api/public/{garage.slug}/availability/{day.isoformat()}").get_json()
-    assert len(body["slots"]) == 15
+    assert len(body["slots"]) == 85
 
 
 def test_schedule_exception_closes_a_day(client, session, garage, garage_schedule):
@@ -332,7 +332,7 @@ def test_day_slots_use_the_selected_appointment_types_duration(client, session, 
         query_string={"appointment_type_id": str(ninety_min_type.id)},
     ).get_json()
 
-    # 09:00-17:00, 30-min interval, 90-min duration -> last start is 15:30
+    # 09:00-17:00, 5-min interval, 90-min duration -> last start is 15:30
     # (15:30 + 90 = 17:00), not 16:00 as the 60-min default would allow.
     assert body["slots"][-1]["start"] == "15:30"
     assert all(s["start"] != "16:00" for s in body["slots"])
