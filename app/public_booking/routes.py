@@ -15,7 +15,7 @@ from app.booking_flow.answers import (
 )
 from app.booking_flow.resolve import resolve_sections
 from app.booking_requests.reference import unique_booking_reference
-from app.booking_requests.service import resolve_customer_and_vehicle
+from app.booking_requests.service import auto_accept_booking_request, resolve_customer_and_vehicle
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
 from app.garages.timezones import local_slot_as_utc
@@ -587,6 +587,10 @@ class BookingRequestSubmit(MethodView):
         db.session.commit()
 
         emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
+        # Deposit-required requests remain AWAITING_PAYMENT until their
+        # provider webhook has succeeded; this plain path is the only point
+        # where an unpaid booking can be auto-approved.
+        auto_accept_booking_request(garage_id=garage.id, request_id=booking_request.id)
 
         return booking_request
 

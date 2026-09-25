@@ -25,6 +25,8 @@ class GarageSchema(Schema):
     # this schema - this just lets the garage's own app (its header) show
     # what Platform Admin set. A fresh presigned url each request, or null.
     logo_url = fields.Method("_get_logo_url", dump_only=True)
+    auto_accept_booking_requests = fields.Bool(dump_only=True)
+    auto_accept_booking_requests_enabled = fields.Bool(dump_only=True)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
@@ -46,6 +48,14 @@ class GarageDetailsUpdateSchema(Schema):
     address = fields.Str(allow_none=True, validate=validate.Length(max=500))
     postcode = fields.Str(allow_none=True, validate=validate.Length(max=20))
     website = fields.Str(allow_none=True, validate=validate.Length(max=200))
+
+
+class BookingRequestSettingsSchema(Schema):
+    auto_accept_booking_requests = fields.Bool(required=True)
+
+
+class BookingRequestAutoAcceptSchema(Schema):
+    auto_accept_booking_requests_enabled = fields.Bool(required=True)
 
 
 class _CapacityBucketSchema(Schema):

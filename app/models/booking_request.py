@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -180,6 +181,11 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
     # --- staff review outcome --------------------------------------------
     reviewed_by_employee_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("employees.id", ondelete="SET NULL")
+    )
+    # Distinguishes an owner/staff approval from a server-triggered approval;
+    # the assigned employee remains the normal scheduling owner.
+    accepted_automatically: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Staff-internal - never rendered to the customer (see
