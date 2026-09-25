@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from flask import current_app
 from sqlalchemy import func, or_, select
@@ -81,7 +82,7 @@ def _paginate(query, page: int, per_page: int) -> dict:
     per_page = max(1, min(per_page or DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE))
     page = max(1, page or 1)
     total = db.session.scalar(select(func.count()).select_from(query.subquery())) or 0
-    items = list(
+    items: list[Any] = list(
         db.session.execute(query.limit(per_page).offset((page - 1) * per_page)).scalars().all()
     )
     return {

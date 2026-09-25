@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from sqlalchemy import func, select
 
@@ -79,7 +80,10 @@ def voice_telemetry_stats(
         total_tool_calls,
         escalated_count,
         still_open_count,
-    ) = totals
+    ) = cast(
+        "tuple[int, int, float | None, int, int, int, int, int, int]",
+        totals,
+    )
 
     # Two independent queries, not one shared WHERE: a call under a model
     # CoMaz has no OpenAI rate for still gets a Twilio figure (and vice
@@ -90,27 +94,33 @@ def voice_telemetry_stats(
         openai_cost_all_estimated,
         openai_priced_calls,
         openai_currencies,
-    ) = db.session.execute(
-        select(
-            func.sum(VoiceCallMetrics.openai_cost_amount),
-            func.bool_and(VoiceCallMetrics.openai_cost_is_estimated),
-            func.count(),
-            func.count(func.distinct(VoiceCallMetrics.openai_cost_currency)),
-        ).where(*filters, VoiceCallMetrics.openai_cost_amount.is_not(None))
-    ).one()
+    ) = cast(
+        "tuple[float | None, bool | None, int, int]",
+        db.session.execute(
+            select(
+                func.sum(VoiceCallMetrics.openai_cost_amount),
+                func.bool_and(VoiceCallMetrics.openai_cost_is_estimated),
+                func.count(),
+                func.count(func.distinct(VoiceCallMetrics.openai_cost_currency)),
+            ).where(*filters, VoiceCallMetrics.openai_cost_amount.is_not(None))
+        ).one(),
+    )
     (
         twilio_cost_total,
         twilio_cost_all_estimated,
         twilio_priced_calls,
         twilio_currencies,
-    ) = db.session.execute(
-        select(
-            func.sum(VoiceCallMetrics.twilio_cost_amount),
-            func.bool_and(VoiceCallMetrics.twilio_cost_is_estimated),
-            func.count(),
-            func.count(func.distinct(VoiceCallMetrics.twilio_cost_currency)),
-        ).where(*filters, VoiceCallMetrics.twilio_cost_amount.is_not(None))
-    ).one()
+    ) = cast(
+        "tuple[float | None, bool | None, int, int]",
+        db.session.execute(
+            select(
+                func.sum(VoiceCallMetrics.twilio_cost_amount),
+                func.bool_and(VoiceCallMetrics.twilio_cost_is_estimated),
+                func.count(),
+                func.count(func.distinct(VoiceCallMetrics.twilio_cost_currency)),
+            ).where(*filters, VoiceCallMetrics.twilio_cost_amount.is_not(None))
+        ).one(),
+    )
 
     # A combined figure is only meaningful when both providers priced at
     # least one call and each did so in exactly one currency - "report
