@@ -87,6 +87,8 @@ from app.platform_admin.schemas import (
     TenantProvisionSchema,
     TenantReactivateSchema,
     TenantStatsSchema,
+    TenantStripeReconnectResultSchema,
+    TenantStripeReconnectSchema,
     TenantSuspendSchema,
     TenantUnarchiveSchema,
     TenantUpdateSchema,
@@ -105,6 +107,7 @@ from app.platform_admin.tenants import (
     get_tenant,
     list_tenants,
     reactivate_tenant,
+    reconnect_tenant_stripe,
     suspend_tenant,
     tenant_detail,
     unarchive_tenant,
@@ -254,6 +257,31 @@ class TenantReadiness(MethodView):
         account with charges disabled reports not-ready here too.
         """
         return business_readiness(_require_tenant(garage_id))
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/payments/stripe/reconnect")
+class TenantStripeReconnect(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_tenants_blp.arguments(TenantStripeReconnectSchema)
+    @platform_tenants_blp.response(200, TenantStripeReconnectResultSchema)
+    def post(self, data, garage_id):
+        """Recover a tenant whose stored Stripe Connect account the current
+        CoMaz platform can no longer reach at all.
+
+        Refuses with a 422 unless Stripe itself confirms the existing
+        account is unreachable - this is not a way to reset a healthy
+        connection. On success, the old account is preserved for audit,
+        detached, and replaced by a brand new connected account with a
+        fresh onboarding link the business still needs to complete.
+        """
+        garage = _require_tenant(garage_id)
+        try:
+            return reconnect_tenant_stripe(
+                admin=get_current_platform_admin(), garage=garage, reason=data["reason"]
+            )
+        except TenantError as exc:
+            abort(422, message=str(exc))
 
 
 @platform_tenants_blp.route("/tenants/<uuid:garage_id>/suspend")
