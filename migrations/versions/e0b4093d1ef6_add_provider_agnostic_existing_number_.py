@@ -1,17 +1,16 @@
 """Add provider-agnostic existing-number integration fields
 
 Revision ID: e0b4093d1ef6
-Revises: a9b7c6d5e4f3
+Revises: 8cc5ff1cd1bf
 Create Date: 2026-09-26 00:42:36.408871
 
 """
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = 'e0b4093d1ef6'
-down_revision = 'a9b7c6d5e4f3'
+down_revision = '8cc5ff1cd1bf'
 branch_labels = None
 depends_on = None
 
