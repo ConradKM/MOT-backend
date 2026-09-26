@@ -525,6 +525,59 @@ def test_forwarding_only_provisions_without_touching_twilio(
     assert result["configure_at_carrier"]["forward_to"] == "+441611234567"
 
 
+def test_no_test_checklist_before_provisioning(session, garage):
+    """The operator has nothing to dial and listen for yet - showing a
+    checklist against an unprovisioned integration would be misleading."""
+    session.add(_ready_settings(garage.id))
+    session.commit()
+    session.refresh(garage)
+    assert existing_number.describe_integration(garage)["test_checklist"] == []
+
+
+def test_checklist_names_the_effective_human_chain(monkeypatch, session, garage, voice_config):
+    client = _FakeClient()
+    monkeypatch.setattr(existing_number, "get_subaccount_client", lambda g: client)
+    session.add(
+        _ready_settings(
+            garage.id,
+            human_primary_type="SIP_URI",
+            human_primary_destination=PBX_URI,
+            human_secondary_type="PSTN_NUMBER",
+            human_secondary_destination="+447911123111",
+        )
+    )
+    session.commit()
+    session.refresh(garage)
+
+    result = existing_number.provision(garage)
+    checklist = result["test_checklist"]
+    assert any(PBX_URI in item for item in checklist)
+    assert any("+447911123111" in item for item in checklist)
+    assert any("loop" in item.lower() or "menu" in item.lower() for item in checklist)
+
+
+def test_checklist_flags_no_reachable_destination(monkeypatch, session, garage, voice_config):
+    """A business that provisions successfully but has no safe human
+    destination must not get a checklist implying one exists."""
+    client = _FakeClient()
+    monkeypatch.setattr(existing_number, "get_subaccount_client", lambda g: client)
+    session.add(
+        _ready_settings(
+            garage.id,
+            human_primary_type="PSTN_NUMBER",
+            human_primary_destination="+441619990001",  # == its own public number - loop
+        )
+    )
+    session.commit()
+    session.refresh(garage)
+
+    result = existing_number.provision(garage)
+    assert any(
+        "no human destination is currently reachable" in item.lower()
+        for item in result["test_checklist"]
+    )
+
+
 def test_describe_integration_never_carries_a_secret_looking_key(
     monkeypatch, session, garage, voice_config
 ):

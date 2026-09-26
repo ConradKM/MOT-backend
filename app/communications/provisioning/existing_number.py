@@ -295,6 +295,43 @@ def configure_at_carrier(garage: Garage) -> dict | None:
     return None
 
 
+def test_checklist(garage: Garage) -> list[str]:
+    """What the operator should actually dial and listen for before
+    activating - CoMaz cannot verify a real inbound call from the carrier
+    itself, so this is shown rather than inferred. Only shown once
+    provisioning has succeeded (see :func:`describe_integration`); the
+    destinations named are the *effective* chain a call would really use,
+    the same one loop prevention already checked."""
+    chain = telephony.human_destinations(garage)
+    checklist = [
+        "Call the business's public number and confirm it reaches CoMaz's phone menu or AI.",
+        "Confirm the AI can complete a normal request (e.g. book or look up an appointment).",
+    ]
+    if chain:
+        first = chain[0]
+        kind = "SIP" if first.kind == telephony.DEST_SIP_URI else "phone"
+        checklist.append(
+            f"Ask for a person and confirm the call transfers, by {kind}, to "
+            f"{first.value} - the caller should stay on the line throughout."
+        )
+        if len(chain) > 1:
+            second = chain[1]
+            checklist.append(
+                f"With the first destination not answering, confirm the call falls back to "
+                f"{second.value}."
+            )
+    else:
+        checklist.append(
+            "No human destination is currently reachable - a caller asking for a person will "
+            "only get a logged callback. Confirm this is genuinely acceptable before activating."
+        )
+    checklist.append(
+        "Confirm a rejected or unanswered transfer ends the call safely, rather than looping "
+        "back into CoMaz's own menu."
+    )
+    return checklist
+
+
 def describe_integration(garage: Garage) -> dict:
     settings = getattr(garage, "communication_settings", None)
     capability = settings.integration_capability if settings else None
@@ -314,6 +351,12 @@ def describe_integration(garage: Garage) -> dict:
         "integration_error": settings.integration_error if settings else None,
         "still_required": still_required(garage),
         "configure_at_carrier": configure_at_carrier(garage),
+        "test_checklist": (
+            test_checklist(garage)
+            if status
+            in (STATUS_AWAITING_CARRIER_CONFIGURATION, STATUS_READY_FOR_TEST, STATUS_ACTIVE)
+            else []
+        ),
         "can_activate": status in (STATUS_AWAITING_CARRIER_CONFIGURATION, STATUS_READY_FOR_TEST)
         and not still_required(garage),
     }

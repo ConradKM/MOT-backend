@@ -1030,6 +1030,7 @@ class ExistingNumberIntegrationSchema(Schema):
     configure_at_carrier = fields.Nested(
         CarrierConfigurationSchema, dump_only=True, allow_none=True
     )
+    test_checklist = fields.List(fields.Str(), dump_only=True)
     can_activate = fields.Bool(dump_only=True)
 
 
