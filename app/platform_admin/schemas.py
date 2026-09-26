@@ -994,6 +994,45 @@ class TelephonySetupSchema(Schema):
     effective_human_chain = fields.List(fields.Nested(HumanChainEntrySchema), dump_only=True)
 
 
+class CarrierConfigurationSchema(Schema):
+    """Exactly what the operator needs to give the carrier - shown once
+    CoMaz's own side is provisioned (app/communications/provisioning/
+    existing_number.py::configure_at_carrier). Fields vary by mode, so
+    everything here is optional and unknown keys are simply absent."""
+
+    mode = fields.Str(dump_only=True)
+    termination_domain = fields.Str(dump_only=True)
+    public_number_to_send = fields.Str(dump_only=True, allow_none=True)
+    ip_authorisation = fields.Str(dump_only=True)
+    outbound_transfer_target = fields.Str(dump_only=True)
+    forward_from = fields.Str(dump_only=True, allow_none=True)
+    forward_to = fields.Str(dump_only=True, allow_none=True)
+    instruction = fields.Str(dump_only=True)
+
+
+class ExistingNumberIntegrationSchema(Schema):
+    """Provider-agnostic existing-number onboarding - what the operator was
+    told about the carrier, CoMaz's recommendation, and readiness
+    (app/communications/provisioning/existing_number.py::describe_integration).
+    """
+
+    integration_provider_name = fields.Str(dump_only=True, allow_none=True)
+    integration_provider_product = fields.Str(dump_only=True, allow_none=True)
+    integration_capability = fields.Str(dump_only=True)
+    recommended_mode = fields.Str(dump_only=True, allow_none=True)
+    integration_carrier_sip_uri = fields.Str(dump_only=True, allow_none=True)
+    integration_carrier_ip_addresses = fields.Str(dump_only=True, allow_none=True)
+    integration_notes = fields.Str(dump_only=True, allow_none=True)
+    integration_status = fields.Str(dump_only=True)
+    integration_status_label = fields.Str(dump_only=True)
+    integration_error = fields.Str(dump_only=True, allow_none=True)
+    still_required = fields.List(fields.Str(), dump_only=True)
+    configure_at_carrier = fields.Nested(
+        CarrierConfigurationSchema, dump_only=True, allow_none=True
+    )
+    can_activate = fields.Bool(dump_only=True)
+
+
 class VoiceSetupSchema(Schema):
     status = fields.Str(dump_only=True, validate=validate.OneOf(VOICE_STATUSES))
     status_label = fields.Str(dump_only=True)
@@ -1016,6 +1055,7 @@ class VoiceSetupSchema(Schema):
     online_at = fields.DateTime(dump_only=True, allow_none=True)
     last_error = fields.Nested(ProviderErrorSchema, dump_only=True, allow_none=True)
     telephony = fields.Nested(TelephonySetupSchema, dump_only=True)
+    existing_number_integration = fields.Nested(ExistingNumberIntegrationSchema, dump_only=True)
 
 
 class OpenAIVoiceSetupSchema(Schema):
@@ -1275,6 +1315,25 @@ class TelephonyUpdateSchema(Schema):
     )
     human_secondary_destination = fields.Str(load_default=None, allow_none=True)
     human_transfer_timeout_seconds = fields.Int(load_default=None, allow_none=True, strict=True)
+
+
+class ExistingNumberProviderUpdateSchema(Schema):
+    """What the operator learned about the carrier - non-secret. Detailed
+    rules (SIP URI shape, IP address format) are enforced by
+    app/communications/provisioning/existing_number.py and reported as a
+    422 naming the field."""
+
+    integration_provider_name = fields.Str(load_default=None, allow_none=True)
+    integration_provider_product = fields.Str(load_default=None, allow_none=True)
+    integration_capability = fields.Str(
+        required=True,
+        validate=validate.OneOf(
+            ("UNKNOWN", "BIDIRECTIONAL_SIP", "INBOUND_SIP_ONLY", "FORWARDING_ONLY")
+        ),
+    )
+    integration_carrier_sip_uri = fields.Str(load_default=None, allow_none=True)
+    integration_carrier_ip_addresses = fields.Str(load_default=None, allow_none=True)
+    integration_notes = fields.Str(load_default=None, allow_none=True)
 
 
 class TestCallSchema(Schema):

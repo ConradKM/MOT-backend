@@ -21,7 +21,7 @@ already draws around business identity fields. See
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -126,5 +126,43 @@ class GarageCommunicationSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  #
     human_secondary_destination: Mapped[str | None] = mapped_column(String(255))
     # Ring time per human destination before moving on. NULL = default.
     human_transfer_timeout_seconds: Mapped[int | None] = mapped_column(Integer)
+
+    # Provider-agnostic existing-number onboarding - see
+    # app/communications/provisioning/existing_number.py. What the operator
+    # was told about the business's carrier, before CoMaz decides anything.
+    # Non-secret only: a carrier auth *password* has nowhere safe to live on
+    # this table (see the module docstring above) and is never captured here.
+    integration_provider_name: Mapped[str | None] = mapped_column(String(120))
+    integration_provider_product: Mapped[str | None] = mapped_column(String(120))
+    # UNKNOWN / BIDIRECTIONAL_SIP / INBOUND_SIP_ONLY / FORWARDING_ONLY. NULL
+    # behaves as UNKNOWN - nothing may be provisioned or activated from it.
+    integration_capability: Mapped[str | None] = mapped_column(String(30))
+    # The carrier's own SIP endpoint that CoMaz should send outbound (human
+    # transfer) calls to via a Twilio Connection Policy Target - e.g.
+    # "sip:trunk.provider.example". NULL = not yet known, or the carrier
+    # can't take inbound SIP from CoMaz (fall back to a PSTN human number).
+    integration_carrier_sip_uri: Mapped[str | None] = mapped_column(String(255))
+    # Comma-separated IPv4/IPv6 addresses the carrier signals SIP INVITEs
+    # from, used to build the SIP Domain's IP Access Control List. Not a
+    # secret - it identifies a network, not a credential.
+    integration_carrier_ip_addresses: Mapped[str | None] = mapped_column(String(500))
+    # Free-form operator notes - product quirks, contact details, ticket
+    # numbers. Never a place for a password or API key.
+    integration_notes: Mapped[str | None] = mapped_column(Text)
+    # NOT_CONFIGURED / READY_TO_PROVISION / PROVISIONING /
+    # AWAITING_CARRIER_CONFIGURATION / READY_FOR_TEST / ACTIVE / ERROR. See
+    # app/communications/provisioning/existing_number.py::INTEGRATION_STATUSES.
+    # NULL behaves as NOT_CONFIGURED.
+    integration_status: Mapped[str | None] = mapped_column(String(30))
+    # The most recent provisioning failure, shown to the operator verbatim
+    # rather than a generic "something went wrong". Cleared on the next
+    # successful provisioning attempt.
+    integration_error: Mapped[str | None] = mapped_column(Text)
+    # The Connection Policy ("NY…") and IP Access Control List ("AL…") Twilio
+    # resources CoMaz provisioned for this integration - non-secret resource
+    # references, the same category as byoc_trunk_sid/byoc_sip_domain_sid
+    # above.
+    integration_connection_policy_sid: Mapped[str | None] = mapped_column(String(64))
+    integration_ip_acl_sid: Mapped[str | None] = mapped_column(String(64))
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="communication_settings")
