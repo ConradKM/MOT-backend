@@ -5,7 +5,7 @@ from flask_smorest import Blueprint, abort
 from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
 from app.extensions import db
-from app.models.garage import Garage
+from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
 from app.public_booking.payload import public_garage_payload
 from app.public_booking.schemas import PublicGarageDetailSchema
 
@@ -112,7 +112,16 @@ class BookingRequestAutoAccept(MethodView):
 class PublicGarageList(MethodView):
     @public_garages_blp.response(200, PublicGarageDetailSchema(many=True))
     def get(self):
-        return [public_garage_payload(g) for g in Garage.query.order_by(Garage.name).all()]
+        # This is an alternate entry point into the same public booking
+        # surface as /api/public/<slug>.  Keep the tenant lifecycle boundary
+        # identical: suspended and archived businesses must not remain
+        # discoverable merely because a customer has an old UUID URL.
+        garages = (
+            Garage.query.filter(Garage.status.in_((GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL)))
+            .order_by(Garage.name)
+            .all()
+        )
+        return [public_garage_payload(garage) for garage in garages]
 
 
 @public_garages_blp.route("/<uuid:garage_id>")
@@ -126,7 +135,10 @@ class PublicGarageResource(MethodView):
         different view of the same page. Both call
         app/public_booking/payload.py.
         """
-        garage = db.session.get(Garage, garage_id)
+        garage = Garage.query.filter(
+            Garage.id == garage_id,
+            Garage.status.in_((GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL)),
+        ).first()
 
         if not garage:
             abort(404, message="Garage not found")

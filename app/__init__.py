@@ -14,6 +14,32 @@ from .platform_admin.impersonation import CLAIM_SESSION_ID as IMPERSONATION_CLAI
 from .platform_admin.security import ACCOUNT_TYPE_PLATFORM_ADMIN
 
 
+def _require_non_default_signing_keys(app: Flask) -> None:
+    """Fail closed when a non-development deployment has no real signing key.
+
+    Flask sessions, JWTs, password-reset tokens, and the fallback SIP handoff
+    signature all ultimately rely on these keys.  A known development value in
+    a deployed environment would let an attacker mint otherwise-valid tokens,
+    so a misconfigured deployment must fail at startup rather than run
+    insecurely.
+    """
+    if app.config["APP_ENV"] == "development":
+        return
+
+    insecure_values = {"dev-only-change-me", "change-me"}
+    insecure = [
+        name
+        for name in ("SECRET_KEY", "JWT_SECRET_KEY")
+        if not app.config.get(name) or app.config[name] in insecure_values
+    ]
+    if insecure:
+        raise RuntimeError(
+            "Refusing to start outside development with an unset or default "
+            f"signing key: {', '.join(insecure)}. Set SECRET_KEY to a strong, "
+            "deployment-specific secret."
+        )
+
+
 def _configure_logging(app: Flask) -> None:
     """Send application logs to stdout at a configurable level so they show up
     in the platform log stream (Render). Without this, Flask's logger falls
@@ -172,6 +198,7 @@ def _token_revoked(_jwt_header, jwt_payload) -> bool:
 def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
+    _require_non_default_signing_keys(app)
 
     # Render terminates TLS and proxies every request through exactly one
     # internal hop before it reaches this container, so `request.remote_addr`

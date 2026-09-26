@@ -491,7 +491,14 @@ def slot_capacity_usage(
         # date), which differs near midnight for non-UTC businesses.
         windows = _load_reserved_windows(garage, local_day_for(garage, slot_start))
         capacity -= _reserved_at(windows, slot_start, slot_end)
-    appointments, pending = _load_day_usage(garage, day)
+    # ``slot_start`` is the instant whose capacity is being checked.  Callers
+    # such as staff scheduling naturally have a UTC timestamp and may pass
+    # its ``.date()``, which is the previous calendar day for businesses east
+    # of UTC shortly after local midnight. Pending requests store their
+    # *business-local* preferred_date, so derive that date here instead of
+    # trusting the caller's calendar interpretation.
+    usage_day = local_day_for(garage, slot_start)
+    appointments, pending = _load_day_usage(garage, usage_day)
     if exclude_request_id is not None:
         pending = [p for p in pending if p.id != exclude_request_id]
     if exclude_appointment_id is not None:
