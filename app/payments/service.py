@@ -521,6 +521,41 @@ def _find_payment(
     return payment
 
 
+def _lock_payment_success_state(
+    provider_payment_id: str | None, provider_account_id: str | None = None
+) -> tuple[BookingPayment, BookingRequest] | None:
+    """Lock a successful-payment transition in booking-request then payment order.
+
+    Hold expiry and staff rejection already take the booking request before
+    its payment rows.  A payment-success webhook changes *both* rows, so
+    taking the payment first here would invert that order: an expiry worker
+    could hold the request while a webhook held the payment, leaving each
+    transaction waiting for the other.  The initial lookup is deliberately
+    unlocked and is only used to discover the request id; both rows are
+    re-read under the authoritative lock order before their state is used.
+    """
+    if not provider_payment_id:
+        return None
+    query = BookingPayment.query.filter_by(provider_payment_id=provider_payment_id)
+    if provider_account_id is not None:
+        query = query.filter_by(provider_account_id=provider_account_id)
+    candidate = cast(BookingPayment | None, query.first())
+    if candidate is None:
+        return None
+
+    booking_request = cast(
+        BookingRequest,
+        BookingRequest.query.filter_by(id=candidate.booking_request_id).with_for_update().one(),
+    )
+    payment = cast(
+        BookingPayment | None,
+        BookingPayment.query.filter_by(id=candidate.id).with_for_update().first(),
+    )
+    if payment is None:
+        return None
+    return payment, booking_request
+
+
 def _locked_active_payment(booking_request: BookingRequest) -> BookingPayment | None:
     """Return the current payment attempt while holding its database rows.
 
@@ -546,14 +581,16 @@ def _locked_active_payment(booking_request: BookingRequest) -> BookingPayment | 
 def _handle_payment_succeeded(
     event: ProviderWebhookEvent, created_notifications: list[BookingRequest]
 ) -> None:
-    payment = _find_payment(event.provider_payment_id, event.provider_account_id)
-    if payment is None or payment.status == "SUCCEEDED":
+    locked = _lock_payment_success_state(event.provider_payment_id, event.provider_account_id)
+    if locked is None:
+        return
+    payment, booking_request = locked
+    if payment.status == "SUCCEEDED":
         return  # unknown intent, or already handled (duplicate/out-of-order)
 
     payment.status = "SUCCEEDED"
     payment.paid_at = datetime.now(UTC)
 
-    booking_request = payment.booking_request
     if booking_request.status == "AWAITING_PAYMENT":
         booking_request.status = "PENDING"
         booking_request.payment_hold_expires_at = None
