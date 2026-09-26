@@ -45,12 +45,14 @@ from app.models.platform.audit_log import (
     ACTION_TENANT_DELETE,
     ACTION_TENANT_PLAN_CHANGE,
     ACTION_TENANT_REACTIVATE,
+    ACTION_TENANT_STRIPE_RECONNECT,
     ACTION_TENANT_SUSPEND,
     ACTION_TENANT_UNARCHIVE,
     ACTION_TENANT_UPDATE,
 )
 from app.models.role import Role, employee_roles
 from app.models.vehicle import Vehicle
+from app.payments.connect import AccountHealthyError, ConnectError, reconnect_stripe_account
 
 from .audit import record_audit
 from .features import UnknownPlanError, validate_plan
@@ -410,6 +412,40 @@ def suspend_tenant(*, admin, garage: Garage, reason: str) -> Garage:
     )
     db.session.commit()
     return garage
+
+
+def reconnect_tenant_stripe(*, admin, garage: Garage, reason: str) -> dict:
+    """Platform Admin recovery action for a tenant whose stored Stripe
+    Connect account the current CoMaz platform can no longer reach at all
+    (see app.payments.connect.reconnect_stripe_account and issue #271).
+
+    Deliberately superadmin-only and reason-required, like suspend/archive
+    above - this detaches a tenant's payment account and starts a brand new
+    one, which is not a routine action. It never runs automatically just
+    because a Stripe call errors; only an explicit admin request reaches it.
+    """
+    reason = (reason or "").strip()
+    if not reason:
+        raise TenantError("A reconnect reason is required.")
+
+    try:
+        new_account_id, onboarding_url = reconnect_stripe_account(
+            garage, reason=reason, admin=admin
+        )
+    except AccountHealthyError as exc:
+        raise TenantError(str(exc)) from exc
+    except ConnectError as exc:
+        raise TenantError(f"Could not reconnect Stripe for this business: {exc}") from exc
+
+    record_audit(
+        admin=admin,
+        action=ACTION_TENANT_STRIPE_RECONNECT,
+        garage=garage,
+        summary=f"Reconnected {garage.name}'s Stripe Connect account",
+        details={"reason": reason, "new_stripe_account_id": new_account_id},
+    )
+    db.session.commit()
+    return {"stripe_account_id": new_account_id, "onboarding_url": onboarding_url}
 
 
 def reactivate_tenant(*, admin, garage: Garage, status: str = GARAGE_STATUS_ACTIVE) -> Garage:

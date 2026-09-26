@@ -237,6 +237,15 @@ class TenantUnarchiveSchema(Schema):
     status = fields.Str(load_default="ACTIVE", validate=validate.OneOf(("ACTIVE", "TRIAL")))
 
 
+class TenantStripeReconnectSchema(Schema):
+    reason = fields.Str(required=True, validate=validate.Length(min=1, max=2000))
+
+
+class TenantStripeReconnectResultSchema(Schema):
+    stripe_account_id = fields.Str(dump_only=True)
+    onboarding_url = fields.Str(dump_only=True)
+
+
 class TenantDeleteSchema(Schema):
     confirm = fields.Str(required=True, validate=validate.Length(min=1, max=200))
 

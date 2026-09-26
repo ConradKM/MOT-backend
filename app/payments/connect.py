@@ -21,6 +21,7 @@ from flask import current_app
 
 from app.extensions import db
 from app.models.garage import Garage
+from app.models.payments.garage_payment_account_history import GaragePaymentAccountHistory
 from app.models.payments.garage_payment_settings import GaragePaymentSettings
 
 
@@ -32,6 +33,15 @@ class ConnectError(RuntimeError):
     def __init__(self, message: str, *, code: str | None = None):
         super().__init__(message)
         self.code = code
+
+
+class AccountHealthyError(ConnectError):
+    """Raised by :func:`reconnect_stripe_account` when Stripe can still
+    reach the garage's existing connected account. Reconnect exists solely
+    to recover a tenant whose account the platform has lost access to - it
+    must never be usable to force a fresh account onto a connection that
+    still works, which would silently orphan a working, possibly
+    already-onboarded account."""
 
 
 def _secret_key() -> str:
@@ -378,3 +388,114 @@ def sync_account_from_webhook(account: dict) -> None:
     except ConnectError:
         pass
     db.session.commit()
+
+
+def account_access_is_broken(garage: Garage) -> bool:
+    """Live probe: can the current platform Stripe key still reach this
+    garage's stored connected account at all?
+
+    Only ever returns True for the specific, unambiguous case Stripe itself
+    reports as "this key has no relationship to that account" (see
+    _handle_account_access_error) - never for a merely incomplete or
+    restricted account, which is a normal, recoverable-by-the-owner state,
+    not something Platform Admin's reconnect exists to fix. Any other
+    Stripe failure (rate limit, network blip, bad request) propagates as
+    ConnectError rather than being folded into "broken", since this
+    function's only job is confirming that one specific failure mode.
+    """
+    settings = garage.payment_settings
+    if settings is None or not settings.stripe_account_id:
+        raise ConnectError("No connected account for this business yet.", code="no_account")
+
+    stripe = _client()
+    try:
+        stripe.Account.retrieve(settings.stripe_account_id)
+    except stripe.error.PermissionError:
+        return True
+    except stripe.error.StripeError as exc:  # pragma: no cover - real API only
+        raise ConnectError(str(exc), code=getattr(exc, "code", None)) from exc
+    return False
+
+
+def reconnect_stripe_account(garage: Garage, *, reason: str, admin=None) -> tuple[str, str]:
+    """Platform Admin recovery path for a tenant whose stored connected
+    account the current CoMaz Stripe platform can no longer reach at all
+    (see docs/STRIPE_CONNECT_SETUP.md and issue #271) - never reachable
+    through the garage's own "Continue Stripe setup", which only ever
+    resumes the existing account.
+
+    Refuses outright (``AccountHealthyError``) unless a live probe confirms
+    Stripe itself reports the account inaccessible - this is a recovery
+    action, not a way to reset a working connection. On confirmation:
+    records the old account id in :class:`GaragePaymentAccountHistory` for
+    audit (never overwritten, never deleted), detaches it as this garage's
+    active account and commits, then creates a brand new connected account
+    under the *current* platform credentials and mints a fresh onboarding
+    link.
+
+    Idempotent against a double-submit: the detach commits before the new
+    account is created, so a second call that lands after the first has
+    finished sees a freshly created, live-reachable account and is refused
+    as healthy - it can never create two active accounts for the same
+    garage. A second call that lands *between* the detach and the new
+    account being created instead sees "no connected account yet" (a safe,
+    if less friendly, refusal) rather than racing the first call to create
+    a duplicate - the row lock below serialises the two attempts so only
+    one of them ever reaches Stripe's account-creation call at a time.
+    """
+    settings = (
+        db.session.query(GaragePaymentSettings)
+        .filter_by(garage_id=garage.id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if settings is None or not settings.stripe_account_id:
+        raise ConnectError(
+            "This business has no connected account yet - use ordinary Stripe "
+            "onboarding instead of reconnect.",
+            code="no_account",
+        )
+
+    if not account_access_is_broken(garage):
+        raise AccountHealthyError(
+            "This business's Stripe connection is healthy - reconnect only "
+            "applies to an account CoMaz can no longer reach.",
+            code="account_healthy",
+        )
+
+    old_account_id = settings.stripe_account_id
+    db.session.add(
+        GaragePaymentAccountHistory(
+            garage_id=garage.id,
+            provider="stripe",
+            stripe_account_id=old_account_id,
+            reason=reason,
+            detached_by_admin_id=getattr(admin, "id", None),
+        )
+    )
+    current_app.logger.warning(
+        "STRIPE_CONNECT_RECONNECT_DETACHED garage=%s old_account=%s reason=%s",
+        garage.id,
+        old_account_id,
+        reason,
+    )
+    settings.stripe_account_id = None
+    settings.stripe_charges_enabled = False
+    settings.stripe_payouts_enabled = False
+    settings.stripe_details_submitted = False
+    settings.stripe_onboarding_complete = False
+    db.session.commit()
+
+    new_account_id = create_connected_account(garage)
+
+    base = current_app.config["APP_BASE_URL"].rstrip("/")
+    return_url = f"{base}/{garage.id}/settings/payments?onboarding=return"
+    refresh_url = f"{base}/{garage.id}/settings/payments?onboarding=refresh"
+    url = create_account_link(garage, return_url=return_url, refresh_url=refresh_url)
+
+    current_app.logger.warning(
+        "STRIPE_CONNECT_RECONNECT_CREATED garage=%s new_account=%s",
+        garage.id,
+        new_account_id,
+    )
+    return new_account_id, url
