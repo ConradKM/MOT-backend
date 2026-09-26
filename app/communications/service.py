@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from sqlalchemy.exc import IntegrityError
+
 from app.extensions import db
 from app.models.communications.communication_log import (
     CHANNEL_SMS,
@@ -389,23 +391,48 @@ def record_inbound_communication(
     customer=None,
 ) -> CommunicationLog:
     """Log an inbound call/message a webhook just received. Always succeeds -
-    there is no "send" step to fail here, only a record to keep."""
-    return _create_log(
-        garage_id=garage.id,
-        channel=channel,
-        direction=DIRECTION_INBOUND,
-        external_provider=provider,
-        external_id=external_id,
-        # For a voice call this row is the call itself; carrying the CallSid
-        # in call_sid too lets the engine's transcript-turn rows group under
-        # it (see app/communications/queries.py).
-        call_sid=external_id if channel == CHANNEL_VOICE else None,
-        from_address=from_address,
-        to_address=to_address,
-        status=status,
-        body=body,
-        **_related_ids(customer=customer),
-    )
+    there is no "send" step to fail here, only a record to keep.
+
+    Idempotent on ``external_id`` (CallSid/MessageSid): Twilio redelivers the
+    *initial* inbound webhook itself, not just status callbacks, if it never
+    received a fast, valid response the first time - a bare INSERT here would
+    hit CommunicationLog.external_id's unique constraint on that redelivery
+    and crash with an unhandled IntegrityError instead of a clean replay. The
+    existing row (created by the original delivery, or by a concurrent one
+    that won the race) is returned instead of a duplicate."""
+    if external_id:
+        existing: CommunicationLog | None = CommunicationLog.query.filter_by(
+            external_id=external_id
+        ).first()
+        if existing is not None:
+            return existing
+
+    try:
+        return _create_log(
+            garage_id=garage.id,
+            channel=channel,
+            direction=DIRECTION_INBOUND,
+            external_provider=provider,
+            external_id=external_id,
+            # For a voice call this row is the call itself; carrying the CallSid
+            # in call_sid too lets the engine's transcript-turn rows group under
+            # it (see app/communications/queries.py).
+            call_sid=external_id if channel == CHANNEL_VOICE else None,
+            from_address=from_address,
+            to_address=to_address,
+            status=status,
+            body=body,
+            **_related_ids(customer=customer),
+        )
+    except IntegrityError:
+        # Lost a race with a concurrent delivery of the same webhook.
+        db.session.rollback()
+        retry: CommunicationLog | None = CommunicationLog.query.filter_by(
+            external_id=external_id
+        ).first()
+        if retry is None:
+            raise
+        return retry
 
 
 def update_communication_status(
