@@ -8,6 +8,7 @@ import datetime
 
 from app.models.booking_request import BookingRequest
 from app.models.garage_schedule import GarageScheduleException
+from app.public_booking.availability import slot_capacity_usage
 
 UTC = datetime.UTC
 
@@ -231,6 +232,34 @@ def test_pending_booking_request_consumes_capacity(client, session, garage):
         ]
     }
     assert slots["10:00"]["status"] == "available"
+
+
+def test_capacity_uses_local_day_for_pending_requests_near_midnight(session, garage):
+    """A staff-created UTC timestamp can fall on the preceding UTC day while
+    still being the same business-local day as a pending public request."""
+    garage.timezone = "Pacific/Auckland"
+    local_day = datetime.date(2026, 7, 15)
+    session.add(
+        BookingRequest(
+            garage_id=garage.id,
+            status="PENDING",
+            customer_first_name="Sam",
+            customer_last_name="Lee",
+            customer_email="sam.lee@example.com",
+            vehicle_registration="TZ11 DAY",
+            preferred_date=local_day,
+            preferred_time=datetime.time(0, 30),
+            requested_duration_minutes=60,
+        )
+    )
+    session.commit()
+
+    # 00:30 in Auckland is 12:30 UTC on the previous calendar day during
+    # winter. This reproduces the date a staff scheduling caller supplies.
+    slot_start = datetime.datetime(2026, 7, 14, 12, 30, tzinfo=UTC)
+    used, capacity = slot_capacity_usage(garage, slot_start.date(), slot_start, 60)
+
+    assert (used, capacity) == (1, 1)
 
 
 def test_availability_releases_a_time_expired_deposit_hold(client, session, garage):
