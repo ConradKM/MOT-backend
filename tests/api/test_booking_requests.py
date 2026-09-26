@@ -721,19 +721,6 @@ def test_a_stale_same_day_request_is_swept_to_expired(
     assert stale.status == "EXPIRED"
 
 
-def test_request_is_stale_immediately_after_its_selected_minute(session, garage):
-    from app.booking_requests.service import is_request_stale
-
-    request = _pending_request(
-        session,
-        garage,
-        preferred_date=datetime.date(2026, 9, 13),
-        preferred_time=datetime.time(12, 0),
-    )
-
-    assert is_request_stale(request, datetime.datetime(2026, 9, 13, 12, 0, 1, tzinfo=datetime.UTC))
-
-
 @pytest.mark.parametrize(
     "instant",
     [

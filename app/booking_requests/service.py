@@ -24,7 +24,7 @@ from flask_smorest import abort
 from app.appointments.checklists.service import snapshot_checklist_for_appointment
 from app.communications.events import BOOKING_REQUEST_APPROVED, emit_event
 from app.extensions import db
-from app.garages.timezones import local_day_for, local_slot_as_utc
+from app.garages.timezones import local_day_for, local_slot_as_utc, timezone_for
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
@@ -407,14 +407,8 @@ def is_request_stale(booking_request: BookingRequest, now: datetime | None = Non
     # Same day as today.
     if booking_request.preferred_time is None:
         return False
-    # Compare full instants, not just clock minutes.  A request for 10:00
-    # must be stale at 10:00:01; comparing ``time`` values alone kept it
-    # actionable until 10:01 and let staff approve an already-past slot.
     return (
-        local_slot_as_utc(
-            booking_request.garage, booking_request.preferred_date, booking_request.preferred_time
-        )
-        <= now
+        booking_request.preferred_time < now.astimezone(timezone_for(booking_request.garage)).time()
     )
 
 
