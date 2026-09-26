@@ -8,6 +8,7 @@ import datetime
 import json
 import urllib.error
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -141,6 +142,24 @@ def test_replayed_plain_booking_attempt_creates_only_one_pending_request(client,
     assert first.status_code == replay.status_code == 201
     assert replay.get_json()["id"] == first.get_json()["id"]
     assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
+
+
+def test_concurrent_plain_booking_attempts_resolve_to_one_request(app, garage):
+    """A browser retry racing its original POST must return one reservation."""
+    payload = _valid_payload(payment_attempt_id=str(uuid.uuid4()))
+    slug = garage.slug
+
+    def submit():
+        with app.test_client() as concurrent_client:
+            return concurrent_client.post(f"/api/public/{slug}/booking-requests", json=payload)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: submit(), range(2)))
+
+    assert [response.status_code for response in responses] == [201, 201]
+    assert len({response.get_json()["id"] for response in responses}) == 1
+    with app.app_context():
+        assert BookingRequest.query.filter_by(garage_id=garage.id).count() == 1
 
 
 def test_replayed_plain_booking_without_a_token_returns_the_active_request(client, garage):
