@@ -43,7 +43,7 @@ class GarageScheduleSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type
         Uuid, ForeignKey("garages.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # Granularity of the start times offered to customers.
-    slot_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    slot_interval_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     # How long a booked slot is assumed to occupy when the request has no
     # appointment type, or the type has no default_duration_minutes.
     default_appointment_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
