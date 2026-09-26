@@ -241,7 +241,7 @@ def test_job_health_reports_checks_with_a_worst_case_status(platform_client, gar
     assert response.status_code == 200
     assert response.json["status"] in {"ok", "warning", "critical", "unknown"}
     keys = {check["key"] for check in response.json["checks"]}
-    assert {"celery_broker", "mot_reminder_job", "stuck_reminders"} <= keys
+    assert {"reminder_scheduler", "mot_reminder_job", "stuck_reminders"} <= keys
 
 
 def test_a_reminder_job_with_no_history_is_unknown_not_ok(platform_client, garage):
@@ -253,6 +253,19 @@ def test_a_reminder_job_with_no_history_is_unknown_not_ok(platform_client, garag
     }
 
     assert checks["mot_reminder_job"]["status"] == "unknown"
+
+
+def test_missing_optional_celery_broker_is_not_reported_as_a_scheduler_failure(
+    platform_client, garage
+):
+    """Production uses Render Cron and the direct Flask command, not Celery."""
+    checks = {
+        check["key"]: check
+        for check in platform_client.get("/api/platform-admin/operations/jobs").json["checks"]
+    }
+
+    assert checks["reminder_scheduler"]["status"] == "unknown"
+    assert "Render Cron Job" in checks["reminder_scheduler"]["detail"]
 
 
 def test_recent_communication_failures_escalate_job_health(platform_client, garage, session):

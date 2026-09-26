@@ -344,19 +344,19 @@ def job_health(*, now: datetime | None = None) -> dict:
     now = now or _utcnow()
     checks: list[dict] = []
 
-    # --- MOT reminder job (app/tasks/celery_app.py::send_due_reminders) -----
-    broker = current_app.config.get("CELERY_BROKER_URL") or ""
+    # --- Reminder scheduler -------------------------------------------------
+    # Production invokes the Celery-free Flask command from a Render Cron Job.
+    # A CELERY_BROKER_URL is therefore optional (the Celery wrapper still
+    # exists for local/legacy deployments) and must not be presented as a
+    # production scheduler failure when absent.
     checks.append(
         _check(
-            "celery_broker",
-            "Celery broker configured",
-            OK if broker else WARNING,
-            (
-                "A broker URL is configured for the reminder worker."
-                if broker
-                else "No CELERY_BROKER_URL is set - scheduled reminder sends will not run "
-                "unless something else invokes send_due_automatic_reminders()."
-            ),
+            "reminder_scheduler",
+            "Reminder scheduler",
+            UNKNOWN,
+            "Production uses a Render Cron Job to run `flask send-due-reminders`. "
+            "Its runtime schedule is external to this web process; inspect reminder "
+            "outcomes below rather than CELERY_BROKER_URL.",
         )
     )
 
