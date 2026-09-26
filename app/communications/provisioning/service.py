@@ -33,7 +33,8 @@ from app.models.communications.garage_communication_settings import (
 )
 from app.models.garage import Garage
 
-from . import openai_voice_sip, states, voice, whatsapp
+from . import existing_number, openai_voice_sip, states, voice, whatsapp
+from .existing_number import ExistingNumberProvisioningError
 from .openai_voice_sip import OpenAIVoiceProvisioningError
 from .subaccounts import (
     SubaccountError,
@@ -526,6 +527,43 @@ def action_set_telephony(garage: Garage, data: dict) -> GarageCommunicationsOnbo
         setattr(settings, column, value)
     db.session.commit()
     return row
+
+
+def action_set_existing_number_provider(garage: Garage, data: dict) -> dict:
+    """Record what the operator learned about this business's carrier -
+    provider/product/capability, and any non-secret routing details.
+    Configuration only, like ``action_set_telephony`` - no Twilio call is
+    made here; that is ``action_provision_existing_number``."""
+    settings = ensure_settings(garage)
+    try:
+        values = existing_number.validate_provider_info(data)
+    except existing_number.ExistingNumberValidationError as exc:
+        db.session.rollback()
+        raise ProvisioningActionError(str(exc), code=exc.field) from exc
+    for column, value in values.items():
+        setattr(settings, column, value)
+    db.session.commit()
+    return existing_number.describe_integration(garage)
+
+
+def action_provision_existing_number(garage: Garage) -> dict:
+    """Provision CoMaz's own side of this business's existing-number
+    integration - idempotent, and never activates anything by itself."""
+    ensure_settings(garage)
+    try:
+        return existing_number.provision(garage)
+    except ExistingNumberProvisioningError as exc:
+        raise ProvisioningActionError(str(exc), code=exc.code) from exc
+
+
+def action_activate_existing_number(garage: Garage) -> dict:
+    """The operator confirms the carrier is configured and the manual test
+    checklist has been run."""
+    ensure_settings(garage)
+    try:
+        return existing_number.activate(garage)
+    except ExistingNumberProvisioningError as exc:
+        raise ProvisioningActionError(str(exc), code=exc.code) from exc
 
 
 def action_test_voice(garage: Garage, *, to_number: str) -> dict:

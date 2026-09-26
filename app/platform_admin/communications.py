@@ -32,7 +32,7 @@ from sqlalchemy import func, or_, select
 
 from app.ai_voice.config import openai_voice_enabled
 from app.communications import telephony
-from app.communications.provisioning import states
+from app.communications.provisioning import existing_number, states
 from app.communications.provisioning.errors import explain
 from app.communications.provisioning.subaccounts import has_credential
 from app.communications.provisioning.voice import webhook_urls as voice_webhook_urls
@@ -658,6 +658,7 @@ def communications_detail(garage: Garage) -> dict:
     # Detail only - it costs a few queries per business, which the overview
     # (one fixed set of queries for every business) deliberately avoids.
     voice["telephony"] = telephony.describe(garage)
+    voice["existing_number_integration"] = existing_number.describe_integration(garage)
     wa = _whatsapp_view(garage, settings, row)
     overall = _overall_status(voice, wa, settings)
 

@@ -27,6 +27,7 @@ from app.communications.provisioning import voice as voice_provisioning
 from app.communications.provisioning.errors import known_error_codes
 from app.communications.provisioning.service import (
     ProvisioningActionError,
+    action_activate_existing_number,
     action_attach_subaccount,
     action_buy_voice_number,
     action_complete_embedded_signup,
@@ -37,12 +38,14 @@ from app.communications.provisioning.service import (
     action_lookup_voice_number,
     action_mark_migration_complete,
     action_mark_voice_online,
+    action_provision_existing_number,
     action_reconfigure_whatsapp_webhooks,
     action_refresh_whatsapp_status,
     action_register_sender,
     action_return_voice_number_to_parent,
     action_set_automation_enabled,
     action_set_communications_enabled,
+    action_set_existing_number_provider,
     action_set_telephony,
     action_set_voice_routing,
     action_set_whatsapp_number,
@@ -81,6 +84,7 @@ from app.platform_admin.schemas import (
     EmbeddedSignupConfigSchema,
     EmbeddedSignupResultSchema,
     ErrorCatalogueSchema,
+    ExistingNumberProviderUpdateSchema,
     ExistingVoiceNumbersSchema,
     SenderRegistrationSchema,
     SubaccountAttachSchema,
@@ -522,6 +526,84 @@ class VoiceTelephony(MethodView):
             ACTION_COMMS_VOICE_CONFIGURE,
             f"Set telephony ({data.get('telephony_mode')}) for {garage.name}",
             **{key: data.get(key) for key in TelephonyUpdateSchema().fields},
+        )
+        return communications_detail(garage)
+
+
+@platform_communications_blp.route(
+    "/tenants/<uuid:garage_id>/communications/voice/existing-number-integration"
+)
+class ExistingNumberIntegration(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.arguments(ExistingNumberProviderUpdateSchema)
+    @platform_communications_blp.response(200, CommunicationsDetailSchema)
+    def put(self, data, garage_id):
+        """Record what the operator learned about this business's carrier -
+        provider, product, capability, and any non-secret routing details.
+
+        Configuration only: nothing is changed at Twilio or the business's
+        carrier. Provisioning is a separate, explicit action
+        (``…/existing-number-integration/provision``)."""
+        garage = _require_tenant(garage_id)
+        try:
+            action_set_existing_number_provider(garage, data)
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc), errors={"json": {exc.code or "_schema": [str(exc)]}})
+        _audit(
+            garage,
+            ACTION_COMMS_VOICE_CONFIGURE,
+            f"Recorded existing-number provider "
+            f"({data.get('integration_capability')}) for {garage.name}",
+            **{key: data.get(key) for key in ExistingNumberProviderUpdateSchema().fields},
+        )
+        return communications_detail(garage)
+
+
+@platform_communications_blp.route(
+    "/tenants/<uuid:garage_id>/communications/voice/existing-number-integration/provision"
+)
+class ExistingNumberProvision(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.response(200, CommunicationsDetailSchema)
+    def post(self, garage_id):
+        """Provision CoMaz's own side of this business's existing-number
+        integration at Twilio - idempotent, safe to press again after a
+        timeout. Never activates anything and never touches the carrier."""
+        garage = _require_tenant(garage_id)
+        try:
+            action_provision_existing_number(garage)
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc), errors={"json": {exc.code or "_schema": [str(exc)]}})
+        _audit(
+            garage,
+            ACTION_COMMS_VOICE_CONFIGURE,
+            f"Provisioned existing-number integration for {garage.name}",
+        )
+        return communications_detail(garage)
+
+
+@platform_communications_blp.route(
+    "/tenants/<uuid:garage_id>/communications/voice/existing-number-integration/activate"
+)
+class ExistingNumberActivate(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @platform_communications_blp.response(200, CommunicationsDetailSchema)
+    def post(self, garage_id):
+        """The operator confirms the carrier is configured and the manual
+        test checklist (inbound, IVR/AI, AI-to-human, fallback) has been
+        run."""
+        garage = _require_tenant(garage_id)
+        try:
+            action_activate_existing_number(garage)
+        except ProvisioningActionError as exc:
+            abort(422, message=str(exc), errors={"json": {exc.code or "_schema": [str(exc)]}})
+        _audit(
+            garage,
+            ACTION_COMMS_VOICE_CONFIGURE,
+            f"Activated existing-number integration for {garage.name}",
         )
         return communications_detail(garage)
 
