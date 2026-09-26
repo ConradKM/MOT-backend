@@ -968,7 +968,9 @@ def test_concurrent_approvals_competing_for_last_capacity_commit_once(
             garage,
             customer_email=f"concurrent-{number}@example.com",
             preferred_date=datetime.date(2026, 11, 3),
-            preferred_time=datetime.time(9, 0),
+            # A date-only request has not already reserved this exact slot.
+            # The competing, staff-selected slot below is the race under test.
+            preferred_time=None,
         )
         for number in (1, 2)
     ]
