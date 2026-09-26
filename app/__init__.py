@@ -296,6 +296,7 @@ def create_app(config_class=Config):
     from .garages.routes import garages_blp, public_garages_blp
     from .garages.schedule.routes import garage_schedule_blp
     from .health.routes import health_blp
+    from .loyalty.routes import loyalty_blp
     from .mot_records.routes import mot_records_blp
     from .mot_reminders.routes import mot_reminders_blp
     from .payments.routes import payments_blp
@@ -331,6 +332,7 @@ def create_app(config_class=Config):
     api.register_blueprint(customers_blp)
     api.register_blueprint(employees_blp)
     api.register_blueprint(feedback_blp)
+    api.register_blueprint(loyalty_blp)
     api.register_blueprint(roles_blp)
     api.register_blueprint(vehicles_blp)
     api.register_blueprint(mot_records_blp)
@@ -357,6 +359,7 @@ def create_app(config_class=Config):
     from .communications.sms_automation import register_sms_handlers
     from .conversation.automation import register_default_handlers
     from .email.automation import register_email_handlers
+    from .loyalty.handlers import register_loyalty_handlers
     from .models import (  # noqa: F401
         booking_request,
         customer,
@@ -393,6 +396,9 @@ def create_app(config_class=Config):
         voice_call_metrics,
     )
     from .models.conversation import callback_request, conversation_session  # noqa: F401
+    from .models.loyalty import ledger as loyalty_ledger  # noqa: F401
+    from .models.loyalty import program as loyalty_program  # noqa: F401
+    from .models.loyalty import reward as loyalty_reward  # noqa: F401
     from .models.payments import audit_log as payment_audit_log  # noqa: F401
     from .models.payments import garage_payment_settings, payment, webhook_event  # noqa: F401
     from .models.platform import (  # noqa: F401
@@ -406,5 +412,6 @@ def create_app(config_class=Config):
     register_default_handlers()
     register_email_handlers()
     register_sms_handlers()
+    register_loyalty_handlers()
 
     return app
