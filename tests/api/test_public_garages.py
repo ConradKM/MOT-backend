@@ -2,6 +2,10 @@
 
 import uuid
 
+import pytest
+
+from app.models.garage import GARAGE_STATUS_ARCHIVED, GARAGE_STATUS_SUSPENDED
+
 
 def test_unauthenticated_client_can_list_garages(client, garage, second_garage):
     resp = client.get("/api/public/garages/")
@@ -82,6 +86,21 @@ def test_fetching_unknown_garage_id_returns_404(client):
     resp = client.get(f"/api/public/garages/{uuid.uuid4()}")
 
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize("status", [GARAGE_STATUS_SUSPENDED, GARAGE_STATUS_ARCHIVED])
+def test_offline_garage_is_not_exposed_by_public_id_routes(client, session, garage, status):
+    """Lifecycle state must guard every public booking entry point, not just
+    the slug route used by the normal booking wizard."""
+    garage.status = status
+    session.commit()
+
+    listed = client.get("/api/public/garages/")
+    by_id = client.get(f"/api/public/garages/{garage.id}")
+
+    assert listed.status_code == 200
+    assert str(garage.id) not in {item["id"] for item in listed.get_json()}
+    assert by_id.status_code == 404
 
 
 def test_the_two_public_lookups_return_the_same_payload(client, session, garage):
