@@ -451,8 +451,16 @@ class AppointmentResource(MethodView):
     @appointments_blp.response(204)
     def delete(self, appointment_id):
         garage_id = get_current_employee().garage_id
+        # Keep cancellation in the same per-tenant mutation critical section
+        # as PATCH/reschedule/create.  In particular, a completion racing a
+        # deletion must not let the stale DELETE overwrite a terminal outcome.
+        db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
 
-        appointment = Appointment.query.filter_by(id=appointment_id, garage_id=garage_id).first()
+        appointment = (
+            Appointment.query.filter_by(id=appointment_id, garage_id=garage_id)
+            .with_for_update()
+            .first()
+        )
 
         if not appointment:
             abort(404, message="Appointment not found")
@@ -461,6 +469,7 @@ class AppointmentResource(MethodView):
         # rather than hard-deletes - the booking stays visible in the
         # customer/employee's history instead of disappearing outright.
         was_cancelled = appointment.status == "CANCELLED"
+        _validate_status_transition(appointment.status, "CANCELLED", garage_id)
         appointment.status = "CANCELLED"
         db.session.commit()
         if not was_cancelled:
