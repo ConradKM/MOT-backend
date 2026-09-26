@@ -60,6 +60,13 @@ class LoyaltyReward(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[
     cycle_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default=REWARD_STATUS_AVAILABLE)
 
+    # Snapshot of LoyaltyProgram.threshold at the moment this cycle was
+    # unlocked. Progress math (app/loyalty/service.py::get_customer_progress)
+    # sums this column rather than multiplying reward count by the
+    # *current* threshold, so editing "5 visits" to "10 visits" later can
+    # never retroactively corrupt an already-consumed cycle's accounting.
+    threshold_at_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+
     # Snapshotted from LoyaltyProgram at generation time.
     reward_type: Mapped[str] = mapped_column(String(20), nullable=False)
     reward_value_minor: Mapped[int] = mapped_column(Integer, nullable=False)

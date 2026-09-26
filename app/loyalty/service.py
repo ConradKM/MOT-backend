@@ -34,6 +34,7 @@ from sqlalchemy import CursorResult, update
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.garage import Garage
@@ -89,21 +90,49 @@ def get_or_create_program(garage_id: uuid.UUID) -> LoyaltyProgram:
     return program
 
 
+# Sane upper bounds - not a real business need, just a guard against a typo
+# or malicious input (e.g. a threshold near the Integer column's limit)
+# turning into an absurd or overflow-prone configuration.
+_MAX_THRESHOLD = 1000
+_MAX_EARN_PER_VISIT = 100
+_MAX_REWARD_VALUE_MINOR = 10_000_00  # £10,000
+
+
 def update_program(program: LoyaltyProgram, data: dict) -> LoyaltyProgram:
     if "program_type" in data and data["program_type"] not in PROGRAM_TYPES:
         raise LoyaltyError(f"Unsupported programme type: {data['program_type']!r}")
     if "reward_type" in data and data["reward_type"] not in REWARD_TYPES:
         raise LoyaltyError(f"Unsupported reward type: {data['reward_type']!r}")
-    if data.get("threshold") is not None and data["threshold"] < 1:
-        raise LoyaltyError("threshold must be at least 1.")
-    if data.get("earn_per_visit") is not None and data["earn_per_visit"] < 1:
-        raise LoyaltyError("earn_per_visit must be at least 1.")
-    if data.get("reward_value_minor") is not None and data["reward_value_minor"] < 0:
-        raise LoyaltyError("reward_value_minor cannot be negative.")
+    if data.get("threshold") is not None and not (1 <= data["threshold"] <= _MAX_THRESHOLD):
+        raise LoyaltyError(f"threshold must be between 1 and {_MAX_THRESHOLD}.")
+    if data.get("earn_per_visit") is not None and not (
+        1 <= data["earn_per_visit"] <= _MAX_EARN_PER_VISIT
+    ):
+        raise LoyaltyError(f"earn_per_visit must be between 1 and {_MAX_EARN_PER_VISIT}.")
+    if data.get("reward_value_minor") is not None and not (
+        0 <= data["reward_value_minor"] <= _MAX_REWARD_VALUE_MINOR
+    ):
+        raise LoyaltyError(f"reward_value_minor must be between 0 and {_MAX_REWARD_VALUE_MINOR}.")
 
     if "qualifying_appointment_type_ids" in data:
         ids = data["qualifying_appointment_type_ids"]
-        program.qualifying_appointment_type_ids = [str(v) for v in ids] if ids else None
+        if ids:
+            owned = {
+                str(row[0])
+                for row in db.session.query(GarageAppointmentType.id).filter(
+                    GarageAppointmentType.garage_id == program.garage_id,
+                    GarageAppointmentType.id.in_(list(ids)),
+                )
+            }
+            unknown = {str(v) for v in ids} - owned
+            if unknown:
+                raise LoyaltyError(
+                    f"qualifying_appointment_type_ids references a service that doesn't "
+                    f"belong to this business: {sorted(unknown)}"
+                )
+            program.qualifying_appointment_type_ids = [str(v) for v in ids]
+        else:
+            program.qualifying_appointment_type_ids = None
 
     for field in (
         "enabled",
@@ -114,11 +143,16 @@ def update_program(program: LoyaltyProgram, data: dict) -> LoyaltyProgram:
         "threshold",
         "reward_type",
         "reward_value_minor",
-        "currency",
         "min_spend_minor",
     ):
         if field in data:
             setattr(program, field, data[field])
+
+    if "currency" in data:
+        # Normalised uppercase - the schema only enforces 3 alphabetic
+        # characters, and formatting (Intl.NumberFormat on the frontend,
+        # any future Decimal/ISO lookup here) expects the canonical case.
+        program.currency = data["currency"].upper()
 
     db.session.commit()
     return program
@@ -189,31 +223,46 @@ def lifetime_units(program_id: uuid.UUID, customer_id: uuid.UUID) -> int:
     return int(total or 0)
 
 
+def _consumed_units(program_id: uuid.UUID, customer_id: uuid.UUID) -> int:
+    """Units already "spent" unlocking past reward cycles, using each
+    cycle's own historical threshold (see LoyaltyReward.threshold_at_generation)
+    - never the programme's current threshold. This is what makes editing
+    the programme's threshold safe: past cycles keep exactly the value they
+    were generated under, and only the *next*, not-yet-unlocked cycle is
+    judged against today's config."""
+    total = (
+        db.session.query(db.func.coalesce(db.func.sum(LoyaltyReward.threshold_at_generation), 0))
+        .filter(LoyaltyReward.program_id == program_id, LoyaltyReward.customer_id == customer_id)
+        .scalar()
+    )
+    return int(total or 0)
+
+
+def _next_cycle_number(program_id: uuid.UUID, customer_id: uuid.UUID) -> int:
+    count: int = LoyaltyReward.query.filter_by(
+        program_id=program_id, customer_id=customer_id
+    ).count()
+    return count + 1
+
+
 def _generate_pending_rewards(program: LoyaltyProgram, customer_id: uuid.UUID) -> None:
-    """Create any reward cycles the customer has newly unlocked. Safe under
-    concurrency: each cycle's row is protected by
-    uq_loyalty_rewards_program_customer_cycle, so a duplicate insert (a race
-    between two completions) fails the unique constraint and is dropped
-    rather than doubling the reward."""
-    total = lifetime_units(program.id, customer_id)
-    target_cycles = total // program.threshold
-    if target_cycles < 1:
-        return
-    existing_cycles = {
-        row[0]
-        for row in db.session.query(LoyaltyReward.cycle_number).filter(
-            LoyaltyReward.program_id == program.id,
-            LoyaltyReward.customer_id == customer_id,
-        )
-    }
-    for cycle in range(1, target_cycles + 1):
-        if cycle in existing_cycles:
-            continue
+    """Create every reward cycle the customer has newly unlocked (there can
+    be more than one after a bulk adjustment). Safe under concurrency: each
+    cycle number is protected by uq_loyalty_rewards_program_customer_cycle,
+    so a conflicting insert from a racing completion/adjustment is dropped
+    and this function re-reads the current state before deciding whether
+    another cycle is still owed, rather than working off a stale snapshot."""
+    lifetime = lifetime_units(program.id, customer_id)
+    consumed = _consumed_units(program.id, customer_id)
+    cycle = _next_cycle_number(program.id, customer_id)
+
+    while lifetime - consumed >= program.threshold:
         reward = LoyaltyReward(
             garage_id=program.garage_id,
             program_id=program.id,
             customer_id=customer_id,
             cycle_number=cycle,
+            threshold_at_generation=program.threshold,
             reward_type=program.reward_type,
             reward_value_minor=program.reward_value_minor,
             currency=program.currency,
@@ -221,8 +270,15 @@ def _generate_pending_rewards(program: LoyaltyProgram, customer_id: uuid.UUID) -
         db.session.add(reward)
         try:
             db.session.commit()
+            consumed += program.threshold
+            cycle += 1
         except IntegrityError:
+            # A concurrent completion/adjustment already generated this
+            # cycle (or a later one) - re-read the true state and let the
+            # loop condition decide whether a cycle is still owed.
             db.session.rollback()
+            consumed = _consumed_units(program.id, customer_id)
+            cycle = _next_cycle_number(program.id, customer_id)
 
 
 @dataclass
@@ -240,10 +296,7 @@ def get_customer_progress(garage_id: uuid.UUID, customer_id: uuid.UUID) -> Loyal
     if program is None:
         return None
     total = lifetime_units(program.id, customer_id)
-    rewards_ever_generated = LoyaltyReward.query.filter_by(
-        program_id=program.id, customer_id=customer_id
-    ).count()
-    current = total - rewards_ever_generated * program.threshold
+    current = total - _consumed_units(program.id, customer_id)
     available = (
         LoyaltyReward.query.filter_by(
             program_id=program.id, customer_id=customer_id, status=REWARD_STATUS_AVAILABLE
@@ -288,6 +341,13 @@ def adjust(
     program = get_program(garage.id)
     if program is None or not program.enabled:
         raise LoyaltyError("Loyalty is not enabled for this business.")
+
+    # Serialize concurrent adjustments for the same customer: without this,
+    # two simultaneous negative adjustments can each read the same stale
+    # total, both pass the non-negative check below, and together drive the
+    # balance negative. The lock is held until this transaction commits, so
+    # a second concurrent call blocks here and re-reads the post-commit total.
+    db.session.query(Customer).filter_by(id=customer.id).with_for_update().one()
 
     total = lifetime_units(program.id, customer.id)
     if total + delta < 0:

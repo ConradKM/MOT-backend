@@ -4,6 +4,15 @@ from app.models.loyalty.ledger import ENTRY_TYPES, SOURCE_TYPES
 from app.models.loyalty.program import PROGRAM_TYPES, REWARD_TYPES
 from app.models.loyalty.reward import REWARD_STATUSES
 
+# Kept in sync with the service-layer bounds in app/loyalty/service.py -
+# duplicated here (rather than imported) so schema validation stays a pure
+# marshmallow concern; the service layer is the authoritative enforcement
+# either way (schemas.py can't be the only guard - see PATCH /program).
+_MAX_THRESHOLD = 1000
+_MAX_EARN_PER_VISIT = 100
+_MAX_REWARD_VALUE_MINOR = 10_000_00
+_MAX_ADJUST_DELTA = 10_000
+
 
 class LoyaltyProgramSchema(Schema):
     id = fields.UUID(dump_only=True)
@@ -14,12 +23,12 @@ class LoyaltyProgramSchema(Schema):
     description = fields.Str(allow_none=True, validate=validate.Length(max=2000))
 
     program_type = fields.Str(validate=validate.OneOf(PROGRAM_TYPES))
-    earn_per_visit = fields.Int(validate=validate.Range(min=1))
-    threshold = fields.Int(validate=validate.Range(min=1))
+    earn_per_visit = fields.Int(validate=validate.Range(min=1, max=_MAX_EARN_PER_VISIT))
+    threshold = fields.Int(validate=validate.Range(min=1, max=_MAX_THRESHOLD))
 
     reward_type = fields.Str(validate=validate.OneOf(REWARD_TYPES))
-    reward_value_minor = fields.Int(validate=validate.Range(min=0))
-    currency = fields.Str(validate=validate.Length(equal=3))
+    reward_value_minor = fields.Int(validate=validate.Range(min=0, max=_MAX_REWARD_VALUE_MINOR))
+    currency = fields.Str(validate=validate.Regexp(r"^[A-Za-z]{3}$"))
 
     qualifying_appointment_type_ids = fields.List(fields.UUID(), allow_none=True)
     min_spend_minor = fields.Int(allow_none=True, validate=validate.Range(min=0))
@@ -33,11 +42,11 @@ class LoyaltyProgramUpdateSchema(Schema):
     name = fields.Str(validate=validate.Length(min=1, max=100))
     description = fields.Str(allow_none=True, validate=validate.Length(max=2000))
     program_type = fields.Str(validate=validate.OneOf(PROGRAM_TYPES))
-    earn_per_visit = fields.Int(validate=validate.Range(min=1))
-    threshold = fields.Int(validate=validate.Range(min=1))
+    earn_per_visit = fields.Int(validate=validate.Range(min=1, max=_MAX_EARN_PER_VISIT))
+    threshold = fields.Int(validate=validate.Range(min=1, max=_MAX_THRESHOLD))
     reward_type = fields.Str(validate=validate.OneOf(REWARD_TYPES))
-    reward_value_minor = fields.Int(validate=validate.Range(min=0))
-    currency = fields.Str(validate=validate.Length(equal=3))
+    reward_value_minor = fields.Int(validate=validate.Range(min=0, max=_MAX_REWARD_VALUE_MINOR))
+    currency = fields.Str(validate=validate.Regexp(r"^[A-Za-z]{3}$"))
     qualifying_appointment_type_ids = fields.List(fields.UUID(), allow_none=True)
     min_spend_minor = fields.Int(allow_none=True, validate=validate.Range(min=0))
 
@@ -79,5 +88,7 @@ class LoyaltyLedgerEntrySchema(Schema):
 
 
 class LoyaltyAdjustSchema(Schema):
-    delta = fields.Int(required=True)
+    delta = fields.Int(
+        required=True, validate=validate.Range(min=-_MAX_ADJUST_DELTA, max=_MAX_ADJUST_DELTA)
+    )
     reason = fields.Str(required=True, validate=validate.Length(min=1, max=500))
