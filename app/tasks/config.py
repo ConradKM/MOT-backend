@@ -8,6 +8,7 @@ the web process, so runtime health is inferred from reminder records in
 variable proves that a scheduler is running.
 """
 
+
 def background_jobs_prerequisites() -> list[dict]:
     # This endpoint is rendered in the communications setup UI.  It is a
     # deployment-design statement, not a liveness probe: the command is
