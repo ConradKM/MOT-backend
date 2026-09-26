@@ -20,6 +20,7 @@ from typing import Any, cast
 
 from flask import current_app, g
 from flask_smorest import abort
+from werkzeug.exceptions import HTTPException
 
 from app.appointments.checklists.service import snapshot_checklist_for_appointment
 from app.communications.events import BOOKING_REQUEST_APPROVED, emit_event
@@ -326,11 +327,24 @@ def auto_accept_booking_request(
         ).first()
         if clash is not None:
             continue
-        approved = approve_booking_request(
-            reviewer=employee,
-            request_id=request.id,
-            data={"employee_id": employee.id, "accepted_automatically": True},
-        )
+        try:
+            approved = approve_booking_request(
+                reviewer=employee,
+                request_id=request.id,
+                data={"employee_id": employee.id, "accepted_automatically": True},
+            )
+        except HTTPException as error:
+            # Candidate selection above is deliberately only an optimisation:
+            # another worker can assign this employee after that read but
+            # before this transaction obtains the garage lock.  A 409 from
+            # the authoritative recheck is therefore an expected outcome for
+            # automation.  Roll back its lock-only transaction and leave the
+            # request for staff rather than turning a successfully persisted
+            # public submission into an erroneous HTTP response.
+            if error.code != 409:
+                raise
+            db.session.rollback()
+            return None
         return approved
     return None
 

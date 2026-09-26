@@ -7,6 +7,8 @@ POST /api/booking-requests/<id>/reject
 """
 
 import datetime
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 
@@ -18,6 +20,18 @@ from app.models.customer import Customer
 from app.models.vehicle import Vehicle
 
 START = "2026-11-03T09:00:00+00:00"
+
+
+def _concurrently(callables):
+    """Start independent database sessions together without timing sleeps."""
+    barrier = Barrier(len(callables))
+
+    def run(callable_):
+        barrier.wait(timeout=10)
+        return callable_()
+
+    with ThreadPoolExecutor(max_workers=len(callables)) as executor:
+        return list(executor.map(run, callables))
 
 
 def _make_type(session, garage, name="MOT", minutes=None, status="ACTIVE", base_price=None):
@@ -927,6 +941,133 @@ def test_approval_rejected_when_capacity_per_slot_is_already_full(
     assert resp.status_code == 409
     session.refresh(second_request)
     assert second_request.status == "PENDING"
+
+
+def test_concurrent_approvals_competing_for_last_capacity_commit_once(
+    app, authenticated_user, session, garage, garage_schedule
+):
+    """The capacity recheck must happen inside a transaction shared by both
+    manual approvals, not merely in the staff UI's earlier availability read.
+    """
+    from werkzeug.security import generate_password_hash
+
+    from app.models.employee import Employee
+
+    second_employee = Employee(
+        garage_id=garage.id,
+        email="concurrent-tech@garage-a.example",
+        password_hash=generate_password_hash("CorrectHorse123!"),
+    )
+    session.add(second_employee)
+    garage_schedule.capacity_per_slot = 1
+    session.commit()
+    appt_type = _make_type(session, garage, minutes=30)
+    requests = [
+        _pending_request(
+            session,
+            garage,
+            customer_email=f"concurrent-{number}@example.com",
+            preferred_date=datetime.date(2026, 11, 3),
+            preferred_time=datetime.time(9, 0),
+        )
+        for number in (1, 2)
+    ]
+    garage_id = garage.id
+    request_ids = [request.id for request in requests]
+    employee_ids = [authenticated_user.user.id, second_employee.id]
+    token = authenticated_user.access_token
+    type_id = appt_type.id
+
+    def approve(request_id, employee_id):
+        def call():
+            # A fresh client in each thread ensures separate request and ORM
+            # sessions, which is the production shape this test is guarding.
+            with app.test_client() as client:
+                response = client.post(
+                    f"/api/booking-requests/{request_id}/approve",
+                    json={
+                        "employee_id": str(employee_id),
+                        "appointment_type_id": str(type_id),
+                        "start_time": START,
+                        "end_time": "2026-11-03T09:30:00+00:00",
+                    },
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                return response.status_code
+
+        return call
+
+    statuses = _concurrently(
+        [approve(request_ids[0], employee_ids[0]), approve(request_ids[1], employee_ids[1])]
+    )
+
+    assert sorted(statuses) == [200, 409]
+    assert Appointment.query.filter_by(garage_id=garage_id).count() == 1
+    persisted = {
+        request.id: request.status
+        for request in BookingRequest.query.filter(BookingRequest.id.in_(request_ids)).all()
+    }
+    assert sorted(persisted.values()) == ["APPROVED", "PENDING"]
+
+
+def test_concurrent_auto_accepts_leave_unassignable_request_pending(
+    app, monkeypatch, authenticated_user, session, garage, garage_schedule
+):
+    """Two auto-accept workers can both select the only employee before either
+    begins the locked approval.  The loser is an ordinary unsafe request, not
+    a failed public booking submission.
+    """
+    from app.booking_requests import service as booking_request_service
+
+    garage.auto_accept_booking_requests = True
+    garage.auto_accept_booking_requests_enabled = True
+    garage_schedule.capacity_per_slot = 2
+    session.commit()
+    appt_type = _make_type(session, garage, minutes=30)
+    requests = [
+        _pending_request(
+            session,
+            garage,
+            customer_email=f"auto-race-{number}@example.com",
+            preferred_date=datetime.date(2026, 11, 3),
+            preferred_time=datetime.time(9, 0),
+            appointment_type_id=appt_type.id,
+            requested_duration_minutes=30,
+        )
+        for number in (1, 2)
+    ]
+    garage_id = garage.id
+    request_ids = [request.id for request in requests]
+    original_approve = booking_request_service.approve_booking_request
+    handoff = Barrier(2)
+
+    def gated_approve(**kwargs):
+        # Both workers have performed the unlocked candidate-selection read;
+        # now race their real, independently-sessioned approval transactions.
+        handoff.wait(timeout=10)
+        return original_approve(**kwargs)
+
+    monkeypatch.setattr(booking_request_service, "approve_booking_request", gated_approve)
+
+    def auto_accept(request_id):
+        def call():
+            with app.app_context():
+                accepted = booking_request_service.auto_accept_booking_request(
+                    garage_id=garage_id, request_id=request_id
+                )
+                return None if accepted is None else accepted.id
+
+        return call
+
+    results = _concurrently([auto_accept(request_ids[0]), auto_accept(request_ids[1])])
+
+    assert sum(result is not None for result in results) == 1
+    assert Appointment.query.filter_by(garage_id=garage_id).count() == 1
+    persisted = {
+        request.id: request.status
+        for request in BookingRequest.query.filter(BookingRequest.id.in_(request_ids)).all()
+    }
+    assert sorted(persisted.values()) == ["APPROVED", "PENDING"]
 
 
 def test_approval_rejects_a_deactivated_employee(
