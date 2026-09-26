@@ -20,7 +20,7 @@ app/garages/schedule/routes.py.
 
 from flask import current_app, request
 from flask.views import MethodView
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, verify_jwt_in_request
 from flask_limiter.util import get_remote_address
 from flask_smorest import Blueprint, abort
 
@@ -35,6 +35,7 @@ from app.models.queueing.queue_settings import AVERAGE_MODE_MANUAL
 from app.models.queueing.reserved_window import WalkInReservedWindow
 from app.public_booking.captcha import verify_captcha
 from app.public_booking.routes import _get_garage_by_slug
+from app.platform_admin.features import feature_enabled
 
 from . import service
 from .eta import wait_minutes
@@ -68,6 +69,28 @@ queue_blp = Blueprint(
 )
 
 _AUTH_DOC: dict[str, list[dict[str, list[str]]]] = {"security": [{"bearerAuth": []}]}
+
+
+def _require_queue_entitlement(garage: Garage) -> None:
+    if not feature_enabled(garage, "walk_in_queue"):
+        # 404 makes disabled public functionality indistinguishable from an
+        # unavailable route, while staff receive the same authoritative gate.
+        abort(404, message="Walk-in Queue is not enabled for this business.")
+
+
+@public_queue_blp.before_request
+def _public_queue_entitlement():
+    slug = (request.view_args or {}).get("slug")
+    if slug:
+        _require_queue_entitlement(_get_garage_by_slug(slug))
+
+
+@queue_blp.before_request
+def _staff_queue_entitlement():
+    verify_jwt_in_request()
+    employee = get_current_employee()
+    if employee is not None:
+        _require_queue_entitlement(employee.garage)
 
 
 def _per_garage_client_key() -> str:
@@ -112,6 +135,7 @@ def _entry_payload(entry: QueueEntry, snapshot, settings) -> dict:
         "customer_first_name": entry.customer_first_name,
         "customer_last_name": entry.customer_last_name,
         "customer_phone": entry.customer_phone,
+        "customer_email": entry.customer_email,
         "sms_opt_in": entry.sms_opt_in,
         "vehicle_registration": entry.vehicle_registration,
         "notes": entry.notes,
@@ -185,6 +209,14 @@ def _settings_payload(garage: Garage) -> dict:
         "manual_average_minutes": settings.manual_average_minutes,
         "no_show_timeout_minutes": settings.no_show_timeout_minutes,
         "default_appointment_type_id": settings.default_appointment_type_id,
+        "collect_name": settings.collect_name,
+        "name_required": settings.name_required,
+        "collect_phone": settings.collect_phone,
+        "phone_required": settings.phone_required,
+        "collect_email": settings.collect_email,
+        "email_required": settings.email_required,
+        "collect_vehicle_registration": settings.collect_vehicle_registration,
+        "vehicle_registration_required": settings.vehicle_registration_required,
         "average": service.average_info(garage, settings, service.utcnow()),
         "capacity": service.queue_capacity(garage),
         "capacity_per_slot": schedule.capacity_per_slot if schedule is not None else None,
@@ -232,6 +264,12 @@ class PublicQueueInfo(MethodView):
             else None,
             "opens_at": snapshot.opens_at,
             "closes_at": snapshot.closes_at,
+            "join_fields": {
+                "name": {"enabled": settings.collect_name, "required": settings.name_required},
+                "phone": {"enabled": settings.collect_phone, "required": settings.phone_required},
+                "email": {"enabled": settings.collect_email, "required": settings.email_required},
+                "vehicle_registration": {"enabled": settings.collect_vehicle_registration, "required": settings.vehicle_registration_required},
+            },
         }
 
 
@@ -460,6 +498,15 @@ class QueueSettingsResource(MethodView):
             abort(422, message="default_appointment_type_id is not a service of this business.")
         for key, value in data.items():
             setattr(settings, key, value)
+        for collect, required, label in (
+            (settings.collect_name, settings.name_required, "name"),
+            (settings.collect_phone, settings.phone_required, "phone number"),
+            (settings.collect_email, settings.email_required, "email"),
+            (settings.collect_vehicle_registration, settings.vehicle_registration_required, "vehicle registration"),
+        ):
+            if required and not collect:
+                db.session.rollback()
+                abort(422, message=f"A required {label} field must be enabled.")
         if settings.average_mode == AVERAGE_MODE_MANUAL and not settings.manual_average_minutes:
             db.session.rollback()
             abort(

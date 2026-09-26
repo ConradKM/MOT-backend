@@ -88,6 +88,37 @@ def test_queue_is_closed_by_default(client, garage, garage_schedule, clock):
     assert resp.get_json()["errors"]["reason"] == "queue_closed"
 
 
+def test_barber_form_can_omit_vehicle_and_requires_configured_fields(
+    client, authenticated_client, open_queue
+):
+    response = authenticated_client.put(
+        "/api/queue/settings",
+        json={"collect_vehicle_registration": False, "collect_email": False},
+    )
+    assert response.status_code == 200
+    info = client.get("/api/public/garage-a/queue").get_json()
+    assert info["join_fields"]["vehicle_registration"] == {"enabled": False, "required": False}
+    joined = client.post(
+        "/api/public/garage-a/queue/join",
+        json={"customer_first_name": "Ava", "customer_phone": "07123456789"},
+    )
+    assert joined.status_code == 201
+    assert QueueEntry.query.one().vehicle_registration is None
+
+
+def test_required_vehicle_is_enforced_server_side(client, authenticated_client, open_queue):
+    assert authenticated_client.put(
+        "/api/queue/settings",
+        json={"collect_vehicle_registration": True, "vehicle_registration_required": True},
+    ).status_code == 200
+    response = client.post(
+        "/api/public/garage-a/queue/join",
+        json={"customer_first_name": "Ava", "customer_phone": "07123456789"},
+    )
+    assert response.status_code == 422
+    assert response.get_json()["errors"]["reason"] == "required_queue_field"
+
+
 def test_staff_open_and_close_the_queue(
     authenticated_client, client, garage, garage_schedule, clock
 ):
