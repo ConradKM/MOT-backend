@@ -1005,6 +1005,9 @@ def test_concurrent_approvals_competing_for_last_capacity_commit_once(
 
     assert sorted(statuses) == [200, 409]
     assert Appointment.query.filter_by(garage_id=garage_id).count() == 1
+    # The competing requests committed in independent sessions.  Expire the
+    # setup session's identity map before inspecting their authoritative rows.
+    db.session.expire_all()
     persisted = {
         request.id: request.status
         for request in BookingRequest.query.filter(BookingRequest.id.in_(request_ids)).all()
@@ -1065,6 +1068,7 @@ def test_concurrent_auto_accepts_leave_unassignable_request_pending(
 
     assert sum(result is not None for result in results) == 1
     assert Appointment.query.filter_by(garage_id=garage_id).count() == 1
+    db.session.expire_all()
     persisted = {
         request.id: request.status
         for request in BookingRequest.query.filter(BookingRequest.id.in_(request_ids)).all()
