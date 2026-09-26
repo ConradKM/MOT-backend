@@ -178,8 +178,43 @@ def create_account_link(garage: Garage, *, return_url: str, refresh_url: str) ->
         # V2 error classes have moved across the preview SDK releases in the
         # supported dependency range.  Preserve the safe route boundary for
         # every provider/SDK failure; the route logs the diagnostic detail.
+        _handle_account_access_error(settings, exc)
         raise ConnectError(str(exc), code=getattr(exc, "code", None)) from exc
     return str(link.url)
+
+
+def _handle_account_access_error(settings: GaragePaymentSettings, exc: Exception) -> None:
+    """Stripe's own 403 response for "this key cannot reach that account" -
+    surfaced by both v1 (``account_invalid``) and v2 (``forbidden``) Connect
+    calls, but always raised by stripe-python as ``PermissionError`` (see
+    ``stripe._api_requestor.specific_v1_api_error`` - v2 errors that aren't
+    idempotency/rate-limit specific fall through to the same v1 mapping,
+    and HTTP 403 always becomes ``PermissionError`` there).
+
+    This is not a transient blip to just log and retry later: it means the
+    platform's own Stripe key no longer has a relationship to this connected
+    account at all (revoked Connect access, or the account belongs to a
+    different Stripe account than the one now configured). Leaving the last
+    cached ``charges_enabled``/``payouts_enabled`` as True in that state is
+    exactly what let Platform Admin readiness and a live deposit attempt
+    disagree in production - readiness read stale "ready" flags from the
+    database while every live Stripe call was failing. Once Stripe tells us
+    the account is unreachable, the cached capability flags must reflect
+    that immediately, not whatever was last synced.
+    """
+    import stripe
+
+    if not isinstance(exc, stripe.error.PermissionError):
+        return
+    if settings.stripe_charges_enabled or settings.stripe_payouts_enabled:
+        current_app.logger.warning(
+            "STRIPE_CONNECT_ACCOUNT_ACCESS_REVOKED garage=%s account=%s",
+            settings.garage_id,
+            settings.stripe_account_id,
+        )
+    settings.stripe_charges_enabled = False
+    settings.stripe_payouts_enabled = False
+    db.session.commit()
 
 
 def _apply_account_fields(settings: GaragePaymentSettings, account: dict) -> None:
@@ -306,6 +341,7 @@ def refresh_connect_status(garage: Garage) -> GaragePaymentSettings:
     try:
         account = stripe.Account.retrieve(settings.stripe_account_id)
     except stripe.error.StripeError as exc:  # pragma: no cover - real API only
+        _handle_account_access_error(settings, exc)
         raise ConnectError(str(exc), code=getattr(exc, "code", None)) from exc
 
     _apply_account_fields(settings, account)

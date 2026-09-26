@@ -324,6 +324,169 @@ def test_status_refresh_survives_domain_registration_failure(session, garage, mo
     assert settings.stripe_charges_enabled is True
 
 
+def test_refresh_clears_stale_capability_flags_when_stripe_revokes_account_access(
+    session, garage, monkeypatch
+):
+    """Regression for production: Stripe started rejecting every call for a
+    connected account with a 403 (stripe.error.PermissionError - "API Key
+    does not have permission to access account..."), but the garage's
+    cached stripe_charges_enabled/stripe_payouts_enabled from its last good
+    sync stayed True. Platform Admin readiness and the public deposit flow
+    both read those cached flags, so readiness kept reporting "ready" while
+    every live Stripe call was actually failing. A refresh that hits this
+    specific error must correct the cached flags immediately rather than
+    leaving them stale."""
+    import stripe
+
+    settings = GaragePaymentSettings(
+        garage_id=garage.id,
+        provider="stripe",
+        stripe_account_id="acct_revoked",
+        stripe_charges_enabled=True,
+        stripe_payouts_enabled=True,
+        stripe_onboarding_complete=True,
+        stripe_details_submitted=True,
+    )
+    session.add(settings)
+    session.commit()
+
+    class _RevokedAccountApi:
+        def retrieve(self, account_id):
+            raise stripe.error.PermissionError(
+                "The provided key does not have access to account "
+                f"'{account_id}' (or that account does not exist).",
+                http_status=403,
+            )
+
+    # refresh_connect_status catches ``stripe.error.StripeError`` off the
+    # object ``_client()`` returns, so the fake must still be the real
+    # ``stripe`` module (with ``Account`` swapped out) rather than a bare
+    # stand-in that has no ``.error`` attribute at all.
+    monkeypatch.setattr(stripe, "Account", _RevokedAccountApi())
+    monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
+
+    from app.payments.connect import ConnectError
+
+    try:
+        refresh_connect_status(garage)
+        raise AssertionError("expected ConnectError")
+    except ConnectError:
+        pass
+
+    session.refresh(settings)
+    assert settings.stripe_charges_enabled is False
+    assert settings.stripe_payouts_enabled is False
+
+
+def test_account_link_creation_clears_stale_flags_when_stripe_revokes_account_access(
+    session, garage, monkeypatch
+):
+    """Same production incident as above, but hitting the v2 Account Links
+    call ("Continue Stripe setup" itself) instead of the status refresh."""
+    import stripe
+
+    settings = GaragePaymentSettings(
+        garage_id=garage.id,
+        provider="stripe",
+        stripe_account_id="acct_revoked",
+        stripe_charges_enabled=True,
+        stripe_payouts_enabled=True,
+    )
+    session.add(settings)
+    session.commit()
+
+    class _RevokedAccountLinks:
+        def create(self, params):
+            raise stripe.error.PermissionError(
+                "Permission denied. API Key does not have permission to "
+                f"access account {params['account']}.",
+                http_status=403,
+                code="forbidden",
+            )
+
+    v2_client = type(
+        "V2Client",
+        (),
+        {
+            "v2": type(
+                "V2",
+                (),
+                {"core": type("Core", (), {"account_links": _RevokedAccountLinks()})()},
+            )()
+        },
+    )()
+    monkeypatch.setattr("app.payments.connect._v2_client", lambda: v2_client)
+
+    from app.payments.connect import ConnectError
+
+    try:
+        create_account_link(
+            garage,
+            return_url="https://app.comaz.co.uk/a/settings/payments?onboarding=return",
+            refresh_url="https://app.comaz.co.uk/a/settings/payments?onboarding=refresh",
+        )
+        raise AssertionError("expected ConnectError")
+    except ConnectError:
+        pass
+
+    session.refresh(settings)
+    assert settings.stripe_charges_enabled is False
+    assert settings.stripe_payouts_enabled is False
+
+
+def test_readiness_reflects_a_revoked_stripe_connection_after_refresh(
+    app, session, garage, monkeypatch
+):
+    """End-to-end version of the two regressions above: Platform Admin's
+    go-live readiness must flip to not-ready once a status refresh has
+    detected that Stripe revoked the platform's access to this garage's
+    connected account - it must never keep reporting a stale "ready" from
+    before the connection broke."""
+    import stripe
+
+    from app.platform_admin.readiness import business_readiness
+
+    monkeypatch.setitem(app.config, "STRIPE_SECRET_KEY", "sk_test_fake")
+    monkeypatch.setitem(app.config, "STRIPE_WEBHOOK_SECRET", "whsec_test_fake")
+
+    settings = GaragePaymentSettings(
+        garage_id=garage.id,
+        provider="stripe",
+        stripe_account_id="acct_revoked",
+        stripe_charges_enabled=True,
+        stripe_payouts_enabled=True,
+        stripe_onboarding_complete=True,
+        stripe_details_submitted=True,
+    )
+    session.add(settings)
+    session.commit()
+
+    before = business_readiness(garage)
+    assert before["payments_ready"] is True
+
+    class _RevokedAccountApi:
+        def retrieve(self, account_id):
+            raise stripe.error.PermissionError(
+                "The provided key does not have access to account "
+                f"'{account_id}' (or that account does not exist).",
+                http_status=403,
+            )
+
+    monkeypatch.setattr(stripe, "Account", _RevokedAccountApi())
+    monkeypatch.setattr("app.payments.connect._client", lambda: stripe)
+    from app.payments.connect import ConnectError
+
+    try:
+        refresh_connect_status(garage)
+    except ConnectError:
+        pass
+
+    session.refresh(settings)
+    after = business_readiness(garage)
+    assert after["payments_ready"] is False
+    assert after["ready_to_take_deposits"] is False
+
+
 def test_connect_status_refresh_accepts_stripe_object(session, garage, monkeypatch):
     """The live stripe SDK returns StripeObject, which has no dict ``get``."""
     import stripe
