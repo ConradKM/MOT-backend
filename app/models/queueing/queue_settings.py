@@ -53,6 +53,24 @@ class GarageQueueSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: i
     # joins; people already in the line are unaffected and still get served.
     is_open: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # A deliberately small, standard join form.  These switches are tenant
+    # configuration, not a generic form builder: they prevent an automotive
+    # registration field leaking into salons and barbers.
+    collect_name: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    name_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    collect_phone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    phone_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    collect_email: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    email_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Preserve existing garages' queue behaviour; a non-automotive business
+    # turns this off in its Queue settings (and new onboarding can do so).
+    collect_vehicle_registration: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    vehicle_registration_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
     average_mode: Mapped[str] = mapped_column(String(10), nullable=False, default=AVERAGE_MODE_AUTO)
     manual_average_minutes: Mapped[int | None] = mapped_column(Integer)
 

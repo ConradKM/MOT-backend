@@ -74,6 +74,16 @@ FEATURES: tuple[Feature, ...] = (
         label="Customer portal",
         description="Customer accounts, login and self-service appointment history.",
     ),
+    Feature(
+        key="walk_in_queue",
+        label="Walk-in Queue",
+        description="Let customers join this business's live walk-in queue.",
+    ),
+    Feature(
+        key="loyalty",
+        label="Loyalty",
+        description="Visit-based customer loyalty for this business.",
+    ),
 )
 
 FEATURES_BY_KEY = {feature.key: feature for feature in FEATURES}
@@ -83,7 +93,14 @@ FEATURES_BY_KEY = {feature.key: feature for feature in FEATURES}
 PLANS: dict[str, frozenset[str]] = {
     "TRIAL": frozenset({"public_booking", "mot_reminders", "checklists", "customer_portal"}),
     "STANDARD": frozenset(
-        {"public_booking", "mot_reminders", "checklists", "customer_portal", "communications"}
+        {
+            "public_booking",
+            "mot_reminders",
+            "checklists",
+            "customer_portal",
+            "communications",
+            "walk_in_queue",
+        }
     ),
     "PRO": frozenset(FEATURES_BY_KEY),
 }

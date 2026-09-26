@@ -105,10 +105,11 @@ class QueueEntry(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[nam
     # meaningful among WAITING entries.
     sort_key: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    customer_first_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    customer_first_name: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     customer_last_name: Mapped[str | None] = mapped_column(String(100))
     # E.164, normalised by the join schema.
-    customer_phone: Mapped[str] = mapped_column(String(40), nullable=False)
+    customer_phone: Mapped[str | None] = mapped_column(String(40))
+    customer_email: Mapped[str | None] = mapped_column(String(320))
     sms_opt_in: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     vehicle_registration: Mapped[str | None] = mapped_column(String(20))
     notes: Mapped[str | None] = mapped_column(Text)

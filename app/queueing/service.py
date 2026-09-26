@@ -502,6 +502,31 @@ def join_queue(garage: Garage, data: Mapping[str, Any], now: datetime | None = N
     lock_garage(garage.id)
     settings = get_queue_settings(garage.id)
 
+    # Validation lives here (rather than only in the public schema) because
+    # the form is configured per tenant and direct API calls must obey it.
+    field_rules = (
+        ("name", "customer_first_name", settings.collect_name, settings.name_required),
+        ("phone number", "customer_phone", settings.collect_phone, settings.phone_required),
+        ("email", "customer_email", settings.collect_email, settings.email_required),
+        (
+            "vehicle registration",
+            "vehicle_registration",
+            settings.collect_vehicle_registration,
+            settings.vehicle_registration_required,
+        ),
+    )
+    for label, key, enabled, required in field_rules:
+        value = data.get(key)
+        if required and (not enabled or not value or not str(value).strip()):
+            _abort(
+                422, f"{label.capitalize()} is required to join this queue.", "required_queue_field"
+            )
+        if not enabled:
+            # Disabled fields are deliberately discarded: clients cannot use
+            # the queue as an unadvertised PII collection endpoint.
+            data = dict(data)
+            data[key] = None
+
     appointment_type = None
     if data.get("appointment_type_id") is not None:
         appointment_type = GarageAppointmentType.query.filter_by(
@@ -516,8 +541,8 @@ def join_queue(garage: Garage, data: Mapping[str, Any], now: datetime | None = N
     if reason is not None:
         _abort(409, REFUSAL_MESSAGES[reason], reason)
 
-    phone = data["customer_phone"]
-    if any(
+    phone = data.get("customer_phone")
+    if phone and any(
         e.customer_phone == phone and e.status in QUEUE_ACTIVE_STATUSES for e in snapshot.entries
     ):
         # Don't mint a second token for the same person: re-issuing one to
@@ -546,9 +571,10 @@ def join_queue(garage: Garage, data: Mapping[str, Any], now: datetime | None = N
         service_date=today,
         ticket_number=max_ticket + 1,
         sort_key=max_sort + 1,
-        customer_first_name=data["customer_first_name"].strip(),
+        customer_first_name=(data.get("customer_first_name") or "").strip(),
         customer_last_name=(data.get("customer_last_name") or "").strip() or None,
         customer_phone=phone,
+        customer_email=(data.get("customer_email") or "").strip() or None,
         sms_opt_in=bool(data.get("sms_opt_in")),
         vehicle_registration=(data.get("vehicle_registration") or "").strip() or None,
         notes=data.get("notes"),
@@ -580,13 +606,16 @@ def call_entry(garage: Garage, entry_id: uuid.UUID | None, now: datetime | None 
     return entry
 
 
-def _find_customer(garage_id: uuid.UUID, phone: str) -> Customer | None:
-    customer: Customer | None = (
-        Customer.query.filter_by(garage_id=garage_id, phone=phone)
-        .order_by(Customer.is_active.desc(), Customer.created_at)
-        .first()
-    )
-    return customer
+def _find_customer(garage_id: uuid.UUID, phone: str | None) -> Customer | None:
+    """Resolve only an unambiguous, tenant-local phone match.
+
+    Queue identity is intentionally stricter than ordinary booking matching:
+    duplicate phone records are not silently merged into an arbitrary person.
+    """
+    if not phone:
+        return None
+    matches = Customer.query.filter_by(garage_id=garage_id, phone=phone).limit(2).all()
+    return matches[0] if len(matches) == 1 else None
 
 
 def _registration_is_someone_elses(
@@ -679,7 +708,7 @@ def start_service(
     customer, vehicle = resolve_customer_and_vehicle(
         garage_id,
         customer_id=existing.id if existing else None,
-        customer_email=None,
+        customer_email=entry.customer_email,
         first_name=entry.customer_first_name,
         last_name=entry.customer_last_name or "",
         phone=entry.customer_phone,

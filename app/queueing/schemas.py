@@ -12,13 +12,20 @@ class QueueJoinSchema(Schema):
     class Meta:
         unknown = EXCLUDE
 
-    customer_first_name = fields.Str(required=True, validate=validate.Length(min=1, max=100))
+    customer_first_name = fields.Str(
+        allow_none=True, load_default=None, validate=validate.Length(min=1, max=100)
+    )
     customer_last_name = fields.Str(
         allow_none=True, load_default=None, validate=validate.Length(max=100)
     )
     # Required even without SMS opt-in: it's how staff match the walk-in to
     # an existing customer record at check-in, and how they'd call them.
-    customer_phone = UKMobileField(required=True, validate=validate.Length(max=40))
+    customer_phone = UKMobileField(
+        allow_none=True, load_default=None, validate=validate.Length(max=40)
+    )
+    customer_email = fields.Email(
+        allow_none=True, load_default=None, validate=validate.Length(max=320)
+    )
     sms_opt_in = fields.Bool(load_default=False)
     vehicle_registration = fields.Str(
         allow_none=True, load_default=None, validate=validate.Length(max=20)
@@ -48,6 +55,7 @@ class PublicQueueInfoSchema(Schema):
     estimated_wait_minutes = fields.Int(allow_none=True)
     opens_at = fields.DateTime(allow_none=True)
     closes_at = fields.DateTime(allow_none=True)
+    join_fields = fields.Dict()
 
 
 class PublicQueueStatusSchema(Schema):
@@ -86,6 +94,7 @@ class QueueEntrySchema(Schema):
     customer_first_name = fields.Str()
     customer_last_name = fields.Str(allow_none=True)
     customer_phone = fields.Str()
+    customer_email = fields.Str(allow_none=True)
     sms_opt_in = fields.Bool()
     vehicle_registration = fields.Str(allow_none=True)
     notes = fields.Str(allow_none=True)
@@ -166,6 +175,14 @@ class QueueSettingsSchema(Schema):
     manual_average_minutes = fields.Int(allow_none=True, validate=validate.Range(min=5, max=480))
     no_show_timeout_minutes = fields.Int(allow_none=True, validate=validate.Range(min=1, max=120))
     default_appointment_type_id = fields.UUID(allow_none=True)
+    collect_name = fields.Bool()
+    name_required = fields.Bool()
+    collect_phone = fields.Bool()
+    phone_required = fields.Bool()
+    collect_email = fields.Bool()
+    email_required = fields.Bool()
+    collect_vehicle_registration = fields.Bool()
+    vehicle_registration_required = fields.Bool()
 
     average = fields.Nested(AverageSchema, dump_only=True)
     capacity = fields.Int(dump_only=True)
