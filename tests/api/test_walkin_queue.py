@@ -107,10 +107,13 @@ def test_barber_form_can_omit_vehicle_and_requires_configured_fields(
 
 
 def test_required_vehicle_is_enforced_server_side(client, authenticated_client, open_queue):
-    assert authenticated_client.put(
-        "/api/queue/settings",
-        json={"collect_vehicle_registration": True, "vehicle_registration_required": True},
-    ).status_code == 200
+    assert (
+        authenticated_client.put(
+            "/api/queue/settings",
+            json={"collect_vehicle_registration": True, "vehicle_registration_required": True},
+        ).status_code
+        == 200
+    )
     response = client.post(
         "/api/public/garage-a/queue/join",
         json={"customer_first_name": "Ava", "customer_phone": "07123456789"},

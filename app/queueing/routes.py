@@ -33,9 +33,9 @@ from app.models.garage_schedule import GarageScheduleSettings
 from app.models.queueing.queue_entry import QUEUE_WAITING, QueueEntry
 from app.models.queueing.queue_settings import AVERAGE_MODE_MANUAL
 from app.models.queueing.reserved_window import WalkInReservedWindow
+from app.platform_admin.features import feature_enabled
 from app.public_booking.captcha import verify_captcha
 from app.public_booking.routes import _get_garage_by_slug
-from app.platform_admin.features import feature_enabled
 
 from . import service
 from .eta import wait_minutes
@@ -268,7 +268,10 @@ class PublicQueueInfo(MethodView):
                 "name": {"enabled": settings.collect_name, "required": settings.name_required},
                 "phone": {"enabled": settings.collect_phone, "required": settings.phone_required},
                 "email": {"enabled": settings.collect_email, "required": settings.email_required},
-                "vehicle_registration": {"enabled": settings.collect_vehicle_registration, "required": settings.vehicle_registration_required},
+                "vehicle_registration": {
+                    "enabled": settings.collect_vehicle_registration,
+                    "required": settings.vehicle_registration_required,
+                },
             },
         }
 
@@ -502,7 +505,11 @@ class QueueSettingsResource(MethodView):
             (settings.collect_name, settings.name_required, "name"),
             (settings.collect_phone, settings.phone_required, "phone number"),
             (settings.collect_email, settings.email_required, "email"),
-            (settings.collect_vehicle_registration, settings.vehicle_registration_required, "vehicle registration"),
+            (
+                settings.collect_vehicle_registration,
+                settings.vehicle_registration_required,
+                "vehicle registration",
+            ),
         ):
             if required and not collect:
                 db.session.rollback()

@@ -93,7 +93,14 @@ FEATURES_BY_KEY = {feature.key: feature for feature in FEATURES}
 PLANS: dict[str, frozenset[str]] = {
     "TRIAL": frozenset({"public_booking", "mot_reminders", "checklists", "customer_portal"}),
     "STANDARD": frozenset(
-        {"public_booking", "mot_reminders", "checklists", "customer_portal", "communications", "walk_in_queue"}
+        {
+            "public_booking",
+            "mot_reminders",
+            "checklists",
+            "customer_portal",
+            "communications",
+            "walk_in_queue",
+        }
     ),
     "PRO": frozenset(FEATURES_BY_KEY),
 }

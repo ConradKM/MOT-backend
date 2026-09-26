@@ -508,12 +508,19 @@ def join_queue(garage: Garage, data: Mapping[str, Any], now: datetime | None = N
         ("name", "customer_first_name", settings.collect_name, settings.name_required),
         ("phone number", "customer_phone", settings.collect_phone, settings.phone_required),
         ("email", "customer_email", settings.collect_email, settings.email_required),
-        ("vehicle registration", "vehicle_registration", settings.collect_vehicle_registration, settings.vehicle_registration_required),
+        (
+            "vehicle registration",
+            "vehicle_registration",
+            settings.collect_vehicle_registration,
+            settings.vehicle_registration_required,
+        ),
     )
     for label, key, enabled, required in field_rules:
         value = data.get(key)
         if required and (not enabled or not value or not str(value).strip()):
-            _abort(422, f"{label.capitalize()} is required to join this queue.", "required_queue_field")
+            _abort(
+                422, f"{label.capitalize()} is required to join this queue.", "required_queue_field"
+            )
         if not enabled:
             # Disabled fields are deliberately discarded: clients cannot use
             # the queue as an unadvertised PII collection endpoint.

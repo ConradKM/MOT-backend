@@ -64,8 +64,12 @@ class GarageQueueSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: i
     email_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Preserve existing garages' queue behaviour; a non-automotive business
     # turns this off in its Queue settings (and new onboarding can do so).
-    collect_vehicle_registration: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    vehicle_registration_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    collect_vehicle_registration: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    vehicle_registration_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
 
     average_mode: Mapped[str] = mapped_column(String(10), nullable=False, default=AVERAGE_MODE_AUTO)
     manual_average_minutes: Mapped[int | None] = mapped_column(Integer)

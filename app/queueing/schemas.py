@@ -12,14 +12,20 @@ class QueueJoinSchema(Schema):
     class Meta:
         unknown = EXCLUDE
 
-    customer_first_name = fields.Str(allow_none=True, load_default=None, validate=validate.Length(min=1, max=100))
+    customer_first_name = fields.Str(
+        allow_none=True, load_default=None, validate=validate.Length(min=1, max=100)
+    )
     customer_last_name = fields.Str(
         allow_none=True, load_default=None, validate=validate.Length(max=100)
     )
     # Required even without SMS opt-in: it's how staff match the walk-in to
     # an existing customer record at check-in, and how they'd call them.
-    customer_phone = UKMobileField(allow_none=True, load_default=None, validate=validate.Length(max=40))
-    customer_email = fields.Email(allow_none=True, load_default=None, validate=validate.Length(max=320))
+    customer_phone = UKMobileField(
+        allow_none=True, load_default=None, validate=validate.Length(max=40)
+    )
+    customer_email = fields.Email(
+        allow_none=True, load_default=None, validate=validate.Length(max=320)
+    )
     sms_opt_in = fields.Bool(load_default=False)
     vehicle_registration = fields.Str(
         allow_none=True, load_default=None, validate=validate.Length(max=20)
