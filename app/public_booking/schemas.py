@@ -10,6 +10,11 @@ from marshmallow import (
     validates,
 )
 
+from app.appointments.add_ons.schemas import (
+    AddOnSelectionSchema,
+    AppliedAddOnSchema,
+    PublicAddOnSchema,
+)
 from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
 from app.storage.images import image_url
 
@@ -63,9 +68,16 @@ class PublicAppointmentTypeSchema(Schema):
     deposit_type = fields.Str(dump_only=True, allow_none=True)
     deposit_value = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     deposit_currency = fields.Str(dump_only=True)
+    # Only ACTIVE add-ons are offered; a PERCENTAGE deposit is taken on the
+    # add-on-inclusive total, which the wizard displays from these deltas.
+    add_ons = fields.Method("_get_add_ons", dump_only=True)
 
     def _get_image_url(self, appointment_type):
         return image_url(appointment_type.image_storage_key)
+
+    def _get_add_ons(self, appointment_type):
+        active = [a for a in appointment_type.add_ons if a.status == "ACTIVE"]
+        return PublicAddOnSchema(many=True).dump(active)
 
     def _get_included_items(self, appointment_type):
         template = appointment_type.checklist_template
@@ -197,6 +209,9 @@ class BookingRequestCreateSchema(Schema):
     vehicle_mileage = fields.Int(allow_none=True, load_default=None, validate=validate.Range(min=0))
 
     appointment_type_id = fields.UUID(allow_none=True, load_default=None)
+    # Validated against the chosen type in the route (see
+    # app/appointments/add_ons/service.py).
+    add_ons = fields.List(fields.Nested(AddOnSelectionSchema), load_default=list)
     preferred_date = fields.Date(required=True)
     preferred_time = fields.Time(allow_none=True, load_default=None)
     preferred_employee_note = fields.Str(
@@ -322,6 +337,7 @@ class DepositAttemptRecoveryResponseSchema(DepositStatusSchema):
 
     appointment_type_id = fields.UUID(dump_only=True, allow_none=True)
     appointment_type_name = fields.Str(dump_only=True, allow_none=True)
+    add_ons = fields.List(fields.Nested(AppliedAddOnSchema), dump_only=True)
     preferred_date = fields.Date(dump_only=True)
     preferred_time = fields.Time(dump_only=True, allow_none=True)
     requested_duration_minutes = fields.Int(dump_only=True, allow_none=True)
@@ -356,6 +372,9 @@ class AvailabilityQueryArgsSchema(Schema):
     # the business's generic slot length and can advertise availability that a
     # longer service cannot actually use (see availability.py::day_summary).
     appointment_type_id = fields.UUID(load_default=None)
+    # `<add_on_id>[:quantity],...` - add-ons change the job's length, which
+    # changes which days/slots can fit it.
+    add_ons = fields.Str(load_default=None, validate=validate.Length(max=2000))
 
 
 class BookingFlowQueryArgsSchema(Schema):
@@ -376,6 +395,7 @@ class DayAvailabilityQueryArgsSchema(Schema):
     # Optional: omitted while the customer hasn't chosen a type yet, or for a
     # garage that hasn't configured any.
     appointment_type_id = fields.UUID(load_default=None)
+    add_ons = fields.Str(load_default=None, validate=validate.Length(max=2000))
 
 
 class _GarageRefSchema(Schema):

@@ -6,6 +6,17 @@ from flask import current_app, g
 from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
+from app.appointments.add_ons.service import (
+    ResolvedAddOn,
+    duration_delta,
+    parse_query_selection,
+    price_delta,
+    resolve_selection,
+    selection_signature,
+    snapshot_kwargs,
+    total_duration,
+    total_price,
+)
 from app.booking_flow.answers import (
     AnswerError,
     bound_values,
@@ -19,6 +30,7 @@ from app.booking_requests.service import auto_accept_booking_request, resolve_cu
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
 from app.garages.timezones import local_slot_as_utc
+from app.models.appointments.applied_add_on import BookingRequestAddOn
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BOOKING_REQUEST_SOURCE_WEB, BookingRequest
 from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
@@ -96,6 +108,26 @@ def _get_active_appointment_type(garage, appointment_type_id):
     return appt_type
 
 
+def _resolve_add_ons(appt_type, selection) -> list[ResolvedAddOn]:
+    if not selection:
+        return []
+    if appt_type is None:
+        abort(422, message="add_ons require an appointment_type_id.")
+    return resolve_selection(appt_type, selection)
+
+
+def _selected_duration(garage, appt_type, add_ons) -> int | None:
+    """The job's real length once add-ons are applied - what availability
+    and slot validation must check against, so an add-on that lengthens the
+    job can never be booked into a slot that only fits the base service.
+    None (use the type's own default) when there are no add-ons."""
+    if not add_ons:
+        return None
+    return total_duration(
+        _slot_duration_for_type(appt_type, resolve_settings(garage)), duration_delta(add_ons)
+    )
+
+
 @public_booking_blp.route("/<slug>")
 class PublicGarageBySlug(MethodView):
     @public_booking_blp.response(200, PublicGarageDetailSchema)
@@ -119,12 +151,14 @@ class PublicGarageAvailability(MethodView):
         # is actually looking at right now.
         expire_stale_payment_holds(garage_id=garage.id)
         appt_type = _get_active_appointment_type(garage, args.get("appointment_type_id"))
+        add_ons = _resolve_add_ons(appt_type, parse_query_selection(args.get("add_ons")))
         return availability_range(
             garage,
             args.get("from_"),
             args.get("to"),
             datetime.now(UTC),
             appointment_type=appt_type,
+            duration_min=_selected_duration(garage, appt_type, add_ons),
         )
 
 
@@ -144,7 +178,14 @@ class PublicGarageDayAvailability(MethodView):
         except ValueError:
             abort(422, message="day must be an ISO date (YYYY-MM-DD).")
         appt_type = _get_active_appointment_type(garage, args.get("appointment_type_id"))
-        return single_day(garage, parsed, datetime.now(UTC), appointment_type=appt_type)
+        add_ons = _resolve_add_ons(appt_type, parse_query_selection(args.get("add_ons")))
+        return single_day(
+            garage,
+            parsed,
+            datetime.now(UTC),
+            appointment_type=appt_type,
+            duration_min=_selected_duration(garage, appt_type, add_ons),
+        )
 
 
 _SLOT_REJECTIONS = {
@@ -157,7 +198,7 @@ _SLOT_REJECTIONS = {
 }
 
 
-def _lock_and_validate_slot(garage, data, appt_type):
+def _lock_and_validate_slot(garage, data, appt_type, add_ons):
     """Re-check the picked slot server-side against the same rules the
     calendar uses (opening hours, closures, minimum notice, not in the past,
     capacity, and - critically - the *selected type's* full duration) so a
@@ -170,12 +211,14 @@ def _lock_and_validate_slot(garage, data, appt_type):
     preferred_time = data.get("preferred_time")
     if preferred_time is not None:
         db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
+        selected_duration = _selected_duration(garage, appt_type, add_ons)
         reason = validate_slot(
             garage,
             data["preferred_date"],
             preferred_time,
             datetime.now(UTC),
             appointment_type=appt_type,
+            duration_min=selected_duration,
         )
         if reason is not None:
             # Full diagnostic context on every rejection - a byte-count in
@@ -185,7 +228,9 @@ def _lock_and_validate_slot(garage, data, appt_type):
             # snapshot at rejection time is gone by the time anyone looks).
             extra = ""
             if reason == "full":
-                duration = _slot_duration_for_type(appt_type, resolve_settings(garage))
+                duration = selected_duration or _slot_duration_for_type(
+                    appt_type, resolve_settings(garage)
+                )
                 used, capacity = slot_capacity_usage(
                     garage,
                     data["preferred_date"],
@@ -237,7 +282,7 @@ def _validate_answers_or_abort(garage, data, appointment_type_id):
         abort(422, message="Please check the highlighted answers.", errors={"json": exc.messages})
 
 
-def _build_booking_request(garage, data, appt_type, preferred_time, *, status, answers):
+def _build_booking_request(garage, data, appt_type, add_ons, preferred_time, *, status, answers):
     """Construct (not yet added/committed) a BookingRequest snapshotting the
     public form's submission - shared by the plain submit path (status
     PENDING) and the deposit-intent path (status AWAITING_PAYMENT)."""
@@ -297,11 +342,19 @@ def _build_booking_request(garage, data, appt_type, preferred_time, *, status, a
         # Snapshot what the customer actually saw/chose, so staff review
         # (and history, if the type is edited or removed later) reflects
         # the real request rather than the type's current configuration.
+        # Add-ons are folded into both, so staff review, approval and the
+        # capacity this request reserves all see the real job.
         requested_duration_minutes=(
-            appt_type.default_duration_minutes if appt_type is not None else None
+            _selected_duration(garage, appt_type, add_ons)
+            or (appt_type.default_duration_minutes if appt_type is not None else None)
         ),
-        requested_price=appt_type.base_price if appt_type is not None else None,
+        requested_price=(
+            total_price(appt_type.base_price, price_delta(add_ons))
+            if appt_type is not None
+            else None
+        ),
         requested_appointment_type_name=appt_type.name if appt_type is not None else None,
+        add_ons=[BookingRequestAddOn(**snapshot_kwargs(row, garage.id)) for row in add_ons],
         preferred_date=data["preferred_date"],
         preferred_time=preferred_time,
         preferred_employee_note=data.get("preferred_employee_note"),
@@ -369,6 +422,7 @@ def _recovery_response(booking_request, payment, session=None):
             booking_request.requested_appointment_type_name
             or (appointment_type.name if appointment_type else None)
         ),
+        "add_ons": booking_request.add_ons,
         "preferred_date": booking_request.preferred_date,
         "preferred_time": booking_request.preferred_time,
         "requested_duration_minutes": booking_request.requested_duration_minutes,
@@ -398,7 +452,7 @@ def _recovery_response(booking_request, payment, session=None):
     }
 
 
-def _existing_deposit_attempt(garage, attempt_id, appt_type, data):
+def _existing_deposit_attempt(garage, attempt_id, appt_type, add_ons, data):
     """Resume an active attempt before normal capacity revalidation.
 
     The caller holds the garage row lock, so an initial request and its retry
@@ -418,6 +472,7 @@ def _existing_deposit_attempt(garage, attempt_id, appt_type, data):
     # payment session while the UI is showing the new selection.
     if (
         booking_request.appointment_type_id != appt_type.id
+        or selection_signature(booking_request.add_ons) != selection_signature(add_ons)
         or booking_request.preferred_date != data["preferred_date"]
         or booking_request.preferred_time != data.get("preferred_time")
     ):
@@ -438,7 +493,7 @@ def _existing_deposit_attempt(garage, attempt_id, appt_type, data):
     return _deposit_response(booking_request, payment, session)
 
 
-def _existing_plain_booking_attempt(garage, attempt_id, appt_type, data):
+def _existing_plain_booking_attempt(garage, attempt_id, appt_type, add_ons, data):
     """Return the one existing plain submission for a browser attempt.
 
     A single opaque attempt id is deliberately shared by both public flows,
@@ -454,6 +509,7 @@ def _existing_plain_booking_attempt(garage, attempt_id, appt_type, data):
         return None
     if (
         booking_request.appointment_type_id != (appt_type.id if appt_type else None)
+        or selection_signature(booking_request.add_ons) != selection_signature(add_ons)
         or booking_request.preferred_date != data["preferred_date"]
         or booking_request.preferred_time != data.get("preferred_time")
         or booking_request.status == "AWAITING_PAYMENT"
@@ -466,7 +522,7 @@ def _existing_plain_booking_attempt(garage, attempt_id, appt_type, data):
     return booking_request
 
 
-def _matching_active_plain_request(garage, appt_type, data, answers):
+def _matching_active_plain_request(garage, appt_type, add_ons, data, answers):
     """Find the active request an accidental no-token retry would duplicate.
 
     Older/current browser clients may not yet send an attempt UUID for an
@@ -516,6 +572,8 @@ def _matching_active_plain_request(garage, appt_type, data, answers):
     }
     if any(getattr(candidate, key) != value for key, value in submitted_scalars.items()):
         return None
+    if selection_signature(candidate.add_ons) != selection_signature(add_ons):
+        return None
 
     submitted_answers = [
         (str(row["field"].id), row["value"], tuple(row["value_list"])) for row in answers
@@ -541,6 +599,7 @@ class BookingRequestSubmit(MethodView):
             abort(400, message="CAPTCHA verification failed.")
 
         appt_type = _get_active_appointment_type(garage, data.get("appointment_type_id"))
+        add_ons = _resolve_add_ons(appt_type, data.get("add_ons"))
 
         if appt_type is not None and appt_type.deposit_required:
             abort(
@@ -555,7 +614,7 @@ class BookingRequestSubmit(MethodView):
         # counterpart to the unique payment_attempt_id constraint.
         db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
         existing = _existing_plain_booking_attempt(
-            garage, data.get("payment_attempt_id"), appt_type, data
+            garage, data.get("payment_attempt_id"), appt_type, add_ons, data
         )
         if existing is not None:
             return existing
@@ -564,12 +623,12 @@ class BookingRequestSubmit(MethodView):
 
         if data.get("payment_attempt_id") is None:
             existing_duplicate = _matching_active_plain_request(
-                garage, appt_type, data, resolved_answers
+                garage, appt_type, add_ons, data, resolved_answers
             )
             if existing_duplicate is not None:
                 return existing_duplicate
 
-        preferred_time = _lock_and_validate_slot(garage, data, appt_type)
+        preferred_time = _lock_and_validate_slot(garage, data, appt_type, add_ons)
 
         # Create (or match, by email) the customer's account + vehicle right
         # away, rather than waiting for staff to approve the request - see
@@ -578,7 +637,13 @@ class BookingRequestSubmit(MethodView):
         # approves and assigns it a slot/employee (see
         # app/booking_requests/routes.py::BookingRequestApprove).
         booking_request = _build_booking_request(
-            garage, data, appt_type, preferred_time, status="PENDING", answers=resolved_answers
+            garage,
+            data,
+            appt_type,
+            add_ons,
+            preferred_time,
+            status="PENDING",
+            answers=resolved_answers,
         )
 
         db.session.add(booking_request)
@@ -617,6 +682,7 @@ class DepositIntentCreate(MethodView):
         appt_type = _get_active_appointment_type(garage, data.get("appointment_type_id"))
         if appt_type is None or not appt_type.deposit_required:
             abort(422, message="This service does not require a deposit.")
+        add_ons = _resolve_add_ons(appt_type, data.get("add_ons"))
 
         resolved_answers = _validate_answers_or_abort(garage, data, data.get("appointment_type_id"))
 
@@ -630,17 +696,18 @@ class DepositIntentCreate(MethodView):
         # receives the ordinary capacity check below.
         db.session.query(Garage).filter_by(id=garage.id).with_for_update().one()
         existing = _existing_deposit_attempt(
-            garage, data.get("payment_attempt_id"), appt_type, data
+            garage, data.get("payment_attempt_id"), appt_type, add_ons, data
         )
         if existing is not None:
             return existing
 
-        preferred_time = _lock_and_validate_slot(garage, data, appt_type)
+        preferred_time = _lock_and_validate_slot(garage, data, appt_type, add_ons)
 
         booking_request = _build_booking_request(
             garage,
             data,
             appt_type,
+            add_ons,
             preferred_time,
             status="AWAITING_PAYMENT",
             answers=resolved_answers,

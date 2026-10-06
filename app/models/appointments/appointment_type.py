@@ -11,6 +11,7 @@ from app.extensions import db
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.appointments.add_on import AddOn
     from app.models.appointments.appointment import Appointment
     from app.models.appointments.appointment_type_group import AppointmentTypeGroup
     from app.models.appointments.checklist_template import ChecklistTemplate
@@ -103,4 +104,10 @@ class GarageAppointmentType(db.Model, PrimaryKeyMixin, TimestampMixin):  # type:
     )
     appointments: Mapped[list["Appointment"]] = relationship(
         "Appointment", back_populates="appointment_type"
+    )
+    add_ons: Mapped[list["AddOn"]] = relationship(
+        "AddOn",
+        back_populates="appointment_type",
+        cascade="all, delete-orphan",
+        order_by="(AddOn.order, AddOn.name)",
     )

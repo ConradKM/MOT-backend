@@ -1,5 +1,7 @@
 from marshmallow import Schema, fields, validate
 
+from app.appointments.add_ons.schemas import AddOnSelectionSchema, AppliedAddOnSchema
+
 
 class AppointmentSchema(Schema):
     id = fields.UUID(dump_only=True)
@@ -26,6 +28,15 @@ class AppointmentSchema(Schema):
     price_at_booking = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     appointment_type_name_at_booking = fields.Str(dump_only=True, allow_none=True)
 
+    # Input: which of the type's add-ons to apply. Their price deltas are
+    # folded into price_at_booking and, when end_time is omitted, their
+    # duration deltas into the derived end_time.
+    add_ons = fields.List(fields.Nested(AddOnSelectionSchema), load_only=True, load_default=list)
+    # Output: what was actually applied, snapshotted at selection time.
+    applied_add_ons = fields.List(
+        fields.Nested(AppliedAddOnSchema), dump_only=True, attribute="add_ons"
+    )
+
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
@@ -41,6 +52,9 @@ class AppointmentUpdateSchema(Schema):
     appointment_type_id = fields.UUID()
     status = fields.Str(validate=validate.Length(min=1, max=30))
     notes = fields.Str(allow_none=True)
+    # The full new selection (omit to leave add-ons unchanged). Changing
+    # appointment_type_id without this clears the old type's add-ons.
+    add_ons = fields.List(fields.Nested(AddOnSelectionSchema))
 
 
 class AppointmentQueryArgsSchema(Schema):
