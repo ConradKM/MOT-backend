@@ -23,6 +23,7 @@ from app.extensions import db
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.appointments.applied_add_on import BookingRequestAddOn
     from app.models.appointments.appointment import Appointment
     from app.models.appointments.appointment_type import GarageAppointmentType
     from app.models.booking_flow.answer import BookingRequestAnswer
@@ -231,6 +232,14 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
         back_populates="booking_request",
         cascade="all, delete-orphan",
         order_by="BookingRequestAnswer.order",
+    )
+    # Add-ons the customer picked; their deltas are already folded into
+    # requested_price/requested_duration_minutes above.
+    add_ons: Mapped[list["BookingRequestAddOn"]] = relationship(
+        "BookingRequestAddOn",
+        back_populates="booking_request",
+        cascade="all, delete-orphan",
+        order_by="BookingRequestAddOn.created_at",
     )
     appointment: Mapped["Appointment | None"] = relationship("Appointment")
     payments: Mapped[list["BookingPayment"]] = relationship(

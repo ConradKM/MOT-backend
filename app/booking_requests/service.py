@@ -26,6 +26,7 @@ from app.appointments.checklists.service import snapshot_checklist_for_appointme
 from app.communications.events import BOOKING_REQUEST_APPROVED, emit_event
 from app.extensions import db
 from app.garages.timezones import local_day_for, local_slot_as_utc, timezone_for
+from app.models.appointments.applied_add_on import AppointmentAddOn
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
@@ -210,7 +211,15 @@ def approve_booking_request(
     if not assigned_employee.is_active:
         abort(422, message="This employee's account is deactivated.")
 
-    start_time, end_time = _resolve_appointment_slot(booking_request, data, appointment_type)
+    # The customer's add-ons belong to the service they picked. If staff
+    # approve it as a different service, those add-ons don't apply - fall
+    # back to the new service's own price and duration.
+    keep_add_ons = appointment_type.id == booking_request.appointment_type_id
+    dropped_add_ons = bool(booking_request.add_ons) and not keep_add_ons
+
+    start_time, end_time = _resolve_appointment_slot(
+        booking_request, data, appointment_type, use_request_duration=not dropped_add_ons
+    )
     _assert_no_conflict(assigned_employee_id, start_time, end_time)
     _assert_capacity_available(booking_request.garage, booking_request, start_time, end_time)
 
@@ -239,13 +248,27 @@ def approve_booking_request(
         notes=booking_request.notes,
         price_at_booking=(
             booking_request.requested_price
-            if booking_request.requested_price is not None
+            if booking_request.requested_price is not None and not dropped_add_ons
             else appointment_type.base_price
         ),
         appointment_type_name_at_booking=(
             booking_request.requested_appointment_type_name or appointment_type.name
         ),
     )
+    if keep_add_ons:
+        # Copy the request's snapshot verbatim - not re-read from the
+        # catalogue - so approval charges what the customer was shown.
+        appointment.add_ons = [
+            AppointmentAddOn(
+                garage_id=row.garage_id,
+                add_on_id=row.add_on_id,
+                name=row.name,
+                quantity=row.quantity,
+                price_delta=row.price_delta,
+                duration_delta_minutes=row.duration_delta_minutes,
+            )
+            for row in booking_request.add_ons
+        ]
     db.session.add(appointment)
     db.session.flush()
     snapshot_checklist_for_appointment(appointment)
@@ -349,7 +372,7 @@ def auto_accept_booking_request(
     return None
 
 
-def _resolve_appointment_slot(booking_request, data, appointment_type):
+def _resolve_appointment_slot(booking_request, data, appointment_type, use_request_duration=True):
     start_time = data.get("start_time")
     if start_time is None and booking_request.preferred_time is not None:
         start_time = local_slot_as_utc(
@@ -364,7 +387,7 @@ def _resolve_appointment_slot(booking_request, data, appointment_type):
     if end_time is None:
         duration_minutes = (
             booking_request.requested_duration_minutes
-            if booking_request.requested_duration_minutes is not None
+            if booking_request.requested_duration_minutes is not None and use_request_duration
             else appointment_type.default_duration_minutes
         )
         if duration_minutes is None:

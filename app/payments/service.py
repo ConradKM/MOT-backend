@@ -35,7 +35,12 @@ from app.models.payments.payment import (
 from app.models.payments.webhook_event import PaymentWebhookEvent
 from app.payments.audit import record_payment_event
 from app.payments.config import is_payments_configured
-from app.payments.money import calculate_deposit_minor, minor_to_decimal
+from app.payments.money import (
+    PENCE_PER_POUND,
+    DepositConfigError,
+    calculate_deposit_minor,
+    minor_to_decimal,
+)
 from app.payments.providers import get_provider, get_provider_for_garage
 from app.payments.providers.base import (
     WEBHOOK_ACCOUNT_UPDATED,
@@ -99,11 +104,27 @@ def create_deposit_hold(
     assert appointment_type.deposit_type is not None
     assert appointment_type.deposit_value is not None
 
+    # The request's requested_price is the add-on-inclusive total the
+    # customer was shown (see public_booking/routes.py), so a percentage
+    # deposit is taken on what they are actually booking.
+    service_total = (
+        booking_request.requested_price
+        if booking_request.requested_price is not None
+        else appointment_type.base_price
+    )
     amount_minor = calculate_deposit_minor(
         deposit_type=appointment_type.deposit_type,
         deposit_value=appointment_type.deposit_value,
-        base_price=appointment_type.base_price,
+        base_price=service_total,
     )
+    if service_total is not None:
+        # A fixed deposit is capped at the total: add-ons that reduce the
+        # price must not leave the deposit larger than the whole booking.
+        amount_minor = min(amount_minor, int(service_total * PENCE_PER_POUND))
+    if amount_minor <= 0:
+        raise DepositConfigError(
+            "This booking's total is too low to take a deposit. Please contact the business."
+        )
 
     payment_id = uuid.uuid4()
     payment = BookingPayment(

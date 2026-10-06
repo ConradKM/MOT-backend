@@ -374,7 +374,14 @@ def _opening_hours_payload(hours_map) -> list[dict]:
     return out
 
 
-def availability_range(garage, from_date, to_date, now: datetime, appointment_type=None) -> dict:
+def availability_range(
+    garage,
+    from_date,
+    to_date,
+    now: datetime,
+    appointment_type=None,
+    duration_min: int | None = None,
+) -> dict:
     """Payload for GET /api/public/<slug>/availability.
 
     ``appointment_type`` is optional and defaults to the previous, generic
@@ -392,7 +399,11 @@ def availability_range(garage, from_date, to_date, now: datetime, appointment_ty
     end = max(end, start)
 
     exceptions = resolve_exceptions(garage, start, end)
-    duration = _type_duration(appointment_type, settings)
+    # ``duration_min`` overrides the type's own length once add-ons have
+    # changed it (see public_booking/routes.py::_selected_duration).
+    duration = (
+        duration_min if duration_min is not None else _type_duration(appointment_type, settings)
+    )
 
     days = []
     cursor = start

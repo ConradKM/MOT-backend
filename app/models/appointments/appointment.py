@@ -11,6 +11,7 @@ from app.extensions import db
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
+    from app.models.appointments.applied_add_on import AppointmentAddOn
     from app.models.appointments.appointment_checklist import AppointmentChecklist
     from app.models.appointments.appointment_type import GarageAppointmentType
     from app.models.customer import Customer
@@ -78,7 +79,8 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[na
 
     status: Mapped[str] = mapped_column(String(30), default="BOOKED", nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
-    # Snapshot of appointment_type.base_price at creation time - the type's
+    # Snapshot of appointment_type.base_price at creation time, plus the
+    # selected add-ons' price deltas (see add_ons below) - the type's
     # price may change later (see app/appointments/types), but a historical
     # appointment should keep showing what it actually cost. Duration doesn't
     # need an equivalent snapshot: start_time/end_time are already fixed at
@@ -101,4 +103,10 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[na
         back_populates="appointment",
         uselist=False,
         cascade="all, delete-orphan",
+    )
+    add_ons: Mapped[list["AppointmentAddOn"]] = relationship(
+        "AppointmentAddOn",
+        back_populates="appointment",
+        cascade="all, delete-orphan",
+        order_by="AppointmentAddOn.created_at",
     )

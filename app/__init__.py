@@ -272,6 +272,7 @@ def create_app(config_class=Config):
     from .ai_voice.faqs.routes import voice_faqs_blp
     from .ai_voice.routes import openai_voice_blp
     from .appointment_reminders.routes import reminders_blp
+    from .appointments.add_ons.routes import add_ons_blp
     from .appointments.checklist_templates.routes import checklist_templates_blp
     from .appointments.checklists.routes import appointment_checklists_blp
     from .appointments.media.routes import checklist_item_media_blp
@@ -340,6 +341,7 @@ def create_app(config_class=Config):
     api.register_blueprint(appointment_type_groups_blp)
     api.register_blueprint(appointment_statuses_blp)
     api.register_blueprint(checklist_templates_blp)
+    api.register_blueprint(add_ons_blp)
     api.register_blueprint(appointments_blp)
     api.register_blueprint(appointment_checklists_blp)
     api.register_blueprint(checklist_item_media_blp)
@@ -372,6 +374,8 @@ def create_app(config_class=Config):
         vehicle,
     )
     from .models.appointments import (  # noqa: F401
+        add_on,
+        applied_add_on,
         appointment,
         appointment_checklist,
         appointment_checklist_item,

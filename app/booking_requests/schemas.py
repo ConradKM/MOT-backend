@@ -1,5 +1,6 @@
 from marshmallow import Schema, fields, validate
 
+from app.appointments.add_ons.schemas import AppliedAddOnSchema
 from app.models.booking_request import (
     BOOKING_REQUEST_SOURCE_WEB,
     BOOKING_REQUEST_STATUSES,
@@ -130,6 +131,9 @@ class BookingRequestSchema(Schema):
     answers_collected = fields.Method("_get_answers_collected", dump_only=True)
     source = fields.Str(dump_only=True)
     requested_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    # The add-ons the customer picked, snapshotted - already included in
+    # requested_price/requested_duration_minutes above.
+    add_ons = fields.List(fields.Nested(AppliedAddOnSchema), dump_only=True)
 
     preferred_date = fields.Date(dump_only=True)
     preferred_time = fields.Time(dump_only=True, allow_none=True)

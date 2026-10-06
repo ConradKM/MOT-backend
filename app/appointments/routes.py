@@ -4,6 +4,13 @@ from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 
+from app.appointments.add_ons.service import (
+    duration_delta,
+    price_delta,
+    resolve_selection,
+    snapshot_kwargs,
+    total_price,
+)
 from app.appointments.checklists.service import snapshot_checklist_for_appointment
 from app.appointments.statuses.defaults import DEFAULT_STATUS_KEYS
 from app.auth.utils import get_current_employee
@@ -16,6 +23,7 @@ from app.communications.events import (
 )
 from app.extensions import db
 from app.garages.timezones import local_slot_as_utc
+from app.models.appointments.applied_add_on import AppointmentAddOn
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_status import GarageAppointmentStatus
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -166,7 +174,9 @@ def _validate_time_range(start_time, end_time):
         abort(422, message="start_time must be before end_time.")
 
 
-def _resolve_end_time(start_time, end_time, appointment_type):
+def _resolve_end_time(start_time, end_time, appointment_type, add_on_minutes=0):
+    # An explicit end_time is staff's own override and wins outright, add-ons
+    # included - the form shows the derived value but lets staff edit it.
     if end_time is not None:
         return end_time
 
@@ -176,7 +186,47 @@ def _resolve_end_time(start_time, end_time, appointment_type):
             message="end_time is required - this appointment type has no default duration set.",
         )
 
-    return start_time + timedelta(minutes=appointment_type.default_duration_minutes)
+    return start_time + timedelta(
+        minutes=appointment_type.default_duration_minutes + add_on_minutes
+    )
+
+
+def _plan_add_ons(appointment, appointment_type, type_changed, selection):
+    """The add-on rows an edited appointment should end up with, as
+    transient AppointmentAddOn objects (assigned in one go once every other
+    check has passed).
+
+    ``selection`` is the full new selection. Add-ons that stay selected keep
+    their snapshotted price and duration - re-saving an appointment must not
+    silently re-price it from today's catalogue - and only newly selected
+    ones take current values. A type change drops the old type's add-ons,
+    since they can't apply to the new service.
+    """
+    existing = [] if type_changed else list(appointment.add_ons)
+    by_add_on = {r.add_on_id: r for r in existing if r.add_on_id is not None}
+    resolved = resolve_selection(
+        appointment_type,
+        selection,
+        already_applied={add_on_id: r.quantity for add_on_id, r in by_add_on.items()},
+    )
+
+    planned = []
+    for row in resolved:
+        kept = by_add_on.get(row.add_on.id)
+        if kept is not None:
+            planned.append(
+                AppointmentAddOn(
+                    garage_id=kept.garage_id,
+                    add_on_id=kept.add_on_id,
+                    name=kept.name,
+                    quantity=row.quantity,
+                    price_delta=kept.price_delta,
+                    duration_delta_minutes=kept.duration_delta_minutes,
+                )
+            )
+        else:
+            planned.append(AppointmentAddOn(**snapshot_kwargs(row, appointment.garage_id)))
+    return planned
 
 
 def _check_for_conflict(employee_id, start_time, end_time, exclude_appointment_id=None):
@@ -292,7 +342,11 @@ class AppointmentList(MethodView):
         if vehicle_id is not None:
             _get_owned_vehicle(vehicle_id, garage_id, data["customer_id"])
 
-        end_time = _resolve_end_time(data["start_time"], data["end_time"], appointment_type)
+        add_ons = resolve_selection(appointment_type, data.get("add_ons"))
+        end_time = _resolve_end_time(
+            data["start_time"], data["end_time"], appointment_type, duration_delta(add_ons)
+        )
+        price_at_booking = total_price(appointment_type.base_price, price_delta(add_ons))
 
         _validate_time_range(data["start_time"], end_time)
         _validate_status(data.get("status"), garage_id)
@@ -310,8 +364,9 @@ class AppointmentList(MethodView):
             appointment_type_id=data["appointment_type_id"],
             status=data.get("status") or "BOOKED",
             notes=data.get("notes"),
-            price_at_booking=appointment_type.base_price,
+            price_at_booking=price_at_booking,
             appointment_type_name_at_booking=appointment_type.name,
+            add_ons=[AppointmentAddOn(**snapshot_kwargs(row, garage_id)) for row in add_ons],
         )
 
         db.session.add(appointment)
@@ -358,6 +413,12 @@ class AppointmentResource(MethodView):
         if "employee_id" in data:
             _get_owned_employee(data["employee_id"], garage_id)
 
+        # Re-sending the current type (as the staff form does on every save)
+        # is not a change of service: it must neither re-price the booking
+        # from today's catalogue nor trip the "type is no longer active" check.
+        if data.get("appointment_type_id") == appointment.appointment_type_id:
+            del data["appointment_type_id"]
+
         replacement_appointment_type = None
         if "appointment_type_id" in data:
             replacement_appointment_type = _get_owned_appointment_type(
@@ -382,8 +443,27 @@ class AppointmentResource(MethodView):
             _validate_status(data["status"], garage_id)
             _validate_status_transition(appointment.status, data["status"], garage_id)
 
+        # None = leave the add-ons exactly as they are (snapshots, and rows
+        # whose catalogue add-on has since been deleted, included).
+        add_on_selection = data.pop("add_ons", None)
+        planned_add_ons = None
+        if add_on_selection is not None or replacement_appointment_type is not None:
+            planned_add_ons = _plan_add_ons(
+                appointment,
+                replacement_appointment_type or appointment.appointment_type,
+                replacement_appointment_type is not None,
+                add_on_selection or [],
+            )
+
         effective_start = data.get("start_time", appointment.start_time)
         effective_end = data.get("end_time", appointment.end_time)
+        if planned_add_ons is not None and "end_time" not in data:
+            # No explicit end_time: carry the add-ons' change in duration
+            # through, rather than leaving the old end in place.
+            shift = duration_delta(planned_add_ons) - duration_delta(appointment.add_ons)
+            if shift:
+                effective_end = effective_end + timedelta(minutes=shift)
+                data["end_time"] = effective_end
         _validate_time_range(effective_start, effective_end)
 
         will_be_live = data.get("status", appointment.status) != "CANCELLED"
@@ -408,6 +488,18 @@ class AppointmentResource(MethodView):
                 exclude_appointment_id=appointment.id,
             )
 
+        new_price = None
+        if planned_add_ons is not None:
+            if replacement_appointment_type is not None:
+                base = replacement_appointment_type.base_price
+            elif appointment.price_at_booking is not None:
+                # Recover the booked base from the existing snapshot rather
+                # than today's catalogue price - see _plan_add_ons.
+                base = appointment.price_at_booking - price_delta(appointment.add_ons)
+            else:
+                base = None
+            new_price = total_price(base, price_delta(planned_add_ons))
+
         previous_status = appointment.status
         previous_start = appointment.start_time
         previous_end = appointment.end_time
@@ -421,8 +513,11 @@ class AppointmentResource(MethodView):
             # immutable customer-facing values with it, otherwise the
             # appointment would point at one type while displaying the old
             # type's name and price.
-            appointment.price_at_booking = replacement_appointment_type.base_price
             appointment.appointment_type_name_at_booking = replacement_appointment_type.name
+
+        if planned_add_ons is not None:
+            appointment.add_ons = planned_add_ons
+            appointment.price_at_booking = new_price
 
         db.session.commit()
 
