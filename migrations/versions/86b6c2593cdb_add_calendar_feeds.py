@@ -1,7 +1,7 @@
 """Add calendar subscription feeds (app/calendar_export)
 
 Revision ID: 86b6c2593cdb
-Revises: 3a7c1e9d5b20
+Revises: f85f6806ad5e
 Create Date: 2026-10-10 23:59:20.235509
 
 """
@@ -11,7 +11,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "86b6c2593cdb"
-down_revision = "3a7c1e9d5b20"
+down_revision = "f85f6806ad5e"
 branch_labels = None
 depends_on = None
 
