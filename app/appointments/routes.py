@@ -1,4 +1,4 @@
-from datetime import time, timedelta
+from datetime import timedelta
 
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
@@ -22,7 +22,7 @@ from app.communications.events import (
     emit_event,
 )
 from app.extensions import db
-from app.garages.timezones import local_slot_as_utc
+from app.garages.timezones import local_day_bounds_utc
 from app.models.appointments.applied_add_on import AppointmentAddOn
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_status import GarageAppointmentStatus
@@ -274,10 +274,7 @@ def _check_capacity(garage, start_time, end_time, exclude_appointment_id=None):
 
 
 def _day_bounds(garage, day):
-    return (
-        local_slot_as_utc(garage, day, time.min),
-        local_slot_as_utc(garage, day, time.max),
-    )
+    return local_day_bounds_utc(garage, day)
 
 
 @appointments_blp.route("/")

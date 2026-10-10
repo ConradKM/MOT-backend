@@ -32,5 +32,9 @@ stripe>=11,<16
 # control connection crashed on connect (issue #228) - the model answered but
 # could never run a tool. tests/test_ai_voice_dependencies.py guards this.
 openai[realtime]>=2,<3
+# RFC 5545 serialisation for calendar export / subscription feeds
+# (app/calendar_export/ics.py): line folding, escaping and CRLF endings.
+# Ships its own type hints (py.typed), so no mypy override is needed.
+icalendar>=6,<8
 pytest>=8.3,<9
 pytest-cov>=6,<7
