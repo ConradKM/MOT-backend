@@ -34,6 +34,7 @@ from app.payments.providers.base import PaymentProviderError
 from app.payments.service import PaymentUnavailableError
 from app.phone import InvalidPhoneNumberError, normalize_uk_phone
 from app.public_booking import availability
+from app.terms.service import acceptance_url
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,9 @@ TOOL_SCHEMAS: list[dict] = [
         "name": "create_booking",
         "description": (
             "Submit a CoMaz booking request for staff review - never an instant confirmation. "
+            "If the result has terms_acceptance_required true, the booking is only held: it "
+            "is not confirmed until the caller accepts the business's terms and conditions "
+            "on the page texted to them. "
             "Only call after get_appointment_types and get_available_slots have identified the "
             "selected service and real slot, the caller has explicitly confirmed all details, "
             "and you have their name, contact number, and every vehicle detail that service "
@@ -527,7 +531,7 @@ def _tool_create_booking(
             "ok": False,
             "error": f"That slot is no longer available ({reason}). Offer to check another time.",
         }
-    return {
+    result = {
         "ok": True,
         "booking_reference": booking_request.booking_reference,
         "status": booking_request.status,
@@ -539,6 +543,30 @@ def _tool_create_booking(
             else None
         ),
     }
+    if booking_request.status == "AWAITING_TERMS":
+        result.update(_send_terms_link(garage, booking_request, contact_phone))
+    return result
+
+
+def _send_terms_link(garage, booking_request, contact_phone: str) -> dict:
+    """Text the caller the page where they accept this business's Terms &
+    Conditions - the booking stays AWAITING_TERMS (holding the slot, not yet
+    a request staff can act on) until they do. See app/terms/."""
+    token = getattr(booking_request, "terms_acceptance_token", None)
+    sms_sent = False
+    if token:
+        service_name = booking_request.requested_appointment_type_name or "appointment"
+        body = (
+            f"{garage.name}: Your {service_name} booking on "
+            f"{booking_request.preferred_date.isoformat()} isn't confirmed yet. Please read "
+            f"and accept our terms and conditions to confirm it: "
+            f"{acceptance_url(garage, token)}"
+        )
+        log = send_sms_message(
+            garage=garage, to=contact_phone, body=body, booking_request=booking_request
+        )
+        sms_sent = log.status not in ("FAILED", STATUS_SKIPPED_NOT_CONFIGURED)
+    return {"terms_acceptance_required": True, "terms_link_sent_by_sms": sms_sent}
 
 
 def _create_deposit_booking(garage, *, contact_phone: str, **booking_kwargs) -> dict:
@@ -576,6 +604,25 @@ def _create_deposit_booking(garage, *, contact_phone: str, **booking_kwargs) -> 
         }
 
     deposit_amount = _deposit_amount(appointment_type)
+    if booking_request.status == "AWAITING_TERMS":
+        # Terms first: the same texted page takes the caller on to paying
+        # the deposit once they accept, so there is no separate payment link.
+        return {
+            "ok": True,
+            "booking_reference": booking_request.booking_reference,
+            "status": booking_request.status,
+            "service": appointment_type.name,
+            "date": booking_request.preferred_date.isoformat(),
+            "time": (
+                booking_request.preferred_time.strftime("%H:%M")
+                if booking_request.preferred_time is not None
+                else None
+            ),
+            "deposit_required": True,
+            "deposit_amount": deposit_amount,
+            "deposit_currency": appointment_type.deposit_currency,
+            **_send_terms_link(garage, booking_request, contact_phone),
+        }
     recovery_token = getattr(booking_request, "deposit_recovery_token", None)
     sms_sent = False
     if recovery_token:

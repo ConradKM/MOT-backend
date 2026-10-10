@@ -432,6 +432,14 @@ class Config:
     # customer to complete a card challenge, short enough that an abandoned
     # payment doesn't block the slot for other customers.
     PAYMENT_HOLD_MINUTES = int(os.getenv("PAYMENT_HOLD_MINUTES", "15"))
+    # How long a WhatsApp/SMS/voice booking waits for the customer to accept
+    # the business's Terms & Conditions via the texted link (AWAITING_TERMS -
+    # see app/terms/) before it is swept to EXPIRED by the same job as an
+    # unpaid deposit hold, releasing the slot. The link arrives while the
+    # customer is still in the conversation, so this only has to cover
+    # "read it and tap accept"; longer just keeps a slot away from everyone
+    # else for a booking that may never happen.
+    TERMS_ACCEPTANCE_HOLD_MINUTES = int(os.getenv("TERMS_ACCEPTANCE_HOLD_MINUTES", "60"))
     # Deposits are GBP-only for now (see app/payments/money.py); kept as a
     # constant, not an env var, since changing it needs code changes anyway.
     DEPOSIT_CURRENCY = "GBP"
@@ -493,3 +501,4 @@ class TestConfig(Config):
     # CI. A short hold so expiry tests don't need to fake-sleep long.
     PAYMENTS_PROVIDER = "fake"
     PAYMENT_HOLD_MINUTES = 15
+    TERMS_ACCEPTANCE_HOLD_MINUTES = 60

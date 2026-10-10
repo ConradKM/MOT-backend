@@ -135,6 +135,13 @@ class QueueEntry(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[nam
     # Guards against a second "you're up" text if an entry is re-called.
     called_sms_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # The business's Terms & Conditions as accepted on the join page (see
+    # app/terms/) - when, and which GarageTermsVersion. Server-stamped; null
+    # for a business without terms. Joining is web-only, so unlike
+    # BookingRequest there is no channel to record alongside it.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    terms_version: Mapped[int | None] = mapped_column(Integer)
+
     # Set on promotion to IN_SERVICE. SET NULL so deleting the appointment
     # (a staff clean-up) doesn't erase the fact the customer queued.
     appointment_id: Mapped[uuid.UUID | None] = mapped_column(

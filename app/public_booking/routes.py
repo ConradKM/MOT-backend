@@ -44,6 +44,7 @@ from app.payments.service import (
     payment_hold_deadline,
     reconcile_public_payment_recovery,
 )
+from app.terms.service import require_web_acceptance, stamp_acceptance
 
 from .availability import _type_duration as _slot_duration_for_type
 from .availability import (
@@ -598,6 +599,12 @@ class BookingRequestSubmit(MethodView):
         if not verify_captcha(data.get("captcha_token")):
             abort(400, message="CAPTCHA verification failed.")
 
+        # Before every lookup below, including the idempotent-retry ones: no
+        # path through this endpoint proceeds without acceptance of the
+        # current terms, and a retry that returns an existing request never
+        # re-stamps it.
+        terms_version = require_web_acceptance(garage, data)
+
         appt_type = _get_active_appointment_type(garage, data.get("appointment_type_id"))
         add_ons = _resolve_add_ons(appt_type, data.get("add_ons"))
 
@@ -645,6 +652,7 @@ class BookingRequestSubmit(MethodView):
             status="PENDING",
             answers=resolved_answers,
         )
+        stamp_acceptance(booking_request, terms_version)
 
         db.session.add(booking_request)
         db.session.flush()
@@ -679,6 +687,11 @@ class DepositIntentCreate(MethodView):
         if not verify_captcha(data.get("captcha_token")):
             abort(400, message="CAPTCHA verification failed.")
 
+        # Checked before the hold (and the payment session) exists, and before
+        # a retry can resume one: the customer must have accepted the current
+        # terms before being sent to pay. See BookingRequestSubmit.post.
+        terms_version = require_web_acceptance(garage, data)
+
         appt_type = _get_active_appointment_type(garage, data.get("appointment_type_id"))
         if appt_type is None or not appt_type.deposit_required:
             abort(422, message="This service does not require a deposit.")
@@ -712,6 +725,7 @@ class DepositIntentCreate(MethodView):
             status="AWAITING_PAYMENT",
             answers=resolved_answers,
         )
+        stamp_acceptance(booking_request, terms_version)
         booking_request.payment_hold_expires_at = payment_hold_deadline()
         recovery_token = token_urlsafe(32)
         booking_request.payment_recovery_token_hash = sha256(recovery_token.encode()).hexdigest()

@@ -5,6 +5,7 @@ from app.models.booking_request import (
     BOOKING_REQUEST_SOURCE_WEB,
     BOOKING_REQUEST_STATUSES,
 )
+from app.terms.service import accepted_terms_url
 
 
 class _RequestAppointmentTypeSchema(Schema):
@@ -167,6 +168,20 @@ class BookingRequestSchema(Schema):
     customer_id = fields.UUID(dump_only=True, allow_none=True)
     vehicle_id = fields.UUID(dump_only=True, allow_none=True)
     appointment_id = fields.UUID(dump_only=True, allow_none=True)
+
+    # The business's Terms & Conditions as the customer accepted them (see
+    # app/terms/): when, which version, and the public page showing that
+    # exact wording. All null for a business without terms, and while a
+    # WhatsApp/SMS/phone request is still AWAITING_TERMS. `source` says where
+    # it was accepted (WEB form checkbox, or the texted CONVERSATION link).
+    terms_accepted_at = fields.DateTime(dump_only=True, allow_none=True)
+    terms_version = fields.Int(dump_only=True, allow_none=True)
+    terms_url = fields.Function(accepted_terms_url, dump_only=True, allow_none=True)
+    # When an AWAITING_TERMS/AWAITING_PAYMENT hold lapses and the slot is
+    # released; null otherwise.
+    hold_expires_at = fields.DateTime(
+        dump_only=True, allow_none=True, attribute="payment_hold_expires_at"
+    )
 
     # Null for a request whose type never required a deposit.
     payment = fields.Nested(

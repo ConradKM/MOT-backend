@@ -306,6 +306,7 @@ def create_app(config_class=Config):
     from .public_booking.routes import public_booking_blp
     from .queueing.routes import public_queue_blp, queue_blp
     from .roles.routes import roles_blp
+    from .terms.routes import public_terms_blp, terms_settings_blp
     from .vehicles.routes import vehicles_blp
 
     api.register_blueprint(health_blp)
@@ -323,6 +324,8 @@ def create_app(config_class=Config):
     api.register_blueprint(garage_schedule_blp)
     api.register_blueprint(public_garages_blp)
     api.register_blueprint(public_booking_blp)
+    api.register_blueprint(terms_settings_blp)
+    api.register_blueprint(public_terms_blp)
     api.register_blueprint(booking_requests_blp)
     api.register_blueprint(public_queue_blp)
     api.register_blueprint(queue_blp)
@@ -370,6 +373,7 @@ def create_app(config_class=Config):
         feedback,
         garage,
         garage_schedule,
+        garage_terms_version,
         mot_record,
         mot_reminder_settings,
         password_reset_token,

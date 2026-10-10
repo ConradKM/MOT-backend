@@ -22,6 +22,7 @@ from app.models.conversation.conversation_session import ConversationSession
 from app.models.customer import Customer
 from app.models.garage import Garage
 from app.models.vehicle import Vehicle
+from app.terms.service import acceptance_url, has_terms
 
 from . import actions
 from .appointment_matching import match_appointment_type
@@ -793,9 +794,19 @@ def _to_confirmation(ctx: ConversationContext, updates: dict) -> StepResult:
     if duration_text:
         summary_lines.append(duration_text)
 
+    # A business with Terms & Conditions holds the booking until they are
+    # accepted on a web page (app/terms/) - say so before the customer says
+    # yes, not only after.
+    terms_note = (
+        f"\n\nBefore it goes through, you'll need to accept {ctx.garage.name}'s terms and "
+        "conditions - I'll send you a link."
+        if has_terms(ctx.garage)
+        else ""
+    )
     return StepResult(
         response_text="Here's what I have:\n"
         + "\n".join(summary_lines)
+        + terms_note
         + "\n\nShall I go ahead and request this booking?",
         workflow_step=AWAITING_BOOKING_CONFIRMATION,
         context_updates=updates,
@@ -868,10 +879,21 @@ def handle_awaiting_booking_confirmation(ctx: ConversationContext, text: str) ->
         )
 
     type_label = appointment_type.name if appointment_type else "appointment"
-    message = (
-        f"You're all set - I've sent your {type_label} request for {_format_date(day)} "
-        f"at {slot_time.strftime('%H:%M')} to the team, who'll confirm shortly."
-    )
+    acceptance_token = getattr(booking_request, "terms_acceptance_token", None)
+    if booking_request.status == "AWAITING_TERMS" and acceptance_token:
+        # Held, not booked: this reply is itself the text/WhatsApp carrying
+        # the acceptance link, and it must not claim anything is confirmed.
+        message = (
+            f"Nearly there - I'm holding {_format_date(day)} at "
+            f"{slot_time.strftime('%H:%M')} for your {type_label}, but it isn't booked until "
+            f"you accept {ctx.garage.name}'s terms and conditions here: "
+            f"{acceptance_url(ctx.garage, acceptance_token)}"
+        )
+    else:
+        message = (
+            f"You're all set - I've sent your {type_label} request for {_format_date(day)} "
+            f"at {slot_time.strftime('%H:%M')} to the team, who'll confirm shortly."
+        )
     # On WhatsApp, give the customer their reference so they can check or
     # manage the booking in the portal (see app/customer_auth). Voice keeps
     # the plain wording - a reference code read aloud isn't useful.

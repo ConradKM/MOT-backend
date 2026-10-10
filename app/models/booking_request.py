@@ -33,6 +33,14 @@ if TYPE_CHECKING:
     from app.models.payments.payment import BookingPayment
     from app.models.vehicle import Vehicle
 
+# AWAITING_TERMS: created by the conversational channel (WhatsApp/SMS/voice)
+# for a business that has Terms & Conditions - there is no checkbox in a chat
+# or on a call, so the request waits for the customer to accept them on a web
+# page linked by text (see app/terms/). A short-lived hold exactly like
+# AWAITING_PAYMENT: it reserves capacity, is invisible to approval, expires
+# through the same sweeper (app/payments/service.py::expire_stale_payment_holds),
+# and on acceptance becomes PENDING - or AWAITING_PAYMENT for a deposit
+# booking, so a deposit is never taken before the terms are accepted.
 # AWAITING_PAYMENT: the appointment type requires a deposit and the customer
 # hasn't paid it yet - a short-lived hold (see app/payments/service.py),
 # reserving capacity exactly like PENDING (see
@@ -50,9 +58,10 @@ if TYPE_CHECKING:
 # or staff) after being PENDING/APPROVED; reserved for the refund
 # infrastructure in app/payments/service.py - no automatic transition into
 # it exists yet. Every terminal status (everything except PENDING/
-# AWAITING_PAYMENT) releases the capacity the request was holding, simply by
-# no longer being counted in availability.py.
+# AWAITING_PAYMENT/AWAITING_TERMS) releases the capacity the request was
+# holding, simply by no longer being counted in availability.py.
 BOOKING_REQUEST_STATUSES = (
+    "AWAITING_TERMS",
     "AWAITING_PAYMENT",
     "PENDING",
     "APPROVED",
@@ -213,12 +222,30 @@ class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore
         Uuid, ForeignKey("appointments.id", ondelete="SET NULL")
     )
 
-    # Set only while status == AWAITING_PAYMENT: when the payment hold
-    # expires (see app/payments/service.py::expire_stale_payment_holds).
-    # Null the rest of this row's life - a request that never required a
-    # deposit, or one whose deposit has already resolved, has nothing to
-    # expire.
+    # Set only while the request is a short-lived hold - AWAITING_PAYMENT or
+    # AWAITING_TERMS: when that hold expires (see
+    # app/payments/service.py::expire_stale_payment_holds, which sweeps
+    # both). Null the rest of this row's life - a request that is not
+    # waiting on the customer has nothing to expire.
     payment_hold_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # --- Terms & Conditions acceptance (see app/terms/) --------------------
+    # When, and which wording (GarageTermsVersion.version), the customer
+    # accepted. Always stamped server-side, never from a client timestamp.
+    # Null for a business without terms, for rows that predate the feature,
+    # and while a conversational request is still AWAITING_TERMS. Where the
+    # acceptance happened is `source`: WEB is the booking form's checkbox,
+    # CONVERSATION is the texted acceptance link.
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    terms_version: Mapped[int | None] = mapped_column(Integer)
+    # Hash of the single-purpose capability texted to a conversational
+    # customer to accept the terms for this one request - the same
+    # store-only-the-hash shape as payment_recovery_token_hash, and
+    # deliberately a separate token: accepting terms must not double as a
+    # way into the payment checkout, nor the other way round.
+    terms_acceptance_token_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
 
     garage: Mapped["Garage"] = relationship("Garage")
     appointment_type: Mapped["GarageAppointmentType | None"] = relationship("GarageAppointmentType")

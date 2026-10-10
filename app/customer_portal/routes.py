@@ -6,6 +6,7 @@ from app.customer_auth.decorators import customer_required
 from app.customer_auth.utils import get_current_customer
 from app.models.appointments.appointment import Appointment
 from app.models.booking_request import BookingRequest
+from app.terms.service import accepted_terms_url, has_terms, terms_url
 
 from .schemas import CustomerAccountSchema, CustomerAppointmentDetailSchema
 
@@ -42,6 +43,8 @@ def _pending_request_summary(request):
         "appointment_type_name": (
             request.appointment_type.name if request.appointment_type else None
         ),
+        # The exact terms wording accepted for this request, if any.
+        "terms_url": accepted_terms_url(request),
     }
 
 
@@ -70,6 +73,11 @@ class CustomerAccountResource(MethodView):
                 "email": customer.email,
                 "phone": customer.phone,
                 "garage_name": customer.garage.name,
+                # The business's current Terms & Conditions page, or null
+                # when it has none - see app/terms/.
+                "garage_terms_url": (
+                    terms_url(customer.garage_id) if has_terms(customer.garage) else None
+                ),
                 "has_password": customer.password_hash is not None,
             },
             "vehicles": [

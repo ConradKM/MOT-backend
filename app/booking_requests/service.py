@@ -186,6 +186,15 @@ def approve_booking_request(
             409,
             message="This request's preferred time has already passed - it has expired and can no longer be approved.",
         )
+    if booking_request.status == "AWAITING_TERMS":
+        # Not a booking request staff can act on yet: the customer hasn't
+        # accepted the business's terms (see app/terms/).
+        abort(
+            409,
+            message="This request is waiting for the customer to accept your terms and "
+            "conditions, so it can't be approved yet.",
+            errors={"reason": "awaiting_terms"},
+        )
     if booking_request.status != "PENDING":
         abort(
             409, message=f"This booking request has already been {booking_request.status.lower()}."
