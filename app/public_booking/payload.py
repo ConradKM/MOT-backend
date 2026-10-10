@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from app.garages.logo import logo_public_url
 from app.storage.images import image_url
+from app.terms.service import has_terms
 
 
 def public_garage_payload(garage) -> dict:
@@ -47,4 +48,9 @@ def public_garage_payload(garage) -> dict:
             if g.id in grouped_ids
         ],
         "appointment_types": active,
+        # The booking page and the walk-in join page both render from this
+        # payload, so the terms ride along rather than costing a request.
+        # Both null when the business has none - no checkbox at all then.
+        "terms_and_conditions": garage.terms_and_conditions if has_terms(garage) else None,
+        "terms_version": garage.terms_version if has_terms(garage) else None,
     }

@@ -34,6 +34,10 @@ class QueueJoinSchema(Schema):
     appointment_type_id = fields.UUID(allow_none=True, load_default=None)
     notes = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=500))
     captcha_token = fields.Str(allow_none=True, load_default=None, load_only=True)
+    # Required, and checked against the current version, only when the
+    # business has Terms & Conditions - see app/terms/service.py.
+    terms_accepted = fields.Bool(load_default=False)
+    terms_version = fields.Int(allow_none=True, load_default=None)
 
 
 class QueueTokenSchema(Schema):

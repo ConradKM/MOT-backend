@@ -16,6 +16,11 @@
   <a href="{{ login_url }}" style="display:inline-block; background-color:#1f2937; color:#ffffff; text-decoration:none; padding:10px 20px; border-radius:6px; font-size:14px;">View your appointment</a>
 </p>
 {% endif %}
+{% if terms_url %}
+<p style="margin:0 0 16px; font-size:13px; color:#6b7280;">
+  Terms you accepted: <a href="{{ terms_url }}" style="color:#374151;">{{ terms_url }}</a>
+</p>
+{% endif %}
 <p style="margin:0; font-size:13px; color:#9ca3af;">
   Need to change anything? Contact {{ business_name }}{% if business_phone %} on {{ business_phone }}{% endif %}.
 </p>

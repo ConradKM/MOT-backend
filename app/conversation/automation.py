@@ -121,6 +121,10 @@ def _appointment_type_name(obj) -> str:
 def _handle_booking_request_created(garage, booking_request=None, **_context):
     if booking_request is None or not booking_request.customer_phone:
         return
+    # Still waiting on the customer to accept the business's terms
+    # (app/terms/) - not a request to acknowledge yet.
+    if getattr(booking_request, "status", None) == "AWAITING_TERMS":
+        return
     settings = _automation_settings(garage)
     if not settings.booking_ack_enabled:
         return
