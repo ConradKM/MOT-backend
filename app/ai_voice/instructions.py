@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from app.garages.timezones import timezone_for
+from app.terms.service import has_terms
 
 
 def _date_context(garage, now: datetime | None) -> str:
@@ -46,6 +47,26 @@ _ROUTE_CONTEXT = {
         "want to book, help them book.\n\n"
     ),
 }
+
+
+def _terms_context(garage) -> str:
+    """Only for a business with Terms & Conditions (app/terms/): its phone
+    bookings are held, not submitted, until the caller accepts them on a
+    texted web page - the assistant must never call such a booking done."""
+    if not has_terms(garage):
+        return ""
+    return (
+        "\n\nThis business has terms and conditions every customer must accept before a booking "
+        "goes through, and a phone call can't capture that. Before asking for final "
+        "confirmation, tell the caller that once you've taken the booking you'll text them a "
+        "link to read and accept the terms, and that it isn't booked until they do. When "
+        "create_booking returns terms_acceptance_required true, say the slot is being held for "
+        "a short time while they accept the terms via the text - never that it's booked, "
+        "confirmed or sent to the team - and check terms_link_sent_by_sms: if the text wasn't "
+        "sent, say you'll ask the business to contact them instead. For a deposit service the "
+        "same link takes them on to pay the deposit after accepting, so there is no separate "
+        "payment text."
+    )
 
 
 def build_instructions(garage, *, now: datetime | None = None, route: str = ROUTE_DIRECT) -> str:
@@ -107,6 +128,7 @@ def build_instructions(garage, *, now: datetime | None = None, route: str = ROUT
             "Never call it for a mere pause or short silence; only when the conversation is genuinely "
             "over."
         )
+        + _terms_context(garage)
     )
 
 

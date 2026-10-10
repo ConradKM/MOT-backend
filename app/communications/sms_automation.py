@@ -29,6 +29,7 @@ from app.communications.events import (
 )
 from app.communications.service import send_sms_message
 from app.extensions import db
+from app.terms.service import accepted_terms_url
 
 
 def _sms_notifications_enabled() -> bool:
@@ -39,8 +40,21 @@ def _customer_phone(customer) -> str | None:
     return customer.phone if customer and customer.phone else None
 
 
+def _terms_suffix(booking_request) -> str:
+    """ " Terms you accepted: <link>" for a booking that recorded acceptance of
+    the business's terms (app/terms/), else nothing - one short line, so
+    SMS segment count only grows for businesses that actually have terms."""
+    url = accepted_terms_url(booking_request)
+    return f" Terms you accepted: {url}" if url else ""
+
+
 def _handle_booking_request_created(garage, booking_request=None, **_context):
     if not _sms_notifications_enabled() or booking_request is None:
+        return
+    # Never acknowledge a request still waiting on the customer to accept the
+    # terms - it isn't one yet. (Not emitted for that state either; this is
+    # the belt to app/conversation/actions.py's braces.)
+    if getattr(booking_request, "status", None) == "AWAITING_TERMS":
         return
     phone = booking_request.customer_phone
     if not phone:
@@ -51,7 +65,7 @@ def _handle_booking_request_created(garage, booking_request=None, **_context):
         body=(
             f"Hi {booking_request.customer_first_name}, we've received your booking "
             f"request ({booking_request.booking_reference}) with {garage.name}. "
-            "We'll be in touch to confirm."
+            "We'll be in touch to confirm." + _terms_suffix(booking_request)
         ),
         booking_request=booking_request,
         trigger_event=BOOKING_REQUEST_CREATED,
@@ -77,7 +91,7 @@ def _handle_booking_request_rejected(garage, booking_request=None, **_context):
     )
 
 
-def _handle_booking_request_approved(garage, appointment=None, **_context):
+def _handle_booking_request_approved(garage, appointment=None, booking_request=None, **_context):
     if not _sms_notifications_enabled() or appointment is None:
         return
     phone = _customer_phone(appointment.customer)
@@ -88,7 +102,7 @@ def _handle_booking_request_approved(garage, appointment=None, **_context):
         to=phone,
         body=(
             f"Your appointment with {garage.name} is confirmed for "
-            f"{appointment.start_time:%d %b %Y at %H:%M}."
+            f"{appointment.start_time:%d %b %Y at %H:%M}." + _terms_suffix(booking_request)
         ),
         customer=appointment.customer,
         appointment=appointment,

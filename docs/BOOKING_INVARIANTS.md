@@ -20,8 +20,9 @@ bookings.  Changes to booking code must preserve these rules.
 - A slot is validated at mutation time under the garage-level serialization
   used by public booking, request approval and staff scheduling. Calendar
   availability is advisory, never authority.
-- `AWAITING_PAYMENT` requests reserve capacity only until their payment hold
-  expires. `PENDING` requests reserve capacity until they are approved,
+- `AWAITING_PAYMENT` and `AWAITING_TERMS` requests reserve capacity only until
+  their hold expires (`PAYMENT_HOLD_MINUTES` / `TERMS_ACCEPTANCE_HOLD_MINUTES`,
+  swept by the same `expire_stale_payment_holds`). `PENDING` requests reserve capacity until they are approved,
   rejected, or expired. Approved appointments reserve their own capacity.
 - A deposit attempt has one server-owned request and one provider payment
   association. Retries for the same attempt reuse it; a retry must never make
@@ -35,6 +36,12 @@ bookings.  Changes to booking code must preserve these rules.
 ## Lifecycle and history
 
 - Payment success moves the same request from `AWAITING_PAYMENT` to `PENDING`.
+- For a business with Terms & Conditions, every customer-facing booking records
+  the accepted version server-side before it exists as `PENDING` or
+  `AWAITING_PAYMENT`: web submissions are rejected without it, and
+  conversational bookings wait in `AWAITING_TERMS` (not approvable, no
+  "received"/"confirmed" messages) until accepted via the texted link. A deposit
+  is never taken before acceptance. See [TERMS_AND_CONDITIONS.md](TERMS_AND_CONDITIONS.md).
   Expiry, failure and cancellation release only their own reservation.
 - Approval locks and revalidates the request and capacity, then creates exactly
   one appointment and links it to the request. Repeated approval cannot create

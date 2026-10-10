@@ -127,6 +127,12 @@ class PublicGarageDetailSchema(Schema):
     # knows nothing about groups (and the conversational channel) still sees
     # the full menu, and a client that does simply partitions on `group_id`.
     appointment_types = fields.List(fields.Nested(PublicAppointmentTypeSchema), dump_only=True)
+    # The business's Terms & Conditions (plain text - render as text, never
+    # HTML) and the version a submission must echo back as `terms_version`.
+    # Both null when the business has none, and then nothing about booking
+    # changes. See app/terms/.
+    terms_and_conditions = fields.Str(dump_only=True, allow_none=True)
+    terms_version = fields.Int(dump_only=True, allow_none=True)
 
 
 class PublicBookingFlowFieldSchema(Schema):
@@ -232,6 +238,12 @@ class BookingRequestCreateSchema(Schema):
 
     # Verified in the route (needs app context / config), not here.
     captcha_token = fields.Str(load_default="", load_only=True)
+
+    # Required - and checked against the business's current version - only
+    # when the business has Terms & Conditions; ignored otherwise. See
+    # app/terms/service.py::require_web_acceptance.
+    terms_accepted = fields.Bool(load_default=False)
+    terms_version = fields.Int(allow_none=True, load_default=None)
 
     @pre_load
     def _strip_strings(self, data, **kwargs):

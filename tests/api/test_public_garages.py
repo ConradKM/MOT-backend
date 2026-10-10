@@ -27,6 +27,9 @@ def test_list_only_exposes_public_fields(client, garage):
         "booking_display_mode",
         "appointment_type_groups",
         "appointment_types",
+        # The business's own customer-facing terms - public by nature.
+        "terms_and_conditions",
+        "terms_version",
     }
 
 
@@ -45,6 +48,9 @@ def test_unauthenticated_client_can_fetch_one_garage(client, garage):
         # entry point, so it is the *same page*, not a second view of it.
         # Both build it through app/public_booking/payload.py.
         "appointment_types": [],
+        # No terms configured: nothing for the booking page to ask.
+        "terms_and_conditions": None,
+        "terms_version": None,
     }
 
 

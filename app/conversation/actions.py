@@ -48,6 +48,7 @@ from app.models.garage import Garage
 from app.models.vehicle import Vehicle
 from app.payments.service import create_deposit_hold, payment_hold_deadline
 from app.public_booking import availability
+from app.terms.service import has_terms, hold_for_acceptance
 
 # Re-exported for callers that only need "is this a real, currently
 # rejectable reason" without importing the availability module themselves.
@@ -195,6 +196,11 @@ def create_booking_request(
     form creates (app/public_booking/routes.py) - the conversation engine
     never invents a separate booking mechanism (Part 4).
 
+    For a business with Terms & Conditions the request is created
+    AWAITING_TERMS instead, and the plaintext acceptance token is attached
+    as ``booking_request.terms_acceptance_token`` for the caller to send the
+    customer the acceptance link (app/terms/service.py::acceptance_url).
+
     Re-validates the slot server-side one last time first (Part 8/9/37): if
     it's gone, nothing is created and ``(None, reason)`` is returned so the
     workflow can apologise and re-offer real alternatives, exactly as if two
@@ -267,6 +273,10 @@ def create_booking_request(
         preferred_time=preferred_time,
         notes=notes,
     )
+    # There is no checkbox in a chat or on a call: with Terms & Conditions
+    # the request holds the slot as AWAITING_TERMS until the customer accepts
+    # them on the texted page (app/terms/), and only then becomes PENDING.
+    acceptance_token = hold_for_acceptance(booking_request, now) if has_terms(garage) else None
     db.session.add(booking_request)
     try:
         db.session.commit()
@@ -286,6 +296,14 @@ def create_booking_request(
             if existing is not None:
                 return existing, None
         raise
+
+    if acceptance_token is not None:
+        # Read once by the caller to build the acceptance link - like
+        # deposit_recovery_token below, never persisted (only its hash is).
+        # No BOOKING_REQUEST_CREATED yet: nothing may tell the customer their
+        # request is received until they have accepted the terms.
+        booking_request.terms_acceptance_token = acceptance_token
+        return booking_request, None
 
     emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
     return booking_request, None
@@ -372,20 +390,30 @@ def create_deposit_booking_request(
         preferred_time=preferred_time,
         notes=notes,
     )
-    booking_request.payment_hold_expires_at = payment_hold_deadline(now)
-    recovery_token = token_urlsafe(32)
-    booking_request.payment_recovery_token_hash = sha256(recovery_token.encode()).hexdigest()
+    acceptance_token = None
+    recovery_token = None
+    if has_terms(garage):
+        # Terms first, then the deposit: the payment hold and provider
+        # session are only created once the customer has accepted the terms
+        # on the texted page (app/terms/service.py::accept_by_token), so a
+        # deposit is never taken for terms they haven't seen.
+        acceptance_token = hold_for_acceptance(booking_request, now)
+        db.session.add(booking_request)
+    else:
+        booking_request.payment_hold_expires_at = payment_hold_deadline(now)
+        recovery_token = token_urlsafe(32)
+        booking_request.payment_recovery_token_hash = sha256(recovery_token.encode()).hexdigest()
 
-    db.session.add(booking_request)
-    db.session.flush()
+        db.session.add(booking_request)
+        db.session.flush()
 
-    try:
-        create_deposit_hold(
-            garage=garage, appointment_type=appointment_type, booking_request=booking_request
-        )
-    except Exception:
-        db.session.rollback()
-        raise
+        try:
+            create_deposit_hold(
+                garage=garage, appointment_type=appointment_type, booking_request=booking_request
+            )
+        except Exception:
+            db.session.rollback()
+            raise
 
     try:
         db.session.commit()
@@ -400,6 +428,11 @@ def create_deposit_booking_request(
             if existing is not None:
                 return existing, None
         raise
+
+    if acceptance_token is not None:
+        # See create_booking_request: no "received" messages until accepted.
+        booking_request.terms_acceptance_token = acceptance_token
+        return booking_request, None
 
     booking_request.deposit_recovery_token = recovery_token
     emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)

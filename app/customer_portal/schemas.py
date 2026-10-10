@@ -15,6 +15,7 @@ class CustomerProfileSchema(Schema):
     email = fields.Email(dump_only=True, allow_none=True)
     phone = fields.Str(dump_only=True, allow_none=True)
     garage_name = fields.Str(dump_only=True)
+    garage_terms_url = fields.Str(dump_only=True, allow_none=True)
     # Whether email + password sign-in is set up yet (see
     # app/customer_auth/routes.py::CustomerSetPassword) - the account page
     # uses this to offer "Create an account" only when it's still false.
@@ -61,6 +62,8 @@ class CustomerPendingRequestSchema(Schema):
     preferred_date = fields.Date(dump_only=True)
     preferred_time = fields.Time(dump_only=True, allow_none=True)
     vehicle_registration = fields.Str(dump_only=True)
+    # The terms wording accepted for this request; null without terms.
+    terms_url = fields.Str(dump_only=True, allow_none=True)
     notes = fields.Str(dump_only=True, allow_none=True)
     appointment_type_name = fields.Str(dump_only=True, allow_none=True)
 

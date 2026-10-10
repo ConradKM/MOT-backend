@@ -59,7 +59,9 @@ def _handle_booking_request_created(garage, booking_request=None, **_context):
     # The public booking form / conversation engine only creates a PENDING
     # BookingRequest here - the appointment (and its confirmation email) comes
     # later, on approval. This is the "we've got your request" acknowledgement.
-    if booking_request is not None:
+    # Never for a request still waiting on the customer to accept the
+    # business's terms (app/terms/) - it isn't received until they do.
+    if booking_request is not None and getattr(booking_request, "status", None) != "AWAITING_TERMS":
         send_booking_request_received_email(booking_request)
 
 
