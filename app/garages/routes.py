@@ -9,9 +9,11 @@ from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
 from app.public_booking.payload import public_garage_payload
 from app.public_booking.schemas import PublicGarageDetailSchema
 
+from .appearance import BookingAppearanceError, normalise_pair
 from .capacity import capacity_summary
 from .details import update_garage_details
 from .schemas import (
+    BookingAppearanceSchema,
     BookingRequestAutoAcceptSchema,
     BookingRequestSettingsSchema,
     CapacitySummarySchema,
@@ -61,6 +63,33 @@ class GarageResource(MethodView):
             update_garage_details(garage, **data)
         except ValueError as exc:
             abort(422, message=str(exc))
+        return garage
+
+
+@garages_blp.route("/booking-appearance")
+class BookingAppearance(MethodView):
+    @jwt_required()
+    @owner_required
+    @garages_blp.arguments(BookingAppearanceSchema)
+    @garages_blp.response(200, GarageSchema)
+    def put(self, data):
+        """Set (or, with both null, reset) the booking-page colours. OWNER only.
+
+        The page background and the text on it, for every customer-facing page
+        of the caller's own business. 422 when only one is set, either is not
+        ``#RRGGBB``, or their contrast is under 4.5:1 (the message states the
+        ratio). Read back through ``GET /api/garage``.
+        """
+        garage = get_current_employee().garage
+        try:
+            background, text = normalise_pair(
+                data["booking_background_color"], data["booking_text_color"]
+            )
+        except BookingAppearanceError as exc:
+            abort(422, message=str(exc))
+        garage.booking_background_color = background
+        garage.booking_text_color = text
+        db.session.commit()
         return garage
 
 

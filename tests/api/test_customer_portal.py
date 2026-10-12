@@ -73,6 +73,7 @@ def test_account_returns_the_signed_in_customers_profile(customer_client, custom
     body = resp.get_json()
     assert body["customer"]["id"] == str(customer.id)
     assert body["customer"]["garage_name"] == garage.name
+    assert body["customer"]["garage_id"] == str(garage.id)
     assert "notes" not in body["customer"]
 
 
@@ -181,6 +182,7 @@ def test_appointment_detail_for_own_appointment(
     assert body["appointment_type_name"] == "MOT"
     assert body["vehicle"]["registration_number"] == vehicle.registration_number
     assert body["garage_name"]
+    assert body["garage_id"] == str(authenticated_user.garage.id)
 
 
 def test_appointment_detail_for_another_customers_appointment_is_404(
