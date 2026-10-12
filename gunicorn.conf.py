@@ -9,6 +9,9 @@ redis-py both cooperate with the event loop.
 """
 
 import os
+import re
+
+from gunicorn.glogging import Logger
 
 # Render injects PORT; fall back to the port the old `flask run` CMD used so a
 # misconfigured service still binds somewhere predictable.
@@ -33,3 +36,28 @@ keepalive = 5
 accesslog = "-"
 errorlog = "-"
 loglevel = os.getenv("GUNICORN_LOG_LEVEL", "info")
+
+# Calendar subscription feed URLs carry their bearer token in the path
+# (/api/calendar-feeds/<token>.ics - calendar apps can't send headers), and the
+# access log above prints every request line. Redact the token before it
+# reaches the platform log stream; the rest of the line is kept as-is.
+# tests/test_gunicorn_log_redaction.py pins this to the route's real shape.
+_CALENDAR_FEED_TOKEN = re.compile(r"(/api/calendar-feeds/)[^/?\s]+?(\.ics)")
+
+
+def redact_calendar_feed_tokens(value: str) -> str:
+    return _CALENDAR_FEED_TOKEN.sub(r"\1[REDACTED]\2", value)
+
+
+class RedactingLogger(Logger):
+    def atoms(self, resp, req, environ, request_time):
+        atoms = super().atoms(resp, req, environ, request_time)
+        # Every string atom, not just the request line: the path also appears
+        # in %(U)s, environ atoms like %({raw_uri}e)s, and a Referer header.
+        return {
+            key: redact_calendar_feed_tokens(value) if isinstance(value, str) else value
+            for key, value in atoms.items()
+        }
+
+
+logger_class = RedactingLogger

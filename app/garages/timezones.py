@@ -28,6 +28,11 @@ def local_slot_as_utc(garage, day: date, slot_time: time) -> datetime:
     return datetime.combine(day, slot_time, tzinfo=timezone_for(garage)).astimezone(UTC)
 
 
+def local_day_bounds_utc(garage, day: date) -> tuple[datetime, datetime]:
+    """The UTC instants bounding a business-local calendar day (inclusive)."""
+    return local_slot_as_utc(garage, day, time.min), local_slot_as_utc(garage, day, time.max)
+
+
 def local_day_for(garage, instant: datetime) -> date:
     """The business-local calendar day containing an aware instant."""
     return instant.astimezone(timezone_for(garage)).date()
