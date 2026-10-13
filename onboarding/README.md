@@ -8,6 +8,11 @@ by the tool at creation time and printed once. They are safe to commit.
 See [`../docs/BUSINESS_ONBOARDING.md`](../docs/BUSINESS_ONBOARDING.md) for the
 spec format and the full offline → online (Render Shell) runbook.
 
+A spec may also carry an optional `appointments` list — the business's existing
+diary, in the same JSON format as the apps' bulk import — which is imported
+with the business. Those rows hold **customer personal data**: don't commit a
+spec that has them; keep it out of the repo and delete it once onboarded.
+
 | File | Business | Notes |
 | --- | --- | --- |
 | `test-online.json` | CoMaz Online Test | **throwaway** — for smoke-testing `app.comaz.co.uk`; hard-delete when done |

@@ -11,9 +11,17 @@ from app.appointments.image_schemas import (
 from app.appointments.images import clear_image, finalize_upload, request_upload
 from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
+from app.bulk_import.http import (
+    BulkImportRequestSchema,
+    BulkImportResultSchema,
+    limit_body_size,
+    run_import,
+)
+from app.bulk_import.services import import_services
 from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.appointments.appointment_type_group import AppointmentTypeGroup
+from app.models.garage import Garage
 from app.payments.money import DepositConfigError, validate_deposit_config
 from app.storage.images import ImageError, ImageNotUploadedError, delete_image
 
@@ -131,6 +139,35 @@ class AppointmentTypeList(MethodView):
         db.session.commit()
 
         return appointment_type
+
+
+@appointment_types_blp.route("/bulk")
+class AppointmentTypeBulkImport(MethodView):
+    @jwt_required()
+    @owner_required
+    @limit_body_size
+    @appointment_types_blp.arguments(BulkImportRequestSchema)
+    @appointment_types_blp.response(200, BulkImportResultSchema)
+    @appointment_types_blp.alt_response(409, schema=BulkImportResultSchema)
+    @appointment_types_blp.alt_response(422, schema=BulkImportResultSchema)
+    def post(self, data):
+        """Add many services at once from pasted JSON (see /api/bulk-import/formats).
+
+        ``dry_run`` (the default) previews: the identical import runs and is
+        rolled back. A row whose name matches an existing service is reported
+        ``EXISTS`` and left alone. Committing needs zero errors, and
+        ``acknowledge_warnings`` when any row has a warning; all rows import or
+        none do.
+        """
+        garage_id = get_current_employee().garage_id
+        garage = db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
+        return run_import(
+            lambda: import_services(garage, data["payload"], db.session),
+            dry_run=data["dry_run"],
+            acknowledge_warnings=data["acknowledge_warnings"],
+            session=db.session,
+            log_label=f"services garage={garage_id}",
+        )
 
 
 @appointment_types_blp.route("/<uuid:appointment_type_id>")

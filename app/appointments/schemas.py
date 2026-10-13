@@ -27,6 +27,9 @@ class AppointmentSchema(Schema):
     # price set.
     price_at_booking = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     appointment_type_name_at_booking = fields.Str(dump_only=True, allow_none=True)
+    # When this came from a bulk import; null for anything booked in the app.
+    # Imported appointments get no automated reminders until rescheduled.
+    imported_at = fields.DateTime(dump_only=True, allow_none=True)
 
     # Input: which of the type's add-ons to apply. Their price deltas are
     # folded into price_at_booking and, when end_time is omitted, their

@@ -701,6 +701,13 @@ class ServiceInputSchema(Schema):
     status = fields.Str(load_default="ACTIVE", validate=validate.OneOf(APPOINTMENT_TYPE_STATUSES))
 
 
+class ProvisionServiceInputSchema(ServiceInputSchema):
+    """A service in the onboarding wizard, which may name its group. Groups
+    are created implicitly, as the onboarding spec does."""
+
+    group = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
+
+
 class ServiceUpdateSchema(Schema):
     """A partial edit of one service. Every field optional; at least one required."""
 
@@ -815,7 +822,13 @@ class TenantOwnerInputSchema(Schema):
 class TenantProvisionSchema(Schema):
     business = fields.Nested(TenantBusinessInputSchema, required=True)
     owner = fields.Nested(TenantOwnerInputSchema, required=True)
-    services = fields.List(fields.Nested(ServiceInputSchema), load_default=list)
+    services = fields.List(fields.Nested(ProvisionServiceInputSchema), load_default=list)
+    # Existing bookings, as pasted rows in the bulk-import format. Their
+    # contents are validated by app/bulk_import against the business being
+    # created, not here - the server has one set of rules for them.
+    appointments = fields.List(fields.Raw(), load_default=list)
+    # The operator's "import anyway" for appointment rows with warnings.
+    acknowledge_appointment_warnings = fields.Bool(load_default=False)
     # Absent (or null) keeps the seeded Mon-Fri 09:00-17:00.
     opening_hours = fields.List(
         fields.Nested(OpeningHoursDaySchema),
@@ -888,8 +901,16 @@ class TenantConfigurationSchema(Schema):
     onboarding = fields.Nested(OnboardingProgressSchema, dump_only=True)
 
 
+class ImportedCountsSchema(Schema):
+    new = fields.Int(dump_only=True)
+    exists = fields.Int(dump_only=True)
+
+
 class TenantProvisionResultSchema(TenantConfigurationSchema):
     created = fields.Bool(dump_only=True)
+    #: How many of the request's ``appointments`` were imported (``new``) or
+    #: skipped as duplicates of one another (``exists``).
+    appointments_imported = fields.Nested(ImportedCountsSchema, dump_only=True)
     #: False when the business was created but its invite email failed to send
     #: - the console then offers "resend invite" rather than reporting failure.
     invite_sent = fields.Bool(dump_only=True)
@@ -1432,3 +1453,30 @@ class ToggleSchema(Schema):
 
 class ErrorCatalogueSchema(Schema):
     items = fields.List(fields.Nested(ProviderErrorSchema), dump_only=True)
+
+
+# --------------------------------------------------------------------------
+# Bulk import (app/bulk_import)
+# --------------------------------------------------------------------------
+
+
+class ImportPreviewContextSchema(Schema):
+    """The onboarding wizard's draft, so a paste can be checked before the
+    business exists. Everything optional: the preview fills placeholders for
+    whatever the wizard has not collected yet."""
+
+    owner = fields.Nested(TenantOwnerInputSchema, load_default=None, allow_none=True)
+    services = fields.List(fields.Nested(ProvisionServiceInputSchema), load_default=list)
+    opening_hours = fields.List(
+        fields.Nested(OpeningHoursDaySchema),
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(min=1, max=7),
+    )
+    booking_settings = fields.Nested(BookingSettingsSchema, load_default=dict)
+
+
+class ImportPreviewSchema(Schema):
+    kind = fields.Str(required=True, validate=validate.OneOf(("services", "appointments")))
+    payload = fields.Raw(required=True)
+    context = fields.Nested(ImportPreviewContextSchema, load_default=dict)

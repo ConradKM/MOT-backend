@@ -69,6 +69,42 @@ requires a future `trial_ends_at`; any other status must not carry one.
   employee count) and `limited_threshold_ratio`.
 - A spec that contains `slug`, `id`, `garage_id` or `password` is **rejected** —
   the slug is generated, ids are the platform's, passwords are never stored.
+- `appointments` **omitted** → nothing is imported, exactly as before. When
+  present, it is a list of existing bookings in the bulk-import format (the
+  same JSON the owner app's *Import appointments* and Platform Admin's wizard
+  accept — `GET /api/bulk-import/formats` returns the example, schema and an AI
+  prompt):
+
+  ```json
+  "appointments": [
+    { "service": "Window tints", "start": "2026-11-03T09:30", "end": null,
+      "status": "BOOKED", "employee_email": null,
+      "customer": { "first_name": "Sam", "last_name": "Lee",
+                    "phone": "07123 456789", "email": null },
+      "notes": "Silver Golf, front windows only" }
+  ]
+  ```
+
+  They are imported **last**, in the same transaction, against the business as
+  the spec configures it: `service` must name one of the spec's services
+  (case-insensitive); `start`/`end` are wall-clock times in the business's
+  timezone (Europe/London) or ISO with an explicit offset, and a time the
+  clocks skip or repeat is refused; `end` defaults to start + the service's
+  duration; `employee_email` defaults to the owner (the only account at
+  onboarding); customers are linked by phone, else email, never by name. There
+  is no vehicle section — anything else goes in `notes`. Imported appointments
+  send no confirmation and get **no automated reminders** until staff
+  reschedule them (`appointments.imported_at`).
+
+  **Any row with an error fails the whole onboarding** (the message names the
+  row and field, e.g. `appointments[3].start`). Rows with *warnings* — a
+  double-booking, a full slot, a time outside opening hours, an ignored key —
+  import, and the CLI prints them. `--dry-run` builds the business in a
+  rolled-back transaction to check the appointments, so run it first. At most
+  1,000 appointments per spec.
+- `services[].group` names the group a service is listed under; groups are
+  created implicitly in first-appearance order (or declared in
+  `service_groups` to set a description or display mode).
 
 ### The minimum for a usable booking page
 

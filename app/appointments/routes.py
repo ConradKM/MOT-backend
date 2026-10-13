@@ -12,8 +12,21 @@ from app.appointments.add_ons.service import (
     total_price,
 )
 from app.appointments.checklists.service import snapshot_checklist_for_appointment
-from app.appointments.statuses.defaults import DEFAULT_STATUS_KEYS
+from app.appointments.scheduling import (
+    allowed_statuses,
+    capacity_exceeded,
+    default_end_time,
+    has_employee_conflict,
+)
+from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
+from app.bulk_import.appointments import import_appointments
+from app.bulk_import.http import (
+    BulkImportRequestSchema,
+    BulkImportResultSchema,
+    limit_body_size,
+    run_import,
+)
 from app.communications.events import (
     APPOINTMENT_CANCELLED,
     APPOINTMENT_COMPLETED,
@@ -31,7 +44,6 @@ from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.vehicle import Vehicle
-from app.public_booking.availability import slot_capacity_usage
 
 from .schemas import AppointmentQueryArgsSchema, AppointmentSchema, AppointmentUpdateSchema
 
@@ -116,15 +128,7 @@ def _get_owned_vehicle(vehicle_id, garage_id, customer_id):
 
 
 def _allowed_statuses(garage_id):
-    """The garage's configured status keys, or the built-in default set if it
-    hasn't customised them."""
-    configured = {
-        key
-        for (key,) in db.session.query(GarageAppointmentStatus.key)
-        .filter_by(garage_id=garage_id)
-        .all()
-    }
-    return configured or set(DEFAULT_STATUS_KEYS)
+    return allowed_statuses(garage_id)
 
 
 def _validate_status(status, garage_id):
@@ -180,15 +184,14 @@ def _resolve_end_time(start_time, end_time, appointment_type, add_on_minutes=0):
     if end_time is not None:
         return end_time
 
-    if appointment_type.default_duration_minutes is None:
+    derived = default_end_time(start_time, appointment_type, add_on_minutes)
+    if derived is None:
         abort(
             422,
             message="end_time is required - this appointment type has no default duration set.",
         )
 
-    return start_time + timedelta(
-        minutes=appointment_type.default_duration_minutes + add_on_minutes
-    )
+    return derived
 
 
 def _plan_add_ons(appointment, appointment_type, type_changed, selection):
@@ -230,17 +233,7 @@ def _plan_add_ons(appointment, appointment_type, type_changed, selection):
 
 
 def _check_for_conflict(employee_id, start_time, end_time, exclude_appointment_id=None):
-    query = Appointment.query.filter(
-        Appointment.employee_id == employee_id,
-        Appointment.status != "CANCELLED",
-        Appointment.start_time < end_time,
-        Appointment.end_time > start_time,
-    )
-
-    if exclude_appointment_id is not None:
-        query = query.filter(Appointment.id != exclude_appointment_id)
-
-    if query.first() is not None:
+    if has_employee_conflict(employee_id, start_time, end_time, exclude_appointment_id):
         abort(
             409,
             message="The selected employee already has an appointment during this time.",
@@ -248,25 +241,9 @@ def _check_for_conflict(employee_id, start_time, end_time, exclude_appointment_i
 
 
 def _check_capacity(garage, start_time, end_time, exclude_appointment_id=None):
-    """Apply the garage-wide capacity contract to staff-created schedules.
-
-    Employee conflict checks alone are insufficient when a business has set
-    ``capacity_per_slot`` below its number of staff.  This deliberately uses
-    the same reservation accounting as public booking and request approval,
-    including pending customer requests, so staff actions cannot silently
-    take a slot those flows have already reserved.
-    """
-    duration_minutes = int((end_time - start_time).total_seconds() // 60)
-    used, capacity = slot_capacity_usage(
-        garage,
-        start_time.date(),
-        start_time,
-        duration_minutes,
-        exclude_appointment_id=exclude_appointment_id,
-        # Walk-in reserved windows protect bays from *public* booking only.
-        include_walkin_reservations=False,
-    )
-    if used >= capacity:
+    """The garage-wide capacity contract - see
+    :func:`app.appointments.scheduling.capacity_exceeded`."""
+    if capacity_exceeded(garage, start_time, end_time, exclude_appointment_id):
         abort(
             409,
             message="This time is no longer available - capacity has already been taken by another appointment or request.",
@@ -377,6 +354,39 @@ class AppointmentList(MethodView):
         emit_event(APPOINTMENT_CREATED, garage=appointment.garage, appointment=appointment)
 
         return appointment
+
+
+@appointments_blp.route("/bulk")
+class AppointmentBulkImport(MethodView):
+    @jwt_required()
+    @owner_required
+    @limit_body_size
+    @appointments_blp.doc(**_AUTH_DOC)
+    @appointments_blp.arguments(BulkImportRequestSchema)
+    @appointments_blp.response(200, BulkImportResultSchema)
+    @appointments_blp.alt_response(409, schema=BulkImportResultSchema)
+    @appointments_blp.alt_response(422, schema=BulkImportResultSchema)
+    def post(self, data):
+        """Import an existing diary from pasted JSON (see /api/bulk-import/formats).
+
+        ``dry_run`` (the default) previews: the identical import runs and is
+        rolled back. Unknown services, unreadable times and the like are
+        errors; double-bookings, full slots and out-of-hours times are
+        warnings, which ``acknowledge_warnings`` accepts. Rows matching an
+        existing appointment are skipped. All rows import or none do.
+
+        Imported appointments send no confirmation and get no automated
+        reminders until rescheduled (see ``imported_at``).
+        """
+        garage_id = get_current_employee().garage_id
+        garage = db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
+        return run_import(
+            lambda: import_appointments(garage, data["payload"], db.session),
+            dry_run=data["dry_run"],
+            acknowledge_warnings=data["acknowledge_warnings"],
+            session=db.session,
+            log_label=f"appointments garage={garage_id}",
+        )
 
 
 @appointments_blp.route("/<uuid:appointment_id>")
@@ -503,6 +513,13 @@ class AppointmentResource(MethodView):
 
         for field, value in data.items():
             setattr(appointment, field, value)
+
+        # Staff moving an imported appointment have been in touch with the
+        # customer about it, so it now gets reminders like any other booking.
+        if appointment.imported_at is not None and (
+            appointment.start_time != previous_start or appointment.end_time != previous_end
+        ):
+            appointment.imported_at = None
 
         if replacement_appointment_type is not None:
             # This is an explicit change to what the customer is booked for,

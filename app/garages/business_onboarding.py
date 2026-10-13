@@ -6,7 +6,9 @@ roles, first OWNER login) and adds the two things a real demo needs on top:
 
 * the business's **services** (``garage_appointment_types``),
 * its **opening hours** when they differ from the seeded Mon-Fri 09:00-17:00,
-* its **booking settings** (the seeded ``garage_schedule_settings`` row), and
+* its **booking settings** (the seeded ``garage_schedule_settings`` row),
+* optionally, **existing appointments** imported from its current diary
+  (through ``app/bulk_import``, exactly as the owner app's import does), and
 * the platform-owned lifecycle fields a new tenant is sold on - plan, ACTIVE
   vs TRIAL, trial expiry, and the internal notes the platform team keeps.
 
@@ -31,18 +33,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.booking_flow.presets import PRESETS, apply_preset
+from app.bulk_import.appointments import import_appointment_rows
+from app.bulk_import.result import MAX_APPOINTMENTS, ImportResult, ItemResult
+from app.bulk_import.services import (
+    ServiceSpec,
+    create_services,
+    ensure_service_groups,
+    parse_service_row,
+)
 from app.employees.service import email_format_error, password_policy_error
 from app.extensions import db
 from app.garages.layouts import validate_layout_variant
 from app.garages.onboarding import GarageSpec, OnboardingError, OwnerSpec, onboard_garage
-from app.models.appointments.appointment_type import (
-    APPOINTMENT_TYPE_STATUSES,
-    GarageAppointmentType,
-)
+from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.appointments.appointment_type_group import (
     DISPLAY_MODES,
     AppointmentTypeGroup,
@@ -77,19 +83,6 @@ BOOKING_SETTING_FIELDS: dict[str, tuple[type, float, float]] = {
 
 class BusinessSpecError(OnboardingError):
     """A malformed or invalid business spec."""
-
-
-@dataclass
-class ServiceSpec:
-    name: str
-    description: str | None = None
-    base_price: str | None = None  # decimal string, e.g. "54.85"
-    default_duration_minutes: int | None = None
-    status: str = "ACTIVE"
-    # The group this service belongs to, named rather than id'd - a spec is
-    # written by hand before any row exists. Groups are created implicitly, in
-    # first-appearance order; None leaves the service ungrouped.
-    group: str | None = None
 
 
 @dataclass
@@ -144,6 +137,11 @@ class BusinessSpec:
     #: Internal platform-team notes -> ``Garage.internal_notes``. Never shown
     #: to the tenant.
     notes: str | None = None
+    # Existing bookings to import, as raw rows in the bulk-import format
+    # (app/bulk_import/formats.py). Validated against the business as it is
+    # being created - its services, hours and owner - so only their shape is
+    # checked when the spec is parsed.
+    appointments: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -156,6 +154,8 @@ class BusinessOnboardingResult:
     temp_password: str | None
     services: list[GarageAppointmentType]
     used_default_hours: bool
+    #: What the spec's ``appointments`` imported; None when it had none.
+    appointments: ImportResult | None = None
 
 
 # --------------------------------------------------------------------------
@@ -261,35 +261,26 @@ def _parse_datetime(value: Any, ctx: str) -> datetime | None:
 
 
 def _parse_service(raw: Any, i: int) -> ServiceSpec:
-    if not isinstance(raw, dict) or not _str_or_none(raw.get("name")):
-        raise BusinessSpecError(f"services[{i}]: needs a non-empty 'name'.")
-    price = _str_or_none(raw.get("base_price"))
-    if price is not None:
-        try:
-            if Decimal(price) < 0:
-                raise BusinessSpecError(f"services[{i}].base_price: must not be negative.")
-        except InvalidOperation as exc:
-            raise BusinessSpecError(
-                f"services[{i}].base_price: {price!r} is not a number."
-            ) from exc
-    duration = raw.get("default_duration_minutes")
-    if duration is not None and (not isinstance(duration, int) or duration <= 0):
+    """One spec service, through the same rules as a bulk import of services
+    - the first problem found becomes the error."""
+    item = ItemResult(index=i)
+    spec = parse_service_row(raw, f"services[{i}]", item)
+    if spec is None:
+        issue = item.errors[0]
+        raise BusinessSpecError(f"{issue.path}: {issue.message}")
+    return spec
+
+
+def _parse_appointment_rows(raw: Any) -> list[Any]:
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list):
+        raise BusinessSpecError("appointments must be a list.")
+    if len(raw) > MAX_APPOINTMENTS:
         raise BusinessSpecError(
-            f"services[{i}].default_duration_minutes: must be a positive whole number."
+            f"appointments: at most {MAX_APPOINTMENTS} can be imported at once, got {len(raw)}."
         )
-    status = (_str_or_none(raw.get("status")) or "ACTIVE").upper()
-    if status not in APPOINTMENT_TYPE_STATUSES:
-        raise BusinessSpecError(
-            f"services[{i}].status: {status!r} not in {APPOINTMENT_TYPE_STATUSES}."
-        )
-    return ServiceSpec(
-        name=_str_or_none(raw["name"]),  # type: ignore[arg-type]
-        description=_str_or_none(raw.get("description")),
-        base_price=price,
-        default_duration_minutes=duration,
-        status=status,
-        group=_str_or_none(raw.get("group")),
-    )
+    return raw
 
 
 def _parse_display_mode(raw: Any) -> str | None:
@@ -382,6 +373,7 @@ def parse_business_spec(raw: Any) -> BusinessSpec:
         status=(_str_or_none(business.get("status")) or "").upper() or None,
         trial_ends_at=_parse_datetime(business.get("trial_ends_at"), "business.trial_ends_at"),
         notes=_str_or_none(raw.get("notes")),
+        appointments=_parse_appointment_rows(raw.get("appointments")),
     )
     validate_business_spec(spec)
     return spec
@@ -411,6 +403,9 @@ def validate_business_spec(spec: BusinessSpec) -> None:
             raise BusinessSpecError(
                 f"opening_hours.{day}: open {opens} is not before close {closes}."
             )
+
+    if not isinstance(spec.appointments, list) or len(spec.appointments) > MAX_APPOINTMENTS:
+        raise BusinessSpecError(f"appointments must be a list of at most {MAX_APPOINTMENTS}.")
 
     seen: set[str] = set()
     for service in spec.services:
@@ -472,68 +467,16 @@ def _apply_service_groups(
     group_specs: list[ServiceGroupSpec],
     session,
 ) -> dict[str, AppointmentTypeGroup]:
-    """Create every group the spec mentions, keyed by name.
+    """Create every group the spec mentions.
 
     A group exists if any service names it, whether or not it is also declared
     in `service_groups` - declaring it is only how a description or display
     mode gets set. Order follows first appearance in the spec, which is the
     order a human wrote them in and so the order they should be sold in.
     """
-    declared = {g.name: g for g in group_specs}
-
-    names: list[str] = []
-    for name in [g.name for g in group_specs] + [s.group for s in specs if s.group]:
-        if name not in names:
-            names.append(name)
-
-    groups: dict[str, AppointmentTypeGroup] = {}
-    for order, name in enumerate(names):
-        spec = declared.get(name)
-        row = AppointmentTypeGroup(
-            garage_id=garage.id,
-            name=name,
-            description=None if spec is None else spec.description,
-            display_mode=None if spec is None else spec.display_mode,
-            order=order,
-        )
-        session.add(row)
-        groups[name] = row
-
-    session.flush()
-    return groups
-
-
-def _apply_services(
-    garage: Garage,
-    specs: list[ServiceSpec],
-    session,
-    groups: dict[str, AppointmentTypeGroup] | None = None,
-) -> list[GarageAppointmentType]:
-    groups = groups or {}
-    # Position within the service's own group (or within the ungrouped list),
-    # so spec order survives as display order.
-    next_order: dict[str | None, int] = {}
-
-    created = []
-    for s in specs:
-        order = next_order.get(s.group, 0)
-        next_order[s.group] = order + 1
-
-        group = groups.get(s.group) if s.group else None
-        row = GarageAppointmentType(
-            garage_id=garage.id,
-            name=s.name,
-            description=s.description,
-            base_price=None if s.base_price is None else Decimal(s.base_price),
-            default_duration_minutes=s.default_duration_minutes,
-            status=s.status,
-            group_id=None if group is None else group.id,
-            order=order,
-        )
-        session.add(row)
-        created.append(row)
-    session.flush()
-    return created
+    names = [g.name for g in group_specs] + [s.group for s in specs if s.group]
+    declared = {g.name: (g.description, g.display_mode) for g in group_specs}
+    return ensure_service_groups(garage, names, session, declared)
 
 
 def _apply_opening_hours(garage: Garage, hours: dict[int, tuple[str, str] | None], session) -> None:
@@ -598,6 +541,7 @@ def onboard_business(
     temp_password: str,
     session=None,
     commit: bool = True,
+    allow_appointment_warnings: bool = True,
 ) -> BusinessOnboardingResult:
     """Idempotently onboard ``spec``.
 
@@ -606,6 +550,11 @@ def onboard_business(
     ``temp_password``. Otherwise the full tenant is created (atomically, via
     :func:`onboard_garage`), then the spec's services and any non-default
     opening hours are applied in the same transaction.
+
+    The spec's ``appointments``, if any, are imported last in that same
+    transaction. Any row with an error fails the whole onboarding; rows with
+    warnings import unless ``allow_appointment_warnings`` is False (Platform
+    Admin passes the operator's explicit acknowledgement here).
     """
     session = session or db.session
 
@@ -651,7 +600,7 @@ def onboard_business(
     )
 
     groups = _apply_service_groups(result.garage, spec.services, spec.service_groups, session)
-    services = _apply_services(result.garage, spec.services, session, groups)
+    services = create_services(result.garage, spec.services, session, groups)
     if spec.booking_display_mode is not None:
         result.garage.booking_display_mode = spec.booking_display_mode
     # Seeded only when the spec asks for it - a business with no preset
@@ -666,6 +615,22 @@ def onboard_business(
         _apply_booking_settings(result.garage, spec.booking_settings, session)
     _apply_lifecycle(result.garage, spec)
 
+    # Last, so the import sees the business exactly as configured: its
+    # services, hours, booking settings and owner.
+    appointments = None
+    if spec.appointments:
+        appointments = import_appointment_rows(result.garage, spec.appointments, session)
+        if appointments.has_errors:
+            problems = "; ".join(f"{i.path}: {i.message}" for i in appointments.first_errors())
+            raise BusinessSpecError(
+                f"{appointments.counts['error']} appointment(s) cannot be imported - {problems}"
+            )
+        if appointments.has_warnings and not allow_appointment_warnings:
+            raise BusinessSpecError(
+                f"{appointments.counts['warning']} appointment(s) have warnings (clashes, "
+                "times outside opening hours or ignored fields) that must be acknowledged."
+            )
+
     if commit:
         session.commit()
     else:
@@ -678,6 +643,7 @@ def onboard_business(
         temp_password=temp_password,
         services=services,
         used_default_hours=used_default_hours,
+        appointments=appointments,
     )
 
 

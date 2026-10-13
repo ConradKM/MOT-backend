@@ -66,6 +66,19 @@ def _print_hours(spec) -> None:
         print(f"  {label:<15} {'closed' if value is None else f'{value[0]}-{value[1]}'}")
 
 
+def _print_appointments(imported, *, verb: str) -> None:
+    """Counts and problems only - appointment rows carry customer details,
+    which have no business in a terminal scrollback."""
+    counts = imported.counts
+    print(
+        f"  appointments    {counts['new']} {verb}, {counts['exists']} skipped as duplicates"
+        + (f", {counts['warning']} with warnings" if counts["warning"] else "")
+    )
+    for item in imported.items:
+        for issue in item.warnings:
+            print(f"    warning  {issue.path}: {issue.message}")
+
+
 def _print_result(spec, result, *, base_url: str) -> None:
     g = result.garage
     booking_url = f"{base_url.rstrip('/')}/book/{g.id}"
@@ -90,6 +103,8 @@ def _print_result(spec, result, *, base_url: str) -> None:
         f"  services        {len(result.services)}: " + ", ".join(s.name for s in result.services)
     )
     _print_hours(spec)
+    if result.appointments is not None:
+        _print_appointments(result.appointments, verb="imported")
     if spec.notes:
         print(f"  notes           {spec.notes}")
     print("-" * 66)
@@ -183,6 +198,20 @@ def main(argv=None) -> int:
                     + ("default" if spec.opening_hours is None else "custom")
                     + " opening hours. Nothing written."
                 )
+                if spec.appointments:
+                    # Appointments can only be checked against the business
+                    # they belong to, so build it in a transaction that is
+                    # always rolled back.
+                    try:
+                        result = onboard_business(
+                            spec, temp_password=_generate_temp_password(), commit=False
+                        )
+                    except BusinessSpecError as exc:
+                        db.session.rollback()
+                        print(f"error: {exc}", file=sys.stderr)
+                        return 1
+                    if result.appointments is not None:
+                        _print_appointments(result.appointments, verb="appointment(s) to import")
             db.session.rollback()
             return 0
 
