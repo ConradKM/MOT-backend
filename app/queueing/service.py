@@ -66,6 +66,7 @@ from app.models.queueing.queue_entry import (
 from app.models.queueing.queue_settings import AVERAGE_MODE_MANUAL, GarageQueueSettings
 from app.models.vehicle import Vehicle
 from app.public_booking.availability import open_interval, resolve_settings, slot_capacity
+from app.terms.service import stamp_acceptance
 
 from .eta import Busy, Estimate, QueuedJob, estimate_queue, ongoing
 
@@ -494,9 +495,17 @@ def _require_status(entry: QueueEntry, allowed: tuple[str, ...], action: str) ->
         )
 
 
-def join_queue(garage: Garage, data: Mapping[str, Any], now: datetime | None = None):
+def join_queue(
+    garage: Garage,
+    data: Mapping[str, Any],
+    now: datetime | None = None,
+    *,
+    terms_version: int | None = None,
+):
     """Add a walk-in. Returns ``(entry, raw_token)`` - the raw token exists
-    only in this return value and the join text."""
+    only in this return value and the join text. ``terms_version`` is the
+    Terms & Conditions version the route already checked the customer
+    accepted (None when the business has none)."""
     now = now or utcnow()
     sweep_queue(garage, now)
     lock_garage(garage.id)
@@ -582,6 +591,7 @@ def join_queue(garage: Garage, data: Mapping[str, Any], now: datetime | None = N
         service_minutes=minutes,
         public_token_hash=hash_token(token),
     )
+    stamp_acceptance(entry, terms_version, now)
     db.session.add(entry)
     db.session.commit()
     emit_event(QUEUE_ENTRY_JOINED, garage=garage, queue_entry=entry, status_token=token)

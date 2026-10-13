@@ -283,6 +283,7 @@ def create_app(config_class=Config):
     from .auth.routes import auth_blp
     from .booking_flow.routes import booking_flow_blp
     from .booking_requests.routes import booking_requests_blp
+    from .calendar_export.routes import calendar_export_blp, public_calendar_feeds_blp
     from .communications.ivr.routes import voice_menu_blp
     from .communications.routes import communications_blp
     from .communications.sms_webhooks import twilio_sms_blp
@@ -305,6 +306,7 @@ def create_app(config_class=Config):
     from .public_booking.routes import public_booking_blp
     from .queueing.routes import public_queue_blp, queue_blp
     from .roles.routes import roles_blp
+    from .terms.routes import public_terms_blp, terms_settings_blp
     from .vehicles.routes import vehicles_blp
 
     api.register_blueprint(health_blp)
@@ -322,6 +324,8 @@ def create_app(config_class=Config):
     api.register_blueprint(garage_schedule_blp)
     api.register_blueprint(public_garages_blp)
     api.register_blueprint(public_booking_blp)
+    api.register_blueprint(terms_settings_blp)
+    api.register_blueprint(public_terms_blp)
     api.register_blueprint(booking_requests_blp)
     api.register_blueprint(public_queue_blp)
     api.register_blueprint(queue_blp)
@@ -344,6 +348,8 @@ def create_app(config_class=Config):
     api.register_blueprint(add_ons_blp)
     api.register_blueprint(appointments_blp)
     api.register_blueprint(appointment_checklists_blp)
+    api.register_blueprint(calendar_export_blp)
+    api.register_blueprint(public_calendar_feeds_blp)
     api.register_blueprint(checklist_item_media_blp)
 
     # The internal operator console (app/platform_admin). A separate namespace
@@ -361,11 +367,13 @@ def create_app(config_class=Config):
     from .email.automation import register_email_handlers
     from .models import (  # noqa: F401
         booking_request,
+        calendar_feed,
         customer,
         employee,
         feedback,
         garage,
         garage_schedule,
+        garage_terms_version,
         mot_record,
         mot_reminder_settings,
         password_reset_token,

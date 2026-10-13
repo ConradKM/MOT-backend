@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, String, Text
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -130,6 +130,15 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     auto_accept_booking_requests_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+
+    # Owner-written Terms & Conditions every customer-facing booking must
+    # accept (see app/terms/). NULL - never an empty or whitespace-only
+    # string - means the business has none, and then nothing about booking
+    # changes. `terms_version` is the GarageTermsVersion row holding the
+    # current wording; it only moves when the trimmed text actually changes,
+    # and is left pointing at the last wording when the text is cleared.
+    terms_and_conditions: Mapped[str | None] = mapped_column(Text)
+    terms_version: Mapped[int | None] = mapped_column(Integer)
 
     # --- business logo (see app/garages/logo.py) -----------------------------
     # The bytes live in object storage; this row holds only the reference -

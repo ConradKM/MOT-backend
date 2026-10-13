@@ -44,6 +44,7 @@ from app.communications.events import (
 )
 from app.email import send_email
 from app.extensions import db
+from app.models.booking_request import BookingRequest
 from app.models.communications.communication_log import (
     CHANNEL_EMAIL,
     DIRECTION_OUTBOUND,
@@ -52,6 +53,7 @@ from app.models.communications.communication_log import (
 from app.models.employee import Employee
 from app.models.garage import Garage
 from app.models.role import Role
+from app.terms.service import accepted_terms_url
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +223,16 @@ def _login_url() -> str | None:
     return f"{base}/login" if base else None
 
 
+def _appointment_terms_url(appointment) -> str | None:
+    """The terms the customer accepted for the booking request this
+    appointment was approved from, if any. A staff-created appointment has
+    no request (staff aren't the customer accepting), so no link."""
+    booking_request = BookingRequest.query.filter_by(
+        garage_id=appointment.garage_id, appointment_id=appointment.id
+    ).first()
+    return accepted_terms_url(booking_request)
+
+
 def _appointment_context(appointment) -> dict:
     garage = appointment.garage
     customer = appointment.customer
@@ -236,6 +248,7 @@ def _appointment_context(appointment) -> dict:
         "vehicle_label": _vehicle_label(appointment.vehicle),
         "notes": appointment.notes,
         "login_url": _login_url(),
+        "terms_url": _appointment_terms_url(appointment),
     }
 
 
@@ -276,6 +289,9 @@ def send_booking_request_received_email(booking_request) -> CommunicationLog | N
             "vehicle_label": _booking_request_vehicle_label(booking_request),
             "notes": booking_request.notes,
             "login_url": _login_url(),
+            # The exact wording they accepted (null without terms) - a
+            # versioned link, so a later edit never changes what it shows.
+            "terms_url": accepted_terms_url(booking_request),
         },
         trigger_event=BOOKING_REQUEST_CREATED,
         customer=booking_request.customer,

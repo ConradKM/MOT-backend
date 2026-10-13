@@ -181,9 +181,13 @@ def create_deposit_hold(
     return payment, session
 
 
+#: Booking-request statuses that are short-lived, expiring holds on capacity.
+_HOLD_STATUSES = ("AWAITING_PAYMENT", "AWAITING_TERMS")
+
+
 def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> int:
-    """Flip every AWAITING_PAYMENT request whose hold has timed out to
-    EXPIRED, cancelling its in-flight provider intent so it can't be paid
+    """Flip every AWAITING_PAYMENT (or AWAITING_TERMS) request whose hold has
+    timed out to EXPIRED, cancelling its in-flight provider intent so it can't be paid
     after the fact. Safe/cheap to call defensively (see
     app/public_booking/routes.py, app/booking_requests/routes.py), mirroring
     expire_stale_booking_requests's own calling convention.
@@ -203,7 +207,10 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
     """
     now = now or datetime.now(UTC)
 
-    query = BookingRequest.query.filter(BookingRequest.status == "AWAITING_PAYMENT")
+    # AWAITING_TERMS is the other short-lived hold (a WhatsApp/SMS/phone
+    # booking waiting on the customer to accept the business's terms - see
+    # app/terms/). It has no payment yet, so it simply expires.
+    query = BookingRequest.query.filter(BookingRequest.status.in_(_HOLD_STATUSES))
     if garage_id is not None:
         query = query.filter(BookingRequest.garage_id == garage_id)
 
@@ -225,10 +232,15 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
         # and release a slot that the other transaction has just paid for.
         booking_request = BookingRequest.query.filter_by(id=request_id).with_for_update().one()
         if (
-            booking_request.status != "AWAITING_PAYMENT"
+            booking_request.status not in _HOLD_STATUSES
             or booking_request.payment_hold_expires_at is None
             or booking_request.payment_hold_expires_at >= now
         ):
+            continue
+        if booking_request.status == "AWAITING_TERMS":
+            booking_request.status = "EXPIRED"
+            booking_request.payment_hold_expires_at = None
+            expired_count += 1
             continue
         payment = _locked_active_payment(booking_request)
         if payment is not None and _reconcile_if_already_succeeded(

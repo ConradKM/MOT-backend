@@ -36,6 +36,7 @@ from app.models.queueing.reserved_window import WalkInReservedWindow
 from app.platform_admin.features import feature_enabled
 from app.public_booking.captcha import verify_captcha
 from app.public_booking.routes import _get_garage_by_slug
+from app.terms.service import require_web_acceptance
 
 from . import service
 from .eta import wait_minutes
@@ -288,7 +289,8 @@ class PublicQueueJoin(MethodView):
         garage = _get_garage_by_slug(slug)
         if not verify_captcha(data.get("captcha_token")):
             abort(400, message="CAPTCHA verification failed.")
-        entry, token = service.join_queue(garage, data)
+        terms_version = require_web_acceptance(garage, data)
+        entry, token = service.join_queue(garage, data, terms_version=terms_version)
         settings = service.get_queue_settings(garage.id)
         payload = _status_payload(garage, entry, service.queue_snapshot(garage), settings)
         payload["token"] = token

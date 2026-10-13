@@ -3,10 +3,11 @@
 Everything the customer-facing calendar shows is computed here from real data:
 the garage's ``garage_schedule_settings`` / ``garage_opening_hours`` /
 ``garage_schedule_exceptions`` rows (or the in-code defaults when a garage has
-none), its live non-cancelled ``appointments``, and its still-PENDING or
-AWAITING_PAYMENT ``booking_requests`` (the latter is a deposit payment hold -
-see app/payments/service.py), and its ``walkin_reserved_windows`` - bays the
-business has withheld from public booking so walk-ins aren't starved (see
+none), its live non-cancelled ``appointments``, and its still-PENDING,
+AWAITING_PAYMENT or AWAITING_TERMS ``booking_requests`` (the latter two are
+short-lived holds - see app/payments/service.py and app/terms/), and its
+``walkin_reserved_windows`` - bays the business has withheld from public
+booking so walk-ins aren't starved (see
 app/models/queueing/reserved_window.py). Nothing is mocked or hard-coded.
 
 Timezone note: like the rest of the codebase (see
@@ -153,8 +154,10 @@ def _load_day_usage(garage, day: date):
         BookingRequest.garage_id == garage.id,
         # AWAITING_PAYMENT reserves the slot exactly like PENDING while a
         # deposit is being paid (see app/payments/service.py) - counted here
-        # too so a second customer can't take the slot mid-payment.
-        BookingRequest.status.in_(("PENDING", "AWAITING_PAYMENT")),
+        # too so a second customer can't take the slot mid-payment. Likewise
+        # AWAITING_TERMS while a WhatsApp/SMS/phone customer accepts the
+        # business's terms via the texted link (see app/terms/).
+        BookingRequest.status.in_(("PENDING", "AWAITING_PAYMENT", "AWAITING_TERMS")),
         BookingRequest.preferred_date == day,
         BookingRequest.preferred_time.isnot(None),
     ).all()

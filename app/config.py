@@ -93,6 +93,12 @@ class Config:
     # headroom for a few open tabs.
     PUBLIC_QUEUE_JOIN_RATELIMIT = os.getenv("PUBLIC_QUEUE_JOIN_RATELIMIT", "5 per hour;20 per day")
     PUBLIC_QUEUE_STATUS_RATELIMIT = os.getenv("PUBLIC_QUEUE_STATUS_RATELIMIT", "30 per minute")
+    # Calendar subscription feeds (app/calendar_export), keyed per feed token
+    # rather than per IP: Google Calendar polls every subscribed feed from a
+    # small pool of shared addresses, so an IP key would let one business's
+    # feeds exhaust every other business's budget. Calendar apps poll roughly
+    # hourly, so this is generous for a real subscriber.
+    CALENDAR_FEED_RATELIMIT = os.getenv("CALENDAR_FEED_RATELIMIT", "60 per hour")
 
     # --- Garage onboarding (see app/garages/onboarding.py) --------------
     # The supported way to create a tenant is the `flask onboard-garage` CLI.
@@ -155,6 +161,17 @@ class Config:
     STORAGE_SECRET_ACCESS_KEY = os.getenv("STORAGE_SECRET_ACCESS_KEY", "")
     STORAGE_PRESIGN_EXPIRY = int(os.getenv("STORAGE_PRESIGN_EXPIRY", "900"))
     MEDIA_MAX_BYTES = int(os.getenv("MEDIA_MAX_BYTES", str(100 * 1024 * 1024)))
+
+    # --- Calendar export / subscription feeds (see app/calendar_export) ---
+    # Caps on a one-off .ics download: beyond these the request is a 422
+    # asking to narrow it, never a silently truncated file.
+    CALENDAR_EXPORT_MAX_DAYS = int(os.getenv("CALENDAR_EXPORT_MAX_DAYS", "366"))
+    CALENDAR_EXPORT_MAX_EVENTS = int(os.getenv("CALENDAR_EXPORT_MAX_EVENTS", "5000"))
+    CALENDAR_FEEDS_PER_EMPLOYEE = int(os.getenv("CALENDAR_FEEDS_PER_EMPLOYEE", "10"))
+    # The right-hand side of every event UID (<appointment id>@<this>).
+    # Calendar clients match updates to events by UID, so changing this after
+    # launch duplicates every subscribed and imported appointment.
+    CALENDAR_UID_DOMAIN = os.getenv("CALENDAR_UID_DOMAIN", "comaz.co.uk")
 
     # --- Outbound email (see app/email) --------------------------------
     # Password-reset links are built from APP_BASE_URL. EMAIL_PROVIDER "console"
@@ -415,6 +432,14 @@ class Config:
     # customer to complete a card challenge, short enough that an abandoned
     # payment doesn't block the slot for other customers.
     PAYMENT_HOLD_MINUTES = int(os.getenv("PAYMENT_HOLD_MINUTES", "15"))
+    # How long a WhatsApp/SMS/voice booking waits for the customer to accept
+    # the business's Terms & Conditions via the texted link (AWAITING_TERMS -
+    # see app/terms/) before it is swept to EXPIRED by the same job as an
+    # unpaid deposit hold, releasing the slot. The link arrives while the
+    # customer is still in the conversation, so this only has to cover
+    # "read it and tap accept"; longer just keeps a slot away from everyone
+    # else for a booking that may never happen.
+    TERMS_ACCEPTANCE_HOLD_MINUTES = int(os.getenv("TERMS_ACCEPTANCE_HOLD_MINUTES", "60"))
     # Deposits are GBP-only for now (see app/payments/money.py); kept as a
     # constant, not an env var, since changing it needs code changes anyway.
     DEPOSIT_CURRENCY = "GBP"
@@ -476,3 +501,4 @@ class TestConfig(Config):
     # CI. A short hold so expiry tests don't need to fake-sleep long.
     PAYMENTS_PROVIDER = "fake"
     PAYMENT_HOLD_MINUTES = 15
+    TERMS_ACCEPTANCE_HOLD_MINUTES = 60
