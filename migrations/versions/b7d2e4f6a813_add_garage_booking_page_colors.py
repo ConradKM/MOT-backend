@@ -1,7 +1,7 @@
 """Add the owner-chosen booking-page background and text colours
 
 Revision ID: b7d2e4f6a813
-Revises: 3a7c1e9d5b20
+Revises: 86b6c2593cdb
 Create Date: 2026-10-12 12:00:00.000000
 
 """
@@ -11,7 +11,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "b7d2e4f6a813"
-down_revision = "3a7c1e9d5b20"
+down_revision = "86b6c2593cdb"
 branch_labels = None
 depends_on = None
 
