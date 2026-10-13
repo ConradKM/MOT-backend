@@ -72,6 +72,7 @@ class CustomerAccountResource(MethodView):
                 "last_name": customer.last_name,
                 "email": customer.email,
                 "phone": customer.phone,
+                "garage_id": customer.garage_id,
                 "garage_name": customer.garage.name,
                 # The business's current Terms & Conditions page, or null
                 # when it has none - see app/terms/.
@@ -136,5 +137,6 @@ class CustomerAppointmentResource(MethodView):
                 if appointment.vehicle
                 else None
             ),
+            "garage_id": appointment.garage_id,
             "garage_name": appointment.garage.name,
         }

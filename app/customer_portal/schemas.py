@@ -14,6 +14,9 @@ class CustomerProfileSchema(Schema):
     last_name = fields.Str(dump_only=True)
     email = fields.Email(dump_only=True, allow_none=True)
     phone = fields.Str(dump_only=True, allow_none=True)
+    # The business's public id - the same one in its /book/<id> URL - so the
+    # portal can load that business's public page colours.
+    garage_id = fields.UUID(dump_only=True)
     garage_name = fields.Str(dump_only=True)
     garage_terms_url = fields.Str(dump_only=True, allow_none=True)
     # Whether email + password sign-in is set up yet (see
@@ -91,4 +94,5 @@ class CustomerAppointmentDetailSchema(Schema):
     appointment_type_name = fields.Str(dump_only=True)
     appointment_type_description = fields.Str(dump_only=True, allow_none=True)
     vehicle = fields.Nested(CustomerAppointmentVehicleSchema, dump_only=True, allow_none=True)
+    garage_id = fields.UUID(dump_only=True)
     garage_name = fields.Str(dump_only=True)

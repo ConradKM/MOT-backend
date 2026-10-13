@@ -93,6 +93,12 @@ class Garage(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-de
     booking_display_mode: Mapped[str] = mapped_column(
         String(10), nullable=False, default="LIST", server_default="LIST"
     )
+    # Owner-chosen colours for the customer-facing pages: the page background
+    # and the text sitting directly on it (cards/forms keep their own look).
+    # Always both set or both NULL (= the default look); lowercase #rrggbb with
+    # text/background contrast >= 4.5:1 - see app/garages/appearance.py.
+    booking_background_color: Mapped[str | None] = mapped_column(String(7))
+    booking_text_color: Mapped[str | None] = mapped_column(String(7))
 
     # Customer-facing business details. The authoritative source for future
     # telephone / email-reminder / SMS / booking-confirmation systems - not to

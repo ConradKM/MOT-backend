@@ -1,0 +1,18 @@
+{
+  "_comment": "Shared WCAG contrast test vectors. An identical copy lives in MOT-backend at tests/fixtures/contrast_vectors.json (and this one in MOT-frontend at src/lib/contrastVectors.json); change both together so the Python and TypeScript implementations cannot drift. Ratios are checked to within 0.005.",
+  "min_ratio": 4.5,
+  "ratios": [
+    { "background": "#000000", "text": "#ffffff", "ratio": 21.0, "passes": true },
+    { "background": "#ffffff", "text": "#000000", "ratio": 21.0, "passes": true },
+    { "background": "#ffffff", "text": "#ffffff", "ratio": 1.0, "passes": false },
+    { "background": "#ffffff", "text": "#767676", "ratio": 4.5422, "passes": true },
+    { "background": "#ffffff", "text": "#777777", "ratio": 4.4781, "passes": false },
+    { "background": "#ffffff", "text": "#ff0000", "ratio": 3.9985, "passes": false },
+    { "background": "#000000", "text": "#949494", "ratio": 6.9228, "passes": true },
+    { "background": "#f4f4f4", "text": "#242424", "ratio": 14.1134, "passes": true },
+    { "background": "#0B1F3A", "text": "#F5F7FA", "ratio": 15.3912, "passes": true },
+    { "background": "#fefce8", "text": "#1e3a8a", "ratio": 10.0145, "passes": true }
+  ],
+  "valid_hex": ["#000000", "#ffffff", "#0B1F3A", "#a1B2c3"],
+  "invalid_hex": ["#fff", "000000", "#0000000", "#00000", "#ggg000", "red", "rgb(0,0,0)", "#000000ff", " #000000", "#000000 ", "#000000\n", "", "#00000g"]
+}

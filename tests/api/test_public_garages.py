@@ -25,6 +25,8 @@ def test_list_only_exposes_public_fields(client, garage):
         "slug",
         "logo_url",
         "booking_display_mode",
+        "booking_background_color",
+        "booking_text_color",
         "appointment_type_groups",
         "appointment_types",
         # The business's own customer-facing terms - public by nature.
@@ -43,6 +45,8 @@ def test_unauthenticated_client_can_fetch_one_garage(client, garage):
         "slug": garage.slug,
         "logo_url": None,
         "booking_display_mode": "LIST",
+        "booking_background_color": None,
+        "booking_text_color": None,
         "appointment_type_groups": [],
         # Same shape as GET /api/public/<slug> - this is the /book/:garageId
         # entry point, so it is the *same page*, not a second view of it.

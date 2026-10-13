@@ -1,5 +1,6 @@
 from marshmallow import Schema, fields, validate
 
+from app.garages.appearance import HEX_COLOR_RE, public_colors
 from app.garages.logo import logo_public_url
 
 
@@ -27,12 +28,23 @@ class GarageSchema(Schema):
     logo_url = fields.Method("_get_logo_url", dump_only=True)
     auto_accept_booking_requests = fields.Bool(dump_only=True)
     auto_accept_booking_requests_enabled = fields.Bool(dump_only=True)
+    # The owner's booking-page colours (app/garages/appearance.py), passed
+    # through the same defensive read as the public payload: a stored pair
+    # that no longer validates reads as null (= the default look).
+    booking_background_color = fields.Method("_get_booking_background_color", dump_only=True)
+    booking_text_color = fields.Method("_get_booking_text_color", dump_only=True)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
     def _get_logo_url(self, obj):
         return logo_public_url(obj)
+
+    def _get_booking_background_color(self, obj):
+        return public_colors(obj)[0]
+
+    def _get_booking_text_color(self, obj):
+        return public_colors(obj)[1]
 
 
 class GarageDetailsUpdateSchema(Schema):
@@ -48,6 +60,21 @@ class GarageDetailsUpdateSchema(Schema):
     address = fields.Str(allow_none=True, validate=validate.Length(max=500))
     postcode = fields.Str(allow_none=True, validate=validate.Length(max=20))
     website = fields.Str(allow_none=True, validate=validate.Length(max=200))
+
+
+_HEX_COLOR = validate.Regexp(HEX_COLOR_RE, error="Must be a 6-digit hex colour like #1a2b3c.")
+
+
+class BookingAppearanceSchema(Schema):
+    """``PUT /api/garage/booking-appearance``. OWNER only.
+
+    Both keys are required so a request always states the whole pair - the
+    pair is what gets validated (both-or-neither, contrast >= 4.5:1; see
+    app/garages/appearance.py). ``null`` for both resets to the default look.
+    """
+
+    booking_background_color = fields.Str(required=True, allow_none=True, validate=_HEX_COLOR)
+    booking_text_color = fields.Str(required=True, allow_none=True, validate=_HEX_COLOR)
 
 
 class BookingRequestSettingsSchema(Schema):

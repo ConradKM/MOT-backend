@@ -12,6 +12,7 @@ So neither route builds the payload itself any more.
 
 from __future__ import annotations
 
+from app.garages.appearance import public_colors
 from app.garages.logo import logo_public_url
 from app.storage.images import image_url
 from app.terms.service import has_terms
@@ -27,6 +28,7 @@ def public_garage_payload(garage) -> dict:
     # a configuration leftover, and rendering it would give the customer a
     # heading to click that leads nowhere.
     grouped_ids = {t.group_id for t in active if t.group_id is not None}
+    background, text = public_colors(garage)
 
     return {
         "id": garage.id,
@@ -34,6 +36,8 @@ def public_garage_payload(garage) -> dict:
         "slug": garage.slug,
         "logo_url": logo_public_url(garage),
         "booking_display_mode": garage.booking_display_mode,
+        "booking_background_color": background,
+        "booking_text_color": text,
         "appointment_type_groups": [
             {
                 "id": g.id,

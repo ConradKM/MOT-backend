@@ -119,6 +119,11 @@ class PublicGarageDetailSchema(Schema):
     # The business-wide default presentation; a group may override it, and
     # each group's own `display_mode` is already resolved.
     booking_display_mode = fields.Str(dump_only=True)
+    # The business's page background and page text colours (lowercase
+    # #rrggbb), or both null for the default look. Already re-validated on the
+    # way out - see app/garages/appearance.py::public_colors.
+    booking_background_color = fields.Str(dump_only=True, allow_none=True)
+    booking_text_color = fields.Str(dump_only=True, allow_none=True)
     appointment_type_groups = fields.List(
         fields.Nested(PublicAppointmentTypeGroupSchema), dump_only=True
     )
