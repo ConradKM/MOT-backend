@@ -90,6 +90,12 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[na
     # appointment type remains linked for configuration/navigation, but a
     # later rename must not rewrite historical appointments.
     appointment_type_name_at_booking: Mapped[str | None] = mapped_column(String(100))
+    # Set when the appointment came from a bulk import (app/bulk_import) rather
+    # than being booked through the app. An imported diary entry was arranged
+    # outside this system, so there is no record of the customer agreeing to
+    # automated messages: the reminder sender skips these until staff
+    # reschedule the appointment, which means the business has been in touch.
+    imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="appointments")
     employee: Mapped["Employee"] = relationship("Employee", back_populates="appointments")

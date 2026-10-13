@@ -26,6 +26,9 @@ class GarageSchema(Schema):
     # this schema - this just lets the garage's own app (its header) show
     # what Platform Admin set. A fresh presigned url each request, or null.
     logo_url = fields.Method("_get_logo_url", dump_only=True)
+    # The IANA zone the business's wall-clock times are in - platform-managed,
+    # read-only here. The bulk import's AI prompt names it.
+    timezone = fields.Str(dump_only=True)
     auto_accept_booking_requests = fields.Bool(dump_only=True)
     auto_accept_booking_requests_enabled = fields.Bool(dump_only=True)
     # The owner's booking-page colours (app/garages/appearance.py), passed

@@ -13,6 +13,14 @@ from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
 
+from app.bulk_import.http import (
+    BulkImportRequestSchema,
+    BulkImportResultSchema,
+    ImportFormatsSchema,
+    import_formats,
+    limit_body_size,
+)
+from app.bulk_import.result import ImportPayloadError
 from app.extensions import db
 from app.garages.logo import (
     LogoError,
@@ -44,9 +52,11 @@ from app.platform_admin.onboarding import onboarding_progress
 from app.platform_admin.provisioning import (
     DuplicateOwnerError,
     ProvisioningError,
+    bulk_import_services,
     create_service,
     delete_service,
     get_service,
+    preview_import,
     provision_tenant,
     resend_owner_invite,
     tenant_configuration,
@@ -64,6 +74,7 @@ from app.platform_admin.schemas import (
     ImpersonationSessionQuerySchema,
     ImpersonationSessionSchema,
     ImpersonationStartSchema,
+    ImportPreviewSchema,
     LogoFinalizeSchema,
     LogoResponseSchema,
     LogoUploadRequestSchema,
@@ -502,6 +513,69 @@ class TenantServices(MethodView):
         try:
             return create_service(admin=get_current_platform_admin(), garage=garage, data=data)
         except ProvisioningError as exc:
+            abort(422, message=str(exc))
+
+
+@platform_tenants_blp.route("/tenants/<uuid:garage_id>/services/bulk")
+class TenantServicesBulkImport(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @limit_body_size
+    @platform_tenants_blp.arguments(BulkImportRequestSchema)
+    @platform_tenants_blp.response(200, BulkImportResultSchema)
+    @platform_tenants_blp.alt_response(409, schema=BulkImportResultSchema)
+    @platform_tenants_blp.alt_response(422, schema=BulkImportResultSchema)
+    def post(self, data, garage_id):
+        """Add many services to this business from pasted JSON.
+
+        ``dry_run`` (the default) previews without writing. Names matching an
+        existing service are reported ``EXISTS`` and left alone; a commit
+        needs zero errors and ``acknowledge_warnings`` when any row has a
+        warning, imports all rows or none, and is audited with counts only.
+        """
+        garage = _require_tenant(garage_id)
+        return bulk_import_services(
+            admin=get_current_platform_admin(),
+            garage=garage,
+            payload=data["payload"],
+            dry_run=data["dry_run"],
+            acknowledge_warnings=data["acknowledge_warnings"],
+        )
+
+
+@platform_tenants_blp.route("/import/formats")
+class ImportFormats(MethodView):
+    @jwt_required()
+    @platform_admin_required
+    @platform_tenants_blp.response(200, ImportFormatsSchema)
+    def get(self):
+        """The example, JSON Schema and AI prompt template for each import -
+        the same text the owner app shows."""
+        return import_formats()
+
+
+@platform_tenants_blp.route("/import/preview")
+class ImportPreview(MethodView):
+    @jwt_required()
+    @superadmin_required
+    @limit_body_size
+    @platform_tenants_blp.arguments(ImportPreviewSchema)
+    @platform_tenants_blp.response(200, BulkImportResultSchema)
+    def post(self, data):
+        """Check a pasted import for the onboarding wizard, before the
+        business exists. Writes nothing.
+
+        ``context`` is the wizard's draft (services, opening hours, booking
+        settings, owner). The draft business is built through the real
+        onboarding code in a transaction that is always rolled back, and the
+        real import runs against it - so the result is what provisioning will
+        do with the same draft.
+        """
+        try:
+            return preview_import(
+                kind=data["kind"], payload=data["payload"], context=data["context"]
+            )
+        except (ProvisioningError, ImportPayloadError) as exc:
             abort(422, message=str(exc))
 
 

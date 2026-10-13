@@ -266,6 +266,9 @@ def send_due_appointment_reminders(
     q = Appointment.query.filter(
         Appointment.status.in_(REMINDABLE_APPOINTMENT_STATUSES),
         Appointment.start_time > now,
+        # An imported diary entry has no record of the customer agreeing to
+        # automated messages - see Appointment.imported_at.
+        Appointment.imported_at.is_(None),
     )
     if garage_id is not None:
         q = q.filter(Appointment.garage_id == garage_id)

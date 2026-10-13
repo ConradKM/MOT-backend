@@ -54,6 +54,10 @@ from sqlalchemy import func, select
 
 from app.auth.reset import issue_reset_token
 from app.branding import PLATFORM_NAME
+from app.bulk_import.appointments import import_appointments
+from app.bulk_import.http import run_import
+from app.bulk_import.result import ImportPayloadError, ImportResult
+from app.bulk_import.services import import_services
 from app.email import send_email
 from app.extensions import db
 from app.garages.business_onboarding import (
@@ -61,6 +65,7 @@ from app.garages.business_onboarding import (
     BusinessSpec,
     BusinessSpecError,
     ServiceSpec,
+    find_existing_business,
     onboard_business,
 )
 from app.garages.onboarding import OWNER_ROLE_NAME, OnboardingEmailInUse, OnboardingError
@@ -78,6 +83,7 @@ from app.models.platform.audit_log import (
     ACTION_TENANT_SERVICE_CREATE,
     ACTION_TENANT_SERVICE_DELETE,
     ACTION_TENANT_SERVICE_UPDATE,
+    ACTION_TENANT_SERVICES_BULK_IMPORT,
 )
 from app.models.role import Role, employee_roles
 
@@ -325,9 +331,11 @@ def _spec_from_request(data: dict) -> BusinessSpec:
                 ),
                 default_duration_minutes=service.get("default_duration_minutes"),
                 status=service.get("status") or "ACTIVE",
+                group=(service.get("group") or "").strip() or None,
             )
             for service in data.get("services") or []
         ],
+        appointments=list(data.get("appointments") or []),
         opening_hours=opening_hours,
         booking_settings=data.get("booking_settings") or None,
         plan=business.get("plan"),
@@ -361,6 +369,7 @@ def provision_tenant(*, admin, data: dict) -> dict:
             # because an Employee row needs a hash.
             temp_password=secrets.token_urlsafe(32),
             commit=False,
+            allow_appointment_warnings=bool(data.get("acknowledge_appointment_warnings")),
         )
     except OnboardingEmailInUse as exc:
         db.session.rollback()
@@ -381,6 +390,8 @@ def provision_tenant(*, admin, data: dict) -> dict:
 
     garage, owner = result.garage, result.owner
     raw_token = issue_reset_token(owner, minutes=_invite_minutes())
+    counts = result.appointments.counts if result.appointments else {"new": 0, "exists": 0}
+    imported = {"new": counts["new"], "exists": counts["exists"]}
 
     record_audit(
         admin=admin,
@@ -396,6 +407,8 @@ def provision_tenant(*, admin, data: dict) -> dict:
             "services": [service.name for service in result.services],
             "custom_opening_hours": not result.used_default_hours,
             "custom_booking_settings": sorted(spec.booking_settings or {}),
+            # Counts only: imported rows carry customer personal data.
+            "appointments_imported": imported["new"],
         },
     )
     db.session.commit()
@@ -405,6 +418,7 @@ def provision_tenant(*, admin, data: dict) -> dict:
     return {
         "created": True,
         "invite_sent": invite_sent,
+        "appointments_imported": imported,
         **tenant_configuration(garage),
         "next_tasks": next_tasks(garage),
     }
@@ -618,6 +632,83 @@ def create_service(*, admin, garage: Garage, data: dict) -> GarageAppointmentTyp
     )
     db.session.commit()
     return service
+
+
+def bulk_import_services(
+    *, admin, garage: Garage, payload: Any, dry_run: bool, acknowledge_warnings: bool
+) -> tuple[dict, int]:
+    """Add many services to an onboarded tenant from pasted JSON.
+
+    The same import the owner app runs (``app/bulk_import/services.py``); a
+    commit writes one audit row with counts only.
+    """
+    locked = db.session.execute(
+        select(Garage).where(Garage.id == garage.id).with_for_update()
+    ).scalar_one()
+
+    def audit(result: ImportResult) -> None:
+        record_audit(
+            admin=admin,
+            action=ACTION_TENANT_SERVICES_BULK_IMPORT,
+            garage=locked,
+            summary=f"Bulk-added {result.counts['new']} service(s)",
+            details={"new": result.counts["new"], "exists": result.counts["exists"]},
+        )
+
+    return run_import(
+        lambda: import_services(locked, payload, db.session),
+        dry_run=dry_run,
+        acknowledge_warnings=acknowledge_warnings,
+        session=db.session,
+        on_commit=audit,
+        log_label=f"platform-admin services garage={garage.id}",
+    )
+
+
+#: Stands in for the business name while previewing an import for a business
+#: the wizard has not created yet.
+_PREVIEW_BUSINESS_NAME = "Import preview"
+
+
+def preview_import(*, kind: str, payload: Any, context: dict) -> dict:
+    """Check a paste for the onboarding wizard, before the business exists.
+
+    Builds the draft business - its services, opening hours and booking
+    settings - through the real onboarding code inside a transaction, runs the
+    real import against it, and rolls everything back. So the preview is what
+    provisioning will do, not an approximation of it. Writes nothing.
+    """
+    owner = context.get("owner") or {}
+    owner_email = owner.get("email")
+    if not owner_email or find_existing_business(owner_email) is not None:
+        # The real owner's email lets rows assigned to them resolve; when the
+        # wizard has none yet (or it is taken - provisioning will say so),
+        # a reserved address stands in.
+        owner_email = f"import-preview-{uuid.uuid4().hex}@example.com"
+
+    spec_input = {
+        "business": {"name": _PREVIEW_BUSINESS_NAME},
+        "owner": {**owner, "email": owner_email},
+        "services": context.get("services") or [],
+        "opening_hours": context.get("opening_hours"),
+        "booking_settings": context.get("booking_settings") or {},
+    }
+    try:
+        result = onboard_business(
+            _spec_from_request(spec_input),
+            temp_password=secrets.token_urlsafe(32),
+            commit=False,
+        )
+        run = import_services if kind == "services" else import_appointments
+        imported = run(result.garage, payload, db.session)
+    except (BusinessSpecError, OnboardingError, ProvisioningError) as exc:
+        db.session.rollback()
+        raise ProvisioningError(f"The draft business is not valid yet: {exc}") from exc
+    except ImportPayloadError:
+        db.session.rollback()
+        raise
+    db.session.rollback()
+    return imported.to_dict(dry_run=True, committed=False)
 
 
 def get_service(garage: Garage, service_id: uuid.UUID) -> GarageAppointmentType | None:
