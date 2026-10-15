@@ -22,6 +22,10 @@ twilio>=9,<10
 cryptography>=43,<47
 # Payments provider adapter (app/payments/providers/stripe_provider.py).
 stripe>=11,<16
+# Square payments (app/payments/square_api.py) call Square's REST API directly
+# over httpx rather than the squareup SDK - see that module's docstring. Already
+# a transitive dependency of openai; pinned here because we import it.
+httpx>=0.28,<1
 # OpenAI Realtime SIP voice (app/ai_voice/) - the official SDK's own
 # client.realtime.calls.* (accept/reject/hangup/refer), client.webhooks.
 # unwrap() for webhook signature verification, and client.realtime.connect()

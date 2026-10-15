@@ -7,7 +7,8 @@ Three sections, each a list of ``{key, label, ok}`` checks in the same shape
 
 * **business** - the onboarding steps that block public booking at all
   (:func:`app.platform_admin.onboarding.onboarding_progress`).
-* **payments** - read from the connected account's own stored state
+* **payments** - for the business's chosen provider (Stripe, or Square -
+  connection, authorisation state and location), read from the connected account's own stored state
   (``GaragePaymentSettings``, kept current by Stripe webhooks/refresh - this
   never calls Stripe itself, so it's cheap enough for a dashboard read).
   "Stripe connected" alone is never enough to call payments ready: charges
@@ -31,6 +32,7 @@ from app.models.employee import Employee, employee_roles
 from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
 from app.models.role import Role
 from app.payments.config import is_payments_configured
+from app.payments.settings import resolve_provider_name
 
 from .onboarding import onboarding_progress
 
@@ -72,7 +74,42 @@ def _business_checks(garage: Garage) -> list[dict]:
     ]
 
 
+def _square_payments_checks(garage: Garage) -> list[dict]:
+    """A business whose chosen provider is Square: read from stored
+    connection state (no Square call), mirroring the Stripe checks."""
+    from app.models.payments.garage_payment_settings import SQUARE_STATUS_CONNECTED
+
+    settings = garage.payment_settings
+    status = settings.square_status if settings is not None else "NOT_CONNECTED"
+    return [
+        _check(
+            "square_connected",
+            "Square connected",
+            bool(settings and settings.square_merchant_id and status == SQUARE_STATUS_CONNECTED),
+        ),
+        # REVOKED/ERROR show here, so an operator can see "needs attention"
+        # without opening the business's own settings.
+        _check(
+            "square_authorization_valid",
+            f"Square access ({status.lower()})",
+            status == SQUARE_STATUS_CONNECTED,
+        ),
+        _check(
+            "square_location_selected",
+            "Square location selected",
+            bool(settings and settings.square_location_id),
+        ),
+        _check(
+            "deposit_configuration_valid",
+            "Deposit configuration valid",
+            is_payments_configured("square", garage),
+        ),
+    ]
+
+
 def _payments_checks(garage: Garage) -> list[dict]:
+    if resolve_provider_name(garage) == "square":
+        return _square_payments_checks(garage)
     settings = garage.payment_settings
     connected = bool(settings and settings.stripe_account_id)
     charges = bool(settings and settings.stripe_charges_enabled)

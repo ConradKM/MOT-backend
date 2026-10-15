@@ -15,7 +15,8 @@ Stripe is the first *implemented* provider, not the only one CoMaz can ever
 support - the payment layer is provider-neutral, and each business picks its
 own provider independently (see docs/PAYMENTS_PROVIDERS.md for the
 architecture, and for what adding PayPal/Square for real involves). This
-document only covers Stripe, today's one working option.
+document only covers Stripe. For Square, see [SQUARE_SETUP.md](SQUARE_SETUP.md).
+Each business picks Stripe or Square in Settings -> Payments.
 
 Everything runs against an in-process fake provider in dev/CI today
 (`PAYMENTS_PROVIDER=fake`), so nothing below is required to keep developing

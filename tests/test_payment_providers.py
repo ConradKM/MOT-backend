@@ -41,7 +41,7 @@ def test_stripe_adapter_reports_unconfigured_without_keys(app):
     assert StripePaymentProvider().is_configured() is False
 
 
-def test_stripe_declares_wallet_support_skeletons_declare_none():
+def test_stripe_declares_wallet_support_others_declare_none():
     assert StripePaymentProvider().capabilities.supported_wallets == ("apple_pay", "google_pay")
     assert PayPalPaymentProvider().capabilities.supported_wallets == ()
     assert SquarePaymentProvider().capabilities.supported_wallets == ()
@@ -129,12 +129,13 @@ def test_fake_provider_is_always_configured():
 
 
 @pytest.mark.parametrize("adapter_cls", [PayPalPaymentProvider, SquarePaymentProvider])
-def test_skeleton_adapters_report_unconfigured(adapter_cls):
+def test_unconfigured_adapters_report_unconfigured(app, adapter_cls):
+    # Square is real now, but TestConfig gives it no application settings.
     adapter = adapter_cls()
     assert adapter.is_configured() is False
 
 
-@pytest.mark.parametrize("adapter_cls", [PayPalPaymentProvider, SquarePaymentProvider])
+@pytest.mark.parametrize("adapter_cls", [PayPalPaymentProvider])
 def test_skeleton_adapters_never_fake_a_successful_payment(adapter_cls):
     """Every real operation must fail loudly and clearly rather than
     pretending to work - a skeleton adapter must never let a booking

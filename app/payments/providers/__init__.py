@@ -13,12 +13,12 @@ def get_provider(name: str, *, connected_account_id: str | None = None) -> Payme
     nothing else in the codebase changes. See :func:`get_provider_for_garage`
     for the per-business-aware entry point most callers actually want.
 
-    ``connected_account_id`` is Stripe-Connect-specific (a business's own
-    connected account - see app/payments/connect.py) and ignored by every
-    other adapter; passing it for a non-Stripe provider is simply a no-op,
-    not an error, so callers that resolve it generically (e.g. from a
-    payment row's own ``provider_account_id``) never need a provider-name
-    branch of their own.
+    ``connected_account_id`` is the business's own account at the provider,
+    for providers that charge per business: a Stripe Connect account id
+    (app/payments/connect.py) or a Square merchant id
+    (app/payments/square_oauth.py). Every other adapter ignores it, so callers
+    that resolve it generically (e.g. from a payment row's own
+    ``provider_account_id`` snapshot) never need a provider-name branch.
     """
     if name == "fake":
         from .fake import FakePaymentProvider
@@ -38,7 +38,7 @@ def get_provider(name: str, *, connected_account_id: str | None = None) -> Payme
     if name == "square":
         from .square import SquarePaymentProvider
 
-        return SquarePaymentProvider()
+        return SquarePaymentProvider(merchant_id=connected_account_id)
 
     raise ValueError(f"Unknown payment provider: {name!r} (expected one of {_ADAPTERS})")
 
@@ -47,13 +47,23 @@ def get_provider_for_garage(garage) -> PaymentProvider:
     """The adapter a specific garage's deposits should use - see
     app/payments/settings.py::resolve_provider_name for how that's decided.
 
-    For Stripe, this also threads the garage's own Connect account id
-    through so every call the returned adapter makes is a Direct Charge
-    against that business's account, never CoMaz's platform account."""
-    from app.payments.settings import resolve_connected_account_id, resolve_provider_name
+    Also threads the garage's own provider account through (Stripe Connect
+    account / Square merchant) so every call the returned adapter makes acts
+    on that business's account, never a CoMaz platform account."""
+    from app.payments.settings import resolve_provider_account_id, resolve_provider_name
 
     name = resolve_provider_name(garage)
-    return get_provider(name, connected_account_id=resolve_connected_account_id(garage, name))
+    return get_provider(name, connected_account_id=resolve_provider_account_id(garage, name))
 
 
-__all__ = ["PaymentProvider", "get_provider", "get_provider_for_garage"]
+def registered_provider_names() -> tuple[str, ...]:
+    """Every adapter name ``get_provider`` accepts."""
+    return _ADAPTERS
+
+
+__all__ = [
+    "PaymentProvider",
+    "get_provider",
+    "get_provider_for_garage",
+    "registered_provider_names",
+]

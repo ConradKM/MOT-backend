@@ -7,17 +7,17 @@ starts to matter once a business needs to choose a *different* provider (or
 be disabled outright) from the platform default - see
 app/payments/settings.py::resolve_provider_name.
 
-Deliberately holds no secrets. ``merchant_account_reference`` is an opaque
-pointer (e.g. a secret-manager key name, or a future Stripe Connect account
-id) for a later per-tenant-credential model - nothing reads or writes real
-credentials through this column today; every provider currently used is
-configured platform-wide via deployment env vars.
+Holds no plaintext secrets. The only credentials here are a connected
+Square merchant's OAuth tokens, stored Fernet-encrypted (``*_enc`` columns,
+see app/payments/secrets.py). ``merchant_account_reference`` is an opaque
+pointer kept as a future seam; nothing reads or writes credentials through it.
 """
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -34,6 +34,22 @@ if TYPE_CHECKING:
 # webhook signature stopped verifying) - surfaced to Platform Admin so it
 # doesn't fail silently as "just not configured yet".
 PAYMENT_CONFIGURATION_STATUSES = ("NOT_CONFIGURED", "TEST", "LIVE", "ERROR")
+
+# Square OAuth connection state. NOT_CONNECTED: never authorised (or
+# disconnected). CONNECTED: tokens stored and usable. REVOKED: the merchant
+# revoked CoMaz's access in Square (oauth.authorization.revoked webhook, or a
+# refresh rejected as revoked) - needs a reconnect. ERROR: a token refresh or
+# decryption failed for another reason - needs attention/reconnect.
+SQUARE_STATUS_NOT_CONNECTED = "NOT_CONNECTED"
+SQUARE_STATUS_CONNECTED = "CONNECTED"
+SQUARE_STATUS_REVOKED = "REVOKED"
+SQUARE_STATUS_ERROR = "ERROR"
+SQUARE_STATUSES = (
+    SQUARE_STATUS_NOT_CONNECTED,
+    SQUARE_STATUS_CONNECTED,
+    SQUARE_STATUS_REVOKED,
+    SQUARE_STATUS_ERROR,
+)
 
 
 class GaragePaymentSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
@@ -85,5 +101,24 @@ class GaragePaymentSettings(db.Model, PrimaryKeyMixin, TimestampMixin):  # type:
     stripe_charges_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     stripe_payouts_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     stripe_details_submitted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # --- Square (OAuth) -------------------------------------------------
+    # One authorised Square merchant per business (see
+    # app/payments/square_oauth.py). Funds settle straight to that merchant;
+    # CoMaz never holds them. The merchant/location ids are not secrets; the
+    # two tokens are, and are only ever stored Fernet-encrypted with
+    # PAYMENTS_SECRET_KEY (app/payments/secrets.py) - never returned by any
+    # API, logged, or audited.
+    square_merchant_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    square_location_id: Mapped[str | None] = mapped_column(String(255))
+    square_access_token_enc: Mapped[str | None] = mapped_column(Text)
+    square_refresh_token_enc: Mapped[str | None] = mapped_column(Text)
+    square_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    square_connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # One of SQUARE_STATUSES. REVOKED/ERROR stop deposits exactly like an
+    # unready Stripe account (app/payments/settings.py::provider_account_ready).
+    square_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="NOT_CONNECTED", server_default="NOT_CONNECTED"
+    )
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="payment_settings")

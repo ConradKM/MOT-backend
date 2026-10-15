@@ -41,6 +41,9 @@ def provider_webhook(provider):
     payload = request.get_data()  # raw bytes - required for signature checks
     headers = {
         "Stripe-Signature": request.headers.get("Stripe-Signature", ""),
+        # Square: base64 HMAC-SHA256 over the registered notification URL +
+        # raw body - verified in app/payments/providers/square.py.
+        "x-square-hmacsha256-signature": request.headers.get("x-square-hmacsha256-signature", ""),
         # The fake provider (tests) reads this instead - see
         # app/payments/providers/fake.py.
         "Fake-Signature": request.headers.get("Fake-Signature", ""),

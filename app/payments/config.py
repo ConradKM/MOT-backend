@@ -14,7 +14,7 @@ from app.payments.providers import get_provider
 
 
 def payments_prerequisites() -> list[dict]:
-    """Deployment-level Stripe prerequisites, reported the same way
+    """Deployment-level Stripe and Square prerequisites, reported the same way
     ``embedded_signup_prerequisites`` reports WhatsApp's - so Platform Admin
     can show *why* Connect onboarding or a deposit will fail before anyone
     clicks the button, not just that it did.
@@ -58,6 +58,9 @@ def payments_prerequisites() -> list[dict]:
             ),
         ),
     ]
+    from app.payments.square_oauth import square_prerequisites
+
+    checks.extend(square_prerequisites())
     return [
         {"key": key, "label": label, "satisfied": ok, "how_to_fix": None if ok else fix}
         for key, label, ok, fix in checks
@@ -71,15 +74,15 @@ def is_payments_configured(provider_name: str, garage=None) -> bool:
     Deployment-level readiness (keys/webhook secret exist at all) is
     delegated to the adapter itself (:meth:`PaymentProvider.is_configured`)
     - the in-process fake provider (tests) is always "configured"; Stripe
-    checks its own platform keys; the PayPal/Square skeletons always report
-    "not configured" until someone actually implements them (see
-    app/payments/providers/paypal.py, .../square.py).
+    checks its own platform keys; Square its application settings; the
+    PayPal skeleton always reports "not configured".
 
-    For Stripe specifically, that alone is not enough: CoMaz never charges a
-    customer through its own platform account (see
-    docs/PAYMENTS_PROVIDERS.md) - a ``garage`` must also have its own
-    Connect account with charges actually enabled
-    (app/payments/settings.py::stripe_connect_ready). Omitting ``garage``
+    For a provider that charges per business, that alone is not enough:
+    CoMaz never charges through a platform account (see
+    docs/PAYMENTS_PROVIDERS.md) - a ``garage`` must also have its own,
+    usable account there (a chargeable Stripe Connect account, or a connected
+    Square merchant with a location) - see
+    app/payments/settings.py::provider_account_ready. Omitting ``garage``
     skips that check - used by call sites that aren't garage-specific (e.g.
     the webhook route, which must accept a delivery before it even knows
     which garage the payment belongs to)."""
@@ -89,8 +92,8 @@ def is_payments_configured(provider_name: str, garage=None) -> bool:
         return False
     if not provider.is_configured():
         return False
-    if provider_name == "stripe" and garage is not None:
-        from app.payments.settings import stripe_connect_ready
+    if garage is not None:
+        from app.payments.settings import provider_account_ready
 
-        return stripe_connect_ready(garage)
+        return provider_account_ready(garage, provider_name)
     return True

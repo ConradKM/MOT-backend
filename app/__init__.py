@@ -248,7 +248,7 @@ def create_app(config_class=Config):
     )
     from .dev.cli import dev_info_command, seed_dev_command
     from .garages.cli import onboard_garage_command, update_garage_details_command
-    from .payments.cli import backfill_payment_method_domains_command
+    from .payments.cli import backfill_payment_method_domains_command, refresh_square_tokens_command
     from .platform_admin.cli import (
         create_platform_admin_command,
         list_platform_admins_command,
@@ -266,6 +266,7 @@ def create_app(config_class=Config):
     app.cli.add_command(seed_dev_command)
     app.cli.add_command(dev_info_command)
     app.cli.add_command(backfill_payment_method_domains_command)
+    app.cli.add_command(refresh_square_tokens_command)
     app.cli.add_command(send_due_reminders_command)
     app.cli.add_command(sweep_walkin_queue_command)
 

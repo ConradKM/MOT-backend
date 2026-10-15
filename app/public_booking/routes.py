@@ -35,14 +35,17 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BOOKING_REQUEST_SOURCE_WEB, BookingRequest
 from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
 from app.payments.money import DepositConfigError, minor_to_decimal
-from app.payments.providers import get_provider
-from app.payments.providers.base import PaymentProviderError
+from app.payments.providers.base import PaymentProviderError, ProviderNotConfigured
 from app.payments.service import (
+    PaymentSubmissionError,
     PaymentUnavailableError,
     create_deposit_hold,
     expire_stale_payment_holds,
     payment_hold_deadline,
     reconcile_public_payment_recovery,
+    reconcile_submitted_payment,
+    resume_payment_session,
+    submit_client_payment_token,
 )
 from app.terms.service import require_web_acceptance, stamp_acceptance
 
@@ -68,6 +71,7 @@ from .schemas import (
     DepositAttemptRecoverySchema,
     DepositIntentCreatedSchema,
     DepositStatusSchema,
+    PaymentTokenSubmissionSchema,
     PublicBookingFlowSchema,
     PublicGarageDetailSchema,
 )
@@ -483,14 +487,14 @@ def _existing_deposit_attempt(garage, attempt_id, appt_type, add_ons, data):
             errors={"reason": "payment_attempt_mismatch"},
         )
     payment = booking_request.active_payment
-    if payment is None or payment.provider_payment_id is None:
+    if payment is None:
         return None
     try:
-        session = get_provider(
-            payment.provider, connected_account_id=payment.provider_account_id
-        ).get_payment_status(payment.provider_payment_id)
+        session = resume_payment_session(payment)
     except PaymentProviderError:
         abort(502, message="Could not resume the deposit payment. Please try again.")
+    if session is None:
+        return None
     return _deposit_response(booking_request, payment, session)
 
 
@@ -790,17 +794,83 @@ class DepositAttemptRecovery(MethodView):
         if (
             booking_request.status == "AWAITING_PAYMENT"
             and payment is not None
-            and payment.provider_payment_id is not None
             and payment.status in ("REQUIRES_PAYMENT", "PENDING")
         ):
             try:
-                session = get_provider(
-                    payment.provider, connected_account_id=payment.provider_account_id
-                ).get_payment_status(payment.provider_payment_id)
+                session = resume_payment_session(payment)
             except PaymentProviderError:
                 abort(502, message="Could not resume the deposit payment. Please try again.")
 
         return _recovery_response(booking_request, payment, session)
+
+
+@public_booking_blp.route("/<slug>/booking-requests/<reference>/payments/token", methods=["POST"])
+class DepositTokenSubmission(MethodView):
+    """Phase two of a two-phase provider's deposit (Square): the browser has
+    tokenised the card (SCA runs inside the SDK's tokenize()) and posts the
+    single-use ``source_id`` (plus an optional legacy ``verification_token``)
+    here; the backend
+    charges it on the business's own merchant account.
+
+    Returns PENDING, never "paid": the final state arrives by verified
+    webhook, and the browser keeps polling ``payment-status`` exactly as
+    for Stripe. Idempotent and safe against double-submit (see
+    app/payments/service.py::submit_client_payment_token). Provider-neutral
+    by construction: it branches on the adapter's
+    ``requires_client_token_submission`` capability, never a provider name.
+    The garage and payment come only from the slug + reference, never from
+    the body.
+    """
+
+    @limiter.limit(lambda: current_app.config["PUBLIC_BOOKING_RATELIMIT"])
+    @public_booking_blp.arguments(PaymentTokenSubmissionSchema)
+    @public_booking_blp.response(202, DepositStatusSchema)
+    def post(self, data, slug, reference):
+        garage = _get_garage_by_slug(slug)
+        booking_request = BookingRequest.query.filter_by(
+            garage_id=garage.id, booking_reference=reference
+        ).first()
+        if booking_request is None:
+            abort(404, message="Booking not found.")
+
+        expire_stale_payment_holds(garage_id=garage.id)
+        db.session.refresh(booking_request)
+
+        try:
+            payment = submit_client_payment_token(
+                booking_request,
+                source_id=data["source_id"],
+                verification_token=data.get("verification_token"),
+            )
+        except PaymentSubmissionError as exc:
+            db.session.rollback()
+            status = 422 if exc.reason == "not_token_based" else 409
+            abort(status, message=str(exc), errors={"reason": exc.reason})
+        except ProviderNotConfigured:
+            abort(
+                503,
+                message="Deposit payments aren't available for this business right now. "
+                "Please contact them directly to book.",
+            )
+        except PaymentProviderError as exc:
+            # A customer-safe message from the adapter (e.g. "Your card was
+            # declined.") - never a raw provider response.
+            abort(400, message=str(exc), errors={"reason": "payment_failed"})
+
+        db.session.refresh(booking_request)
+        base_price = booking_request.requested_price
+        deposit_amount = minor_to_decimal(payment.amount_minor)
+        return {
+            "booking_request_id": booking_request.id,
+            "booking_reference": booking_request.booking_reference,
+            "status": booking_request.status,
+            "payment_status": payment.status,
+            "currency": payment.currency,
+            "service_total": base_price,
+            "deposit_amount": deposit_amount,
+            "remaining_balance": (base_price - deposit_amount) if base_price is not None else None,
+            "hold_expires_at": booking_request.payment_hold_expires_at,
+        }
 
 
 @public_booking_blp.route("/<slug>/booking-requests/<reference>/payment-status")
@@ -821,6 +891,8 @@ class DepositStatus(MethodView):
             abort(404, message="Booking not found.")
 
         expire_stale_payment_holds(garage_id=garage.id)
+        db.session.refresh(booking_request)
+        reconcile_submitted_payment(booking_request)
         db.session.refresh(booking_request)
 
         payment = booking_request.active_payment
