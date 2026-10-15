@@ -320,6 +320,19 @@ class DepositIntentCreatedSchema(Schema):
     hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
 
 
+class PaymentTokenSubmissionSchema(Schema):
+    """A browser-tokenised, single-use payment source for a two-phase
+    provider (Square Web Payments SDK ``card.tokenize(verificationDetails)``,
+    which runs SCA itself). ``verification_token`` is only for clients still on
+    Square's deprecated ``verifyBuyer()``; the current SDK flow omits it.
+    Neither value is a card number or a reusable credential."""
+
+    source_id = fields.Str(required=True, validate=validate.Length(min=1, max=512))
+    verification_token = fields.Str(
+        load_default=None, allow_none=True, validate=validate.Length(max=2048)
+    )
+
+
 class DepositStatusSchema(Schema):
     """The status-poll response - the same shape as DepositIntentCreatedSchema
     minus the one-time client_secret/publishable_key/provider fields (a

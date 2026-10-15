@@ -43,6 +43,7 @@ from app.payments.money import (
 )
 from app.payments.providers import get_provider, get_provider_for_garage
 from app.payments.providers.base import (
+    WEBHOOK_ACCOUNT_REVOKED,
     WEBHOOK_ACCOUNT_UPDATED,
     WEBHOOK_PAYMENT_CANCELLED,
     WEBHOOK_PAYMENT_FAILED,
@@ -54,7 +55,7 @@ from app.payments.providers.base import (
 )
 from app.payments.settings import (
     payments_enabled_for_garage,
-    resolve_connected_account_id,
+    resolve_provider_account_id,
     resolve_provider_name,
 )
 
@@ -134,7 +135,7 @@ def create_deposit_hold(
         provider=provider_name,
         # Snapshotted now, not re-resolved later - see BookingPayment.
         # provider_account_id's own docstring.
-        provider_account_id=resolve_connected_account_id(garage, provider_name),
+        provider_account_id=resolve_provider_account_id(garage, provider_name),
         payment_type=PAYMENT_TYPE_DEPOSIT,
         currency=appointment_type.deposit_currency or "GBP",
         amount_minor=amount_minor,
@@ -179,6 +180,144 @@ def create_deposit_hold(
     )
 
     return payment, session
+
+
+class PaymentSubmissionError(RuntimeError):
+    """A client-submitted payment token couldn't be charged for a reason the
+    customer can act on (no payable attempt, hold expired). ``reason`` is a
+    stable code; routes.py maps it to a 4xx."""
+
+    def __init__(self, message: str, *, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _deposit_idempotency_key(payment: BookingPayment) -> str:
+    return f"deposit-{payment.id}"
+
+
+def resume_payment_session(payment: BookingPayment) -> PaymentSessionResult | None:
+    """A client-safe session for an existing, still-payable attempt (a retried
+    deposit-intent or a recovered checkout) - ``None`` when there's nothing a
+    browser could resume.
+
+    For a two-phase provider whose attempt hasn't been charged yet there is no
+    provider payment to fetch; its checkout data is a pure function of the
+    attempt, so it's prepared again with the attempt's own idempotency key."""
+    provider = get_provider(payment.provider, connected_account_id=payment.provider_account_id)
+    if payment.provider_payment_id:
+        return provider.get_payment_status(payment.provider_payment_id)
+    if (
+        provider.capabilities.requires_client_token_submission
+        and payment.status == "REQUIRES_PAYMENT"
+    ):
+        return provider.create_payment(
+            amount_minor=payment.amount_minor,
+            currency=payment.currency,
+            idempotency_key=_deposit_idempotency_key(payment),
+            metadata={"booking_request_id": str(payment.booking_request_id)},
+        )
+    return None
+
+
+def submit_client_payment_token(
+    booking_request: BookingRequest, *, source_id: str, verification_token: str | None
+) -> BookingPayment:
+    """Phase two of a two-phase provider's deposit (see
+    ``Capabilities.requires_client_token_submission``): charge the single-use
+    payment source the browser produced for ``booking_request``'s active
+    attempt.
+
+    Idempotent and double-submit safe: the request and its payments are
+    locked for the whole call, and an attempt that already reached the
+    provider is returned as-is (never charged again). The provider call
+    itself uses the attempt's own idempotency key, so even a retried network
+    call can't double-charge. A declined attempt is kept FAILED for history
+    and the next submission gets a fresh attempt row (and therefore a fresh
+    idempotency key - reusing the failed one would just replay the decline).
+
+    Returns the attempt; its status is normally PENDING. Success is still
+    only ever recorded from the verified webhook. Commits.
+    """
+    locked = BookingRequest.query.filter_by(id=booking_request.id).with_for_update().one()
+    payment = _locked_active_payment(locked)
+    if payment is None:
+        raise PaymentSubmissionError("No payment attempt to complete.", reason="no_payment")
+
+    provider = get_provider(payment.provider, connected_account_id=payment.provider_account_id)
+    if not provider.capabilities.requires_client_token_submission:
+        raise PaymentSubmissionError(
+            "This payment is completed in the browser, not by token submission.",
+            reason="not_token_based",
+        )
+
+    if payment.provider_payment_id and payment.status != "FAILED":
+        # Already submitted (a double-click, or a retry after a lost response).
+        return payment
+    if locked.status != "AWAITING_PAYMENT":
+        raise PaymentSubmissionError(
+            "This booking is no longer waiting for payment.", reason="not_awaiting_payment"
+        )
+    if locked.payment_hold_expires_at is not None and locked.payment_hold_expires_at < datetime.now(
+        UTC
+    ):
+        raise PaymentSubmissionError(
+            "Your reserved slot expired before payment. Please start again.",
+            reason="hold_expired",
+        )
+    if payment.status in ("FAILED", "CANCELLED"):
+        payment = BookingPayment(
+            id=uuid.uuid4(),
+            garage_id=payment.garage_id,
+            booking_request_id=payment.booking_request_id,
+            provider=payment.provider,
+            provider_account_id=payment.provider_account_id,
+            payment_type=payment.payment_type,
+            currency=payment.currency,
+            amount_minor=payment.amount_minor,
+            status="REQUIRES_PAYMENT",
+        )
+        db.session.add(payment)
+        db.session.flush()
+
+    try:
+        session = provider.charge_with_source(
+            amount_minor=payment.amount_minor,
+            currency=payment.currency,
+            source_id=source_id,
+            verification_token=verification_token,
+            idempotency_key=_deposit_idempotency_key(payment),
+            reference=locked.booking_reference,
+        )
+    except PaymentProviderError as exc:
+        payment.status = "FAILED"
+        payment.failure_reason = str(exc)[:500]
+        payment.failed_at = datetime.now(UTC)
+        record_payment_event(
+            garage_id=payment.garage_id,
+            booking_request_id=locked.id,
+            payment_id=payment.id,
+            action="payment.deposit.failed",
+            summary=f"Deposit payment failed: {payment.failure_reason}",
+        )
+        db.session.commit()
+        raise
+
+    payment.provider_payment_id = session.provider_payment_id
+    # Never SUCCEEDED from here, even if the provider's synchronous response
+    # already says so: the verified webhook is the source of truth, exactly
+    # as for a browser-confirmed provider. PENDING until it lands.
+    payment.status = "FAILED" if session.status == "FAILED" else "PENDING"
+    record_payment_event(
+        garage_id=payment.garage_id,
+        booking_request_id=locked.id,
+        payment_id=payment.id,
+        action="payment.deposit.submitted",
+        summary=f"Card details submitted to {payment.provider}; awaiting confirmation.",
+        details={"provider_payment_id": session.provider_payment_id},
+    )
+    db.session.commit()
+    return payment
 
 
 #: Booking-request statuses that are short-lived, expiring holds on capacity.
@@ -363,6 +502,70 @@ def reconcile_public_payment_recovery(booking_request: BookingRequest) -> Bookin
     return cast(BookingRequest, locked_request)
 
 
+def reconcile_submitted_payment(booking_request: BookingRequest) -> None:
+    """Re-check a submitted-but-unconfirmed attempt of a two-phase provider
+    against the provider's live (server-to-server) status - called from the
+    public status poll.
+
+    Needed because for such providers the *server* creates the provider
+    payment: its confirming webhook can arrive before this backend has
+    committed the provider payment id, find no matching row, and be recorded
+    as processed. Without this the customer would watch "confirming" until
+    the hold sweep's own reconcile. Browser-confirmed providers (Stripe) are
+    untouched. Never raises for a provider error - polling just continues."""
+    payment = booking_request.active_payment
+    if (
+        payment is None
+        or payment.status != "PENDING"
+        or not payment.provider_payment_id
+        or booking_request.status != "AWAITING_PAYMENT"
+    ):
+        return
+    provider = get_provider(payment.provider, connected_account_id=payment.provider_account_id)
+    if not provider.capabilities.requires_client_token_submission:
+        return
+
+    locked_request = BookingRequest.query.filter_by(id=booking_request.id).with_for_update().one()
+    locked_payment = _locked_active_payment(locked_request)
+    if (
+        locked_payment is None
+        or locked_payment.id != payment.id
+        or locked_payment.status != "PENDING"
+        or not locked_payment.provider_payment_id
+        or locked_request.status != "AWAITING_PAYMENT"
+    ):
+        db.session.commit()
+        return
+    try:
+        live = provider.get_payment_status(locked_payment.provider_payment_id)
+    except PaymentProviderError:
+        db.session.commit()
+        return
+
+    notifications: list[BookingRequest] = []
+    if live.status == "SUCCEEDED":
+        _reconcile_if_already_succeeded(
+            locked_request, locked_payment, datetime.now(UTC), notifications
+        )
+    elif live.status in ("FAILED", "CANCELLED"):
+        locked_payment.status = live.status
+        if live.status == "FAILED":
+            locked_payment.failed_at = datetime.now(UTC)
+            locked_payment.failure_reason = "Card payment failed."
+        else:
+            locked_payment.cancelled_at = datetime.now(UTC)
+        record_payment_event(
+            garage_id=locked_payment.garage_id,
+            booking_request_id=locked_request.id,
+            payment_id=locked_payment.id,
+            action=f"payment.deposit.{live.status.lower()}",
+            summary=f"Deposit payment {live.status.lower()} (reconciled from provider status).",
+        )
+    db.session.commit()
+    for created in notifications:
+        emit_event(BOOKING_REQUEST_CREATED, garage=created.garage, booking_request=created)
+
+
 def refund_deposit(
     booking_request: BookingRequest, *, reason: str, initiated_by: str = "staff"
 ) -> BookingPayment | None:
@@ -494,7 +697,7 @@ def process_webhook(
         return
 
     created_notifications: list[BookingRequest] = []
-    _dispatch(event, created_notifications)
+    _dispatch(event, created_notifications, provider_name=provider.name)
     record.processed_at = datetime.now(UTC)
     db.session.commit()
     for booking_request in created_notifications:
@@ -503,7 +706,12 @@ def process_webhook(
         )
 
 
-def _dispatch(event: ProviderWebhookEvent, created_notifications: list[BookingRequest]) -> None:
+def _dispatch(
+    event: ProviderWebhookEvent,
+    created_notifications: list[BookingRequest],
+    *,
+    provider_name: str | None = None,
+) -> None:
     """Dispatches purely on the adapter-normalised ``kind`` - never a
     provider-native event type/name. Every adapter maps its own vocabulary
     to these constants in its own ``verify_webhook`` (see
@@ -518,6 +726,10 @@ def _dispatch(event: ProviderWebhookEvent, created_notifications: list[BookingRe
         _handle_refund_updated(event)
     elif event.kind == WEBHOOK_ACCOUNT_UPDATED:
         _handle_account_updated(event)
+    elif event.kind == WEBHOOK_ACCOUNT_REVOKED and provider_name is not None:
+        from app.payments.settings import mark_provider_account_revoked
+
+        mark_provider_account_revoked(provider_name, event.provider_account_id)
     # Anything else (WEBHOOK_UNHANDLED - e.g. Stripe's payment_intent.created/
     # processing) is recorded in PaymentWebhookEvent for audit but needs no
     # state change.

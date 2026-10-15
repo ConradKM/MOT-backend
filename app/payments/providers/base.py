@@ -58,6 +58,10 @@ WEBHOOK_REFUND_UPDATED = "refund.updated"
 # charges_enabled/payouts_enabled flipped, a requirement was added) - not
 # about any one payment. See app/payments/connect.py::sync_account_from_webhook.
 WEBHOOK_ACCOUNT_UPDATED = "account.updated"
+# The merchant revoked CoMaz's access to its provider account (Square's
+# oauth.authorization.revoked). ``provider_account_id`` names the account; see
+# app/payments/accounts.py::mark_account_revoked.
+WEBHOOK_ACCOUNT_REVOKED = "account.revoked"
 # Recorded (for audit/idempotency) but needs no state transition - e.g.
 # Stripe's payment_intent.created/processing.
 WEBHOOK_UNHANDLED = "unhandled"
@@ -85,6 +89,14 @@ class Capabilities:
     # is not configured (PayPal/Square skeletons) must always report an
     # empty tuple, never a wallet it cannot actually process.
     supported_wallets: tuple[str, ...] = ()
+    # Two-phase charge: ``create_payment`` only prepares a client-side
+    # checkout (it charges nothing and returns no provider payment id); the
+    # browser tokenises the card and submits a single-use source token, which
+    # the backend then charges via :meth:`PaymentProvider.charge_with_source`
+    # (Square's Web Payments SDK + CreatePayment). Stripe-style providers,
+    # whose browser confirms a server-created intent itself, leave this False.
+    # Domain code branches on this flag, never on a provider name.
+    requires_client_token_submission: bool = False
 
     def require(self, capability: str) -> None:
         if not getattr(self, capability, False):
@@ -108,7 +120,10 @@ class PaymentSessionResult:
     contain anything that isn't already safe to show a customer.
     """
 
-    provider_payment_id: str
+    # None only for a two-phase provider's not-yet-charged checkout (see
+    # Capabilities.requires_client_token_submission) - there is genuinely no
+    # provider payment yet, and nothing is faked in its place.
+    provider_payment_id: str | None
     status: str
     checkout_mode: str
     provider_data: dict = field(default_factory=dict)
@@ -207,6 +222,29 @@ class PaymentProvider(ABC):
         ``idempotency_key`` must make a retried call with the same key
         return the original session rather than creating a duplicate charge
         (see app/payments/service.py::create_deposit_hold)."""
+
+    def charge_with_source(
+        self,
+        *,
+        amount_minor: int,
+        currency: str,
+        source_id: str,
+        verification_token: str | None,
+        idempotency_key: str,
+        reference: str | None = None,
+    ) -> PaymentSessionResult:
+        """Charge a browser-tokenised, single-use payment source - only for a
+        provider with ``capabilities.requires_client_token_submission``.
+
+        Returns the provider's payment id and its normalised status (usually
+        PENDING or SUCCEEDED); the authoritative final state still arrives by
+        webhook. ``idempotency_key`` must make a resubmission return the
+        original charge, never a second one. ``reference`` is a short,
+        non-sensitive label (the booking reference) shown in the merchant's
+        own dashboard."""
+        raise UnsupportedCapability(
+            f"The {self.name} payment provider does not take client-submitted payment tokens."
+        )
 
     @abstractmethod
     def get_payment_status(self, provider_payment_id: str) -> PaymentSessionResult:

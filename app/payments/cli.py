@@ -45,3 +45,25 @@ def backfill_payment_method_domains_command():
         )
 
     click.echo(f"Done - checked {len(settings_rows)} garage(s).")
+
+
+@click.command("refresh-square-tokens")
+@with_appcontext
+def refresh_square_tokens_command():
+    """Refresh every connected Square merchant's access token that is near
+    expiry. Optional: tokens are already refreshed lazily whenever they're
+    used (app/payments/square_oauth.py::access_token_for_merchant) - this only
+    catches businesses that haven't taken a deposit in weeks. Safe to run any
+    number of times, by hand or from an external cron:
+
+        flask --app app:create_app refresh-square-tokens
+    """
+    from app.payments.square_oauth import refresh_stragglers
+
+    outcomes = refresh_stragglers()
+    if not outcomes:
+        click.echo("No Square tokens need refreshing.")
+        return
+    for garage_id, outcome in outcomes:
+        click.echo(f"  {garage_id}: {outcome}")
+    click.echo(f"Done - checked {len(outcomes)} business(es).")

@@ -6,8 +6,9 @@ never knows or cares which one it's talking to. This document explains that
 architecture and exactly what's involved in adding a new provider for real.
 
 For Stripe Connect activation and payment-method-domain registration, see
-[STRIPE_CONNECT_SETUP.md](STRIPE_CONNECT_SETUP.md) instead - this document is
-about the architecture, not activation steps.
+[STRIPE_CONNECT_SETUP.md](STRIPE_CONNECT_SETUP.md); for Square, see
+[SQUARE_SETUP.md](SQUARE_SETUP.md). This document is about the architecture,
+not activation steps.
 
 ## Current state
 
@@ -15,15 +16,16 @@ about the architecture, not activation steps.
 |---|---|
 | Stripe | Implemented (`app/payments/providers/stripe_provider.py`) |
 | PayPal | Architecture skeleton only (`app/payments/providers/paypal.py`) - not connected, never fakes success |
-| Square | Architecture skeleton only (`app/payments/providers/square.py`) - not connected, never fakes success |
+| Square | Implemented (`app/payments/providers/square.py`) - per-business OAuth (`app/payments/square_oauth.py`), card payments via the Web Payments SDK, two-phase charge (see below). Apple Pay / Google Pay via Square not in v1 |
 | Fake | In-process test double (`app/payments/providers/fake.py`) - what CI/dev run against by default |
 
 ## Wallets (Apple Pay / Google Pay)
 
 `Capabilities.supported_wallets` (a tuple of wallet names, e.g.
 `("apple_pay", "google_pay")`) is purely descriptive - it never itself
-enables a wallet, and PayPal/Square's skeletons correctly report `()` since
-they're unconfigured. Stripe's Express Checkout Element and Payment Element auto-detect and render a
+enables a wallet. PayPal's skeleton reports `()`, and so does Square, because
+v1 is cards only: Square wallets need their own domain verification in the
+Square Developer Console and are a follow-up. Stripe's Express Checkout Element and Payment Element auto-detect and render a
 wallet button when the browser/device supports it and the account is set
 up for it; the backend's job is only to tell the frontend which wallets are
 plausible via `available_wallets` inside `provider_data` (see
@@ -124,6 +126,8 @@ class Capabilities:
     supports_webhooks: bool = False
     supports_idempotency: bool = False
     supports_saved_payment_methods: bool = False
+    supported_wallets: tuple[str, ...] = ()
+    requires_client_token_submission: bool = False
 ```
 
 Purely descriptive - nothing enforces these automatically. Call
@@ -131,6 +135,46 @@ Purely descriptive - nothing enforces these automatically. Call
 on a capability a provider might not have; it raises `UnsupportedCapability`
 (a subclass of `PaymentProviderError`) with a clear message instead of the
 booking flow silently doing the wrong thing.
+
+### Two-phase providers (`requires_client_token_submission`)
+
+Stripe creates a PaymentIntent up front and the browser confirms it with its
+`client_secret`. **Square has no such object.** The browser tokenises the card
+with the Web Payments SDK into a single-use `source_id`, and the *server*
+charges it with CreatePayment. An adapter like that sets
+`Capabilities.requires_client_token_submission=True` and implements the
+optional `charge_with_source(...)`:
+
+1. `POST /api/public/<slug>/booking-requests/deposit-intent` behaves exactly
+   as before (booking request, capacity hold, local `BookingPayment` in
+   `REQUIRES_PAYMENT`). `create_payment()` charges nothing and returns
+   `provider_payment_id=None` plus client-safe `provider_data` (Square:
+   `application_id`, `location_id`, `environment`, `amount_minor`, `amount`,
+   `currency`).
+2. The browser tokenises with `card.tokenize(verificationDetails)`, which
+   runs Strong Customer Authentication (3DS) as part of tokenising. That is
+   Square's current replacement for the deprecated `verifyBuyer()` and its
+   separate verification token. It then posts `{source_id}` (plus an optional
+   legacy `verification_token`) to
+   `POST /api/public/<slug>/booking-requests/<reference>/payments/token`.
+   `app/payments/service.py::submit_client_payment_token` locks the request
+   and its payments, calls `charge_with_source` with the attempt's own
+   `deposit-<payment uuid>` idempotency key (44 characters, within Square's
+   45-character limit), and returns `PENDING`. A double-submit returns the
+   same attempt without charging again. A declined attempt stays `FAILED`
+   and the next submission gets a fresh attempt row (a new idempotency key),
+   so the customer can retry while the hold lasts.
+3. The verified webhook remains the only thing that marks the deposit
+   `SUCCEEDED`. Because the server created the provider payment, its webhook
+   can arrive before the payment id is committed. The public status poll
+   therefore re-checks a submitted attempt's live status
+   (`reconcile_submitted_payment`), for two-phase providers only.
+
+Domain code branches on the capability, never on a provider name. Resume and
+recovery of a not-yet-charged attempt rebuild its checkout data from the
+attempt itself (`resume_payment_session`). A payment that completes after its
+hold expired goes through the same belated-success path as any provider
+(`_reinstate_or_flag_expired_booking`).
 
 ### Checkout modes
 
@@ -175,7 +219,10 @@ authorise a charge on our backend's behalf). The frontend branches on
 
 `GaragePaymentSettings` (`app/models/payments/garage_payment_settings.py`) -
 one optional row per garage. Stripe rows additionally store the non-secret
-connected-account ID and Stripe-synchronised onboarding/readiness fields:
+connected-account ID and Stripe-synchronised onboarding/readiness fields.
+Square rows store the merchant id, chosen location, connection status and the
+merchant's OAuth tokens, **Fernet-encrypted** with `PAYMENTS_SECRET_KEY`
+(`app/payments/secrets.py`):
 
 | Column | Meaning |
 |---|---|
@@ -188,26 +235,36 @@ connected-account ID and Stripe-synchronised onboarding/readiness fields:
 No row = the deployment's `PAYMENTS_PROVIDER` default, exactly as every
 garage behaved before this table existed - fully backwards compatible.
 
-There is deliberately no Platform Admin UI for this yet (see Part 19/23 of
-the deposit spec this was built against) - set it directly via the ORM/a
-migration/data fix until that's built. Building that UI is a natural,
-separate follow-up once a second provider is actually implemented.
+The business owner picks the provider in **Settings -> Payments**
+(`PUT /api/payments/provider`, owner-only; choices are
+`OWNER_SELECTABLE_PROVIDERS` validated against the registered adapters).
+Switching is refused with a 409 while any deposit is mid-checkout. Each
+`BookingPayment` snapshots its own `provider` and `provider_account_id`
+(Stripe account / Square merchant), and refunds and cancels always use those,
+never the garage's current choice.
 
-### Credentials: today vs. later
+Per-business account readiness is provider-neutral:
+`app/payments/settings.py::provider_account_ready(garage, provider)` (Stripe:
+charges enabled; Square: connected, location chosen, usable token), called by
+`is_payments_configured`. An unready provider gives the same graceful 503
+"not available online right now" at deposit-intent.
+
+### Credentials
 
 Stripe is configured per deployment with CoMaz's platform keys, while each
-garage's Direct Charges run in its own Stripe Connect Express account. The
-platform key creates/manages those accounts; no garage secret is stored by
-CoMaz.
+garage's Direct Charges run in its own Stripe Connect account. The platform
+key creates/manages those accounts; no garage secret is stored by CoMaz.
 
-`GaragePaymentSettings.merchant_account_reference` exists so a later "Model
-B" (each business has its own merchant account/credentials) doesn't need a
-new column - just a real secret-backed lookup behind that reference (a
-secrets manager, or Stripe Connect's own account-id model). **Nothing
-implements that today** - this is intentionally just the seam for it.
-Business users must never see or edit a raw provider secret; if that
-capability is built, it belongs in Platform Admin, reading from a proper
-secret store, never a plaintext column on a normal business record.
+Square is configured per deployment with CoMaz's **application** credentials
+(`SQUARE_APPLICATION_ID`/`_SECRET`). Each garage's own merchant access and
+refresh tokens come from OAuth and are stored only encrypted
+(`square_*_token_enc`, key `PAYMENTS_SECRET_KEY`, deliberately separate from
+`COMMS_SECRET_KEY`). They are refreshed lazily at point of use and never
+returned by an API, logged, audited or sent to the browser. The browser only
+ever receives the application id, location id and environment.
+
+`GaragePaymentSettings.merchant_account_reference` remains an unused, opaque
+seam. Business users never see or edit a raw provider secret.
 
 ## Adding a new provider for real
 
@@ -239,9 +296,13 @@ secret store, never a plaintext column on a normal business record.
    it (contract/mapping tests), but budget for one deliberately
    manually-verified pass against the provider's real sandbox before calling
    it done.
-9. Update `is_payments_configured`'s behaviour is automatic once
-   `is_configured()` is implemented honestly - no separate change needed
-   there.
+9. Deployment readiness in `is_payments_configured` is automatic once
+   `is_configured()` is implemented honestly. If the provider charges per
+   business, add its readiness check to `_ACCOUNT_READINESS` and its account
+   id to `resolve_provider_account_id` in `app/payments/settings.py`.
+10. If the browser tokenises and the server charges (like Square), set
+    `requires_client_token_submission` and implement `charge_with_source` -
+    see "Two-phase providers" above. No new route is needed.
 
 ## Frontend
 
@@ -252,10 +313,13 @@ retry/error state. It renders one child, `PaymentCheckout`
 `provider` + `checkout_mode` from the deposit-intent response and renders
 the matching component:
 
-- `src/components/customer/payments/StripeCheckout.tsx` - Stripe Elements,
-  today's only real implementation.
-- A future `PayPalCheckout.tsx` / `SquareCheckout.tsx` would live alongside
-  it, registered in `PaymentCheckout.tsx`.
+- `src/components/customer/payments/StripeCheckout.tsx` - Stripe Elements.
+- `src/components/customer/payments/SquareCheckout.tsx` - Square Web Payments
+  SDK card form (script loaded only when a Square deposit is due), buyer
+  verification, token submission, then polling for the webhook-confirmed
+  outcome.
+- A future `PayPalCheckout.tsx` would live alongside them, registered in
+  `PaymentCheckout.tsx`.
 
 A provider/checkout-mode combination with no matching component renders a
 clear "this business's payment method isn't available right now" message -

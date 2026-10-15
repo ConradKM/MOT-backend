@@ -422,10 +422,34 @@ class Config:
     PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID", "")
     PAYPAL_CLIENT_SECRET = os.getenv("PAYPAL_CLIENT_SECRET", "")
     PAYPAL_WEBHOOK_ID = os.getenv("PAYPAL_WEBHOOK_ID", "")
-    # Reserved for app/payments/providers/square.py - see the PayPal note above.
-    SQUARE_ACCESS_TOKEN = os.getenv("SQUARE_ACCESS_TOKEN", "")
+    # Square (app/payments/providers/square.py, app/payments/square_oauth.py).
+    # Application-level settings only: CoMaz registers ONE Square application
+    # and each business authorises it via OAuth, so each merchant's own access
+    # token is stored per garage (encrypted - see PAYMENTS_SECRET_KEY below),
+    # never here. A single platform-wide access token would be one merchant's
+    # credential, which is wrong for a multi-tenant deployment.
+    # See docs/SQUARE_SETUP.md.
     SQUARE_APPLICATION_ID = os.getenv("SQUARE_APPLICATION_ID", "")
+    SQUARE_APPLICATION_SECRET = os.getenv("SQUARE_APPLICATION_SECRET", "")
+    # "sandbox" | "production" - selects both the API base URL and OAuth host.
+    SQUARE_ENVIRONMENT = os.getenv("SQUARE_ENVIRONMENT", "sandbox")
     SQUARE_WEBHOOK_SIGNATURE_KEY = os.getenv("SQUARE_WEBHOOK_SIGNATURE_KEY", "")
+    # The exact notification URL registered in the Square Developer Console -
+    # Square's HMAC signature is computed over this string plus the raw body,
+    # so it must match character for character (scheme, host, path).
+    SQUARE_WEBHOOK_NOTIFICATION_URL = os.getenv("SQUARE_WEBHOOK_NOTIFICATION_URL", "")
+    # The backend OAuth callback registered as the application's Redirect URL
+    # (…/api/payments/square/oauth/callback).
+    SQUARE_OAUTH_REDIRECT_URL = os.getenv("SQUARE_OAUTH_REDIRECT_URL", "")
+    # Pinned so a Square-side default-version bump never silently changes
+    # response shapes under us. Bump deliberately, after reading the release
+    # notes.
+    SQUARE_API_VERSION = os.getenv("SQUARE_API_VERSION", "2026-08-19")
+    # Fernet key for per-merchant payment-provider tokens (Square OAuth access/
+    # refresh tokens) at rest - deliberately separate from COMMS_SECRET_KEY so
+    # a leak of one class of secret never exposes the other. Unset = Square
+    # connection refuses to store anything (never plaintext).
+    PAYMENTS_SECRET_KEY = os.getenv("PAYMENTS_SECRET_KEY", "")
     # How long a deposit payment hold reserves the slot (AWAITING_PAYMENT
     # booking-request status - app/payments/service.py) before it's swept back
     # to EXPIRED and the provider session is cancelled. Long enough for a
@@ -501,4 +525,15 @@ class TestConfig(Config):
     # CI. A short hold so expiry tests don't need to fake-sleep long.
     PAYMENTS_PROVIDER = "fake"
     PAYMENT_HOLD_MINUTES = 15
+    # Same readable-phrase derivation as COMMS_SECRET_KEY above; a distinct
+    # value so tests prove the two secret classes use separate keys.
+    PAYMENTS_SECRET_KEY = base64.urlsafe_b64encode(b"comaz-payments-test-key-not-real").decode()
+    # Square stays unconfigured in tests unless a test opts in (see
+    # tests/square_helpers.py) - no real application or network.
+    SQUARE_APPLICATION_ID = ""
+    SQUARE_APPLICATION_SECRET = ""
+    SQUARE_ENVIRONMENT = "sandbox"
+    SQUARE_WEBHOOK_SIGNATURE_KEY = ""
+    SQUARE_WEBHOOK_NOTIFICATION_URL = ""
+    SQUARE_OAUTH_REDIRECT_URL = ""
     TERMS_ACCEPTANCE_HOLD_MINUTES = 60
