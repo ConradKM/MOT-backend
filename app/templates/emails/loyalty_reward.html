@@ -2,7 +2,7 @@
 {% block content %}
 <p style="margin:0 0 16px; font-size:16px; color:#111827;">Hi {{ first_name or "there" }},</p>
 <p style="margin:0 0 16px; font-size:15px; color:#374151; line-height:1.5;">
-  Thank you for coming back to <strong>{{ business_name }}</strong>{% if visit_count %} - that's {{ visit_count }} visits{% endif %}.
+  Thank you for coming back to <strong>{{ business_name }}</strong>{% if visit_count and visit_count > 1 %} - that's {{ visit_count }} visits{% endif %}.
   As a thank-you, here is <strong>{{ discount_label }}</strong> your next booking.
 </p>
 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">

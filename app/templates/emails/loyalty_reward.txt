@@ -1,6 +1,6 @@
 Hi {{ first_name or "there" }},
 
-Thank you for coming back to {{ business_name }}{% if visit_count %} - that's {{ visit_count }} visits{% endif %}. As a thank-you, here is {{ discount_label }} your next booking.
+Thank you for coming back to {{ business_name }}{% if visit_count and visit_count > 1 %} - that's {{ visit_count }} visits{% endif %}. As a thank-you, here is {{ discount_label }} your next booking.
 
 Your code: {{ code }}
 
