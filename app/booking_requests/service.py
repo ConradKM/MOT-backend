@@ -26,6 +26,13 @@ from app.appointments.checklists.service import snapshot_checklist_for_appointme
 from app.communications.events import BOOKING_REQUEST_APPROVED, emit_event
 from app.extensions import db
 from app.garages.timezones import local_day_for, local_slot_as_utc, timezone_for
+from app.loyalty.service import (
+    attach_redemption_to_appointment,
+    copy_snapshot,
+    release_for_booking_requests,
+    reprice_snapshot,
+    sync_booking_request_redemption,
+)
 from app.models.appointments.applied_add_on import AppointmentAddOn
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
@@ -181,6 +188,7 @@ def approve_booking_request(
 
     if booking_request.status == "PENDING" and is_request_stale(booking_request):
         booking_request.status = "EXPIRED"
+        sync_booking_request_redemption(booking_request)
         db.session.commit()
         abort(
             409,
@@ -264,6 +272,15 @@ def approve_booking_request(
             booking_request.requested_appointment_type_name or appointment_type.name
         ),
     )
+    if booking_request.discount_code_id is not None:
+        # Carry the discount the customer was given. Approved as requested,
+        # the price is already discounted; approved as a different service,
+        # the frozen discount is re-applied to that service's price.
+        copy_snapshot(booking_request, appointment)
+        if dropped_add_ons or not keep_add_ons:
+            appointment.price_at_booking = reprice_snapshot(
+                appointment, appointment_type.base_price
+            )
     if keep_add_ons:
         # Copy the request's snapshot verbatim - not re-read from the
         # catalogue - so approval charges what the customer was shown.
@@ -283,6 +300,7 @@ def approve_booking_request(
     snapshot_checklist_for_appointment(appointment)
 
     booking_request.status = "APPROVED"
+    attach_redemption_to_appointment(booking_request, appointment)
     booking_request.appointment_type_id = appointment_type.id
     booking_request.customer_id = customer.id
     booking_request.vehicle_id = None if vehicle is None else vehicle.id
@@ -491,6 +509,13 @@ def expire_stale_booking_requests(garage_id=None, now: datetime | None = None, s
         )
         .update({"status": "EXPIRED"}, synchronize_session=False)
     )
+    if expired:
+        release_for_booking_requests(
+            row_id
+            for (row_id,) in session.query(BookingRequest.id).filter(
+                BookingRequest.id.in_(stale_ids), BookingRequest.status == "EXPIRED"
+            )
+        )
     session.commit()
     return int(expired)
 

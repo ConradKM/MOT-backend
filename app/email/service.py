@@ -41,6 +41,7 @@ from app.communications.events import (
     APPOINTMENT_RESCHEDULED,
     BOOKING_REQUEST_CREATED,
     BOOKING_REQUEST_REJECTED,
+    LOYALTY_REWARD_ISSUED,
 )
 from app.email import send_email
 from app.extensions import db
@@ -82,7 +83,12 @@ def _owner_reply_to(garage: Garage) -> str | None:
 
 
 def _already_sent(
-    *, trigger_event: str, booking_request_id=None, appointment_id=None, customer_id=None
+    *,
+    trigger_event: str,
+    booking_request_id=None,
+    appointment_id=None,
+    customer_id=None,
+    discount_code_id=None,
 ) -> bool:
     query = CommunicationLog.query.filter(
         CommunicationLog.channel == CHANNEL_EMAIL,
@@ -125,23 +131,31 @@ def _send(
     customer=None,
     appointment=None,
     booking_request=None,
+    discount_code=None,
+    force: bool = False,
 ) -> CommunicationLog | None:
     """Render ``template`` (+ its .txt companion), send it, and log the
     result. Returns None only when there's nowhere to send it (no email on
     file for this customer) or it was already sent - every other outcome
-    (sent, failed) is a logged CommunicationLog row."""
+    (sent, failed) is a logged CommunicationLog row.
+
+    ``force`` skips the "already sent?" guard - only for a deliberate,
+    staff-initiated resend (see :func:`send_loyalty_reward_email`); the new
+    attempt is still logged like any other."""
     if not to:
         return None
 
     appointment_id = appointment.id if appointment is not None else None
     customer_id = customer.id if customer is not None else None
     booking_request_id = booking_request.id if booking_request is not None else None
+    discount_code_id = discount_code.id if discount_code is not None else None
 
-    if _already_sent(
+    if not force and _already_sent(
         trigger_event=trigger_event,
         booking_request_id=booking_request_id,
         appointment_id=appointment_id,
         customer_id=customer_id,
+        discount_code_id=discount_code_id,
     ):
         logger.info(
             "[email] %s already sent for %s - skipping duplicate send.",
@@ -172,6 +186,7 @@ def _send(
         "customer_id": customer_id,
         "appointment_id": appointment_id,
         "booking_request_id": booking_request_id,
+        "discount_code_id": discount_code_id,
     }
 
     try:
@@ -419,3 +434,80 @@ def send_appointment_completed_email(appointment) -> CommunicationLog | None:
         customer=customer,
         appointment=appointment,
     )
+
+
+def _discount_label(discount_type: str, discount_value) -> str:
+    if discount_type == "PERCENTAGE":
+        return f"{discount_value.normalize():f}% off"
+    return f"£{discount_value:.2f} off"
+
+
+def send_loyalty_reward_email(discount_code, *, force: bool = False) -> CommunicationLog | None:
+    """Tell a customer they've earned a loyalty reward, with the code.
+
+    Promotional, unlike everything else in this module: it carries an
+    unsubscribe link (app/loyalty/unsubscribe.py) and is never sent to a
+    customer who has opted out of marketing email. The code exists either
+    way - ``discount_code.email_status`` records why no email went, so staff
+    can pass the code on by hand from the Discounts list.
+
+    ``force`` is the owner's explicit "Resend email" action, which
+    deliberately bypasses the already-sent guard.
+    """
+    from datetime import UTC, datetime
+
+    from app.loyalty.unsubscribe import unsubscribe_url
+    from app.models.loyalty.discount_code import (
+        EMAIL_STATUS_FAILED,
+        EMAIL_STATUS_NO_EMAIL,
+        EMAIL_STATUS_OPTED_OUT,
+        EMAIL_STATUS_SENT,
+    )
+
+    customer = discount_code.customer
+    garage = db.session.get(Garage, discount_code.garage_id)
+    if customer is None or garage is None:
+        return None
+    if customer.marketing_email_opt_out:
+        discount_code.email_status = EMAIL_STATUS_OPTED_OUT
+        db.session.commit()
+        return None
+    if not customer.email:
+        discount_code.email_status = EMAIL_STATUS_NO_EMAIL
+        db.session.commit()
+        return None
+
+    base = (current_app.config.get("APP_BASE_URL") or "").rstrip("/")
+    log = _send(
+        garage=garage,
+        to=customer.email,
+        subject=f"A thank-you from {garage.name}: {_discount_label(discount_code.discount_type, discount_code.discount_value)}",
+        template="loyalty_reward",
+        context={
+            "business_name": garage.name,
+            "business_phone": garage.phone,
+            "business_email": garage.email,
+            "business_address": garage.address,
+            "first_name": customer.first_name,
+            "code": discount_code.code,
+            "discount_label": _discount_label(
+                discount_code.discount_type, discount_code.discount_value
+            ),
+            "visit_count": discount_code.issued_for_visit_count,
+            "expires_at": discount_code.expires_at,
+            "book_url": f"{base}/book/{garage.id}" if base else None,
+            "unsubscribe_url": unsubscribe_url(customer),
+        },
+        trigger_event=LOYALTY_REWARD_ISSUED,
+        customer=customer,
+        discount_code=discount_code,
+        force=force,
+    )
+    if log is not None:
+        discount_code.email_status = (
+            EMAIL_STATUS_SENT if log.status == STATUS_SENT else EMAIL_STATUS_FAILED
+        )
+        if log.status == STATUS_SENT:
+            discount_code.emailed_at = datetime.now(UTC)
+        db.session.commit()
+    return log

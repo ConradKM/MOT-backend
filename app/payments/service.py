@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db
+from app.loyalty.service import sync_booking_request_redemption
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.garage import Garage
@@ -379,6 +380,7 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
         if booking_request.status == "AWAITING_TERMS":
             booking_request.status = "EXPIRED"
             booking_request.payment_hold_expires_at = None
+            sync_booking_request_redemption(booking_request, now)
             expired_count += 1
             continue
         payment = _locked_active_payment(booking_request)
@@ -389,6 +391,8 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
 
         booking_request.status = "EXPIRED"
         booking_request.payment_hold_expires_at = None
+        # Give a held discount code back along with the slot.
+        sync_booking_request_redemption(booking_request, now)
         expired_count += 1
 
         if payment is not None and payment.status in ("REQUIRES_PAYMENT", "PENDING"):
@@ -446,6 +450,7 @@ def _reconcile_if_already_succeeded(
     if payment.status == "SUCCEEDED":
         booking_request.status = "PENDING"
         booking_request.payment_hold_expires_at = None
+        sync_booking_request_redemption(booking_request, now)
         return True
     if payment.status not in ("REQUIRES_PAYMENT", "PENDING") or not payment.provider_payment_id:
         return False
@@ -467,6 +472,7 @@ def _reconcile_if_already_succeeded(
     payment.paid_at = now
     booking_request.status = "PENDING"
     booking_request.payment_hold_expires_at = None
+    sync_booking_request_redemption(booking_request, now)
     if created_notifications is not None:
         created_notifications.append(booking_request)
     record_payment_event(
@@ -802,6 +808,8 @@ def _handle_payment_succeeded(
     if booking_request.status == "AWAITING_PAYMENT":
         booking_request.status = "PENDING"
         booking_request.payment_hold_expires_at = None
+        # The deposit succeeded: a held discount code is now used.
+        sync_booking_request_redemption(booking_request)
         # Queue the external notification until the payment/webhook
         # transaction has committed.  A handler must never confirm a booking
         # that a later database error rolled back.
@@ -856,6 +864,7 @@ def _reinstate_or_flag_expired_booking(
 
     if reason is None:
         booking_request.status = "PENDING"
+        sync_booking_request_redemption(booking_request)
         record_payment_event(
             garage_id=payment.garage_id,
             booking_request_id=booking_request.id,

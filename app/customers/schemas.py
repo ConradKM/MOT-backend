@@ -21,6 +21,9 @@ class CustomerSchema(Schema):
     # app/models/customer.py. Read-only for now; a future Twilio-phase
     # endpoint can let a customer or staff member set it.
     sms_opt_out = fields.Bool(dump_only=True)
+    # Promotional email only (the loyalty reward email). Set by the customer's
+    # unsubscribe link or by staff here; transactional email is unaffected.
+    marketing_email_opt_out = fields.Bool(load_default=False)
 
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
@@ -32,6 +35,7 @@ class CustomerUpdateSchema(Schema):
     email = fields.Email(allow_none=True)
     phone = fields.Str(allow_none=True, validate=validate.Length(max=40))
     notes = fields.Str(allow_none=True, validate=validate.Length(max=5000))
+    marketing_email_opt_out = fields.Bool()
 
 
 class CustomerQueryArgsSchema(Schema):

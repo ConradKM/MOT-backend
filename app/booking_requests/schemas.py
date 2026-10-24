@@ -132,6 +132,14 @@ class BookingRequestSchema(Schema):
     answers_collected = fields.Method("_get_answers_collected", dump_only=True)
     source = fields.Str(dump_only=True)
     requested_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    # A discount code the customer applied at checkout, frozen at
+    # submission: requested_price above is already discounted, and
+    # price_before_discount is the total before it. Null without a code.
+    discount_code = fields.Str(dump_only=True, allow_none=True)
+    discount_type = fields.Str(dump_only=True, allow_none=True)
+    discount_value = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    discount_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    price_before_discount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     # The add-ons the customer picked, snapshotted - already included in
     # requested_price/requested_duration_minutes above.
     add_ons = fields.List(fields.Nested(AppliedAddOnSchema), dump_only=True)

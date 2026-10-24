@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
@@ -12,6 +12,7 @@ from app.appointments.add_ons.service import (
     total_price,
 )
 from app.appointments.checklists.service import snapshot_checklist_for_appointment
+from app.appointments.discounts import booked_base_price, evaluate_for_staff, pre_discount_total
 from app.appointments.scheduling import (
     allowed_statuses,
     capacity_exceeded,
@@ -36,6 +37,17 @@ from app.communications.events import (
 )
 from app.extensions import db
 from app.garages.timezones import local_day_bounds_utc
+from app.loyalty.codes import normalize_code
+from app.loyalty.issuing import issue_reward_safely
+from app.loyalty.service import (
+    DiscountFailure,
+    apply_snapshot,
+    clear_snapshot,
+    redeem,
+    release_appointment_discount,
+    reprice_snapshot,
+    sync_appointment_redemption,
+)
 from app.models.appointments.applied_add_on import AppointmentAddOn
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_status import GarageAppointmentStatus
@@ -43,6 +55,8 @@ from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.customer import Customer
 from app.models.employee import Employee
 from app.models.garage import Garage
+from app.models.loyalty.discount_code import DISCOUNT_SOURCE_LOYALTY, DiscountCode
+from app.models.loyalty.discount_redemption import REDEMPTION_CONSUMED
 from app.models.vehicle import Vehicle
 
 from .schemas import AppointmentQueryArgsSchema, AppointmentSchema, AppointmentUpdateSchema
@@ -232,6 +246,23 @@ def _plan_add_ons(appointment, appointment_type, type_changed, selection):
     return planned
 
 
+def _redeem_or_abort(garage, result, appointment):
+    redemption = redeem(
+        garage,
+        result,
+        customer_id=appointment.customer_id,
+        status=REDEMPTION_CONSUMED,
+        appointment=appointment,
+    )
+    if isinstance(redemption, DiscountFailure):
+        db.session.rollback()
+        abort(
+            422,
+            message=redemption.staff_message,
+            errors={"json": {"discount_code": [redemption.staff_message]}},
+        )
+
+
 def _check_for_conflict(employee_id, start_time, end_time, exclude_appointment_id=None):
     if has_employee_conflict(employee_id, start_time, end_time, exclude_appointment_id):
         abort(
@@ -309,7 +340,7 @@ class AppointmentList(MethodView):
         garage = db.session.query(Garage).filter_by(id=garage_id).with_for_update().one()
 
         _get_owned_employee(data["employee_id"], garage_id)
-        _get_owned_customer(data["customer_id"], garage_id)
+        customer = _get_owned_customer(data["customer_id"], garage_id)
         appointment_type = _get_owned_appointment_type(data["appointment_type_id"], garage_id)
 
         vehicle_id = data.get("vehicle_id")
@@ -328,6 +359,17 @@ class AppointmentList(MethodView):
         if data.get("status") != "CANCELLED":
             _check_capacity(garage, data["start_time"], end_time)
 
+        discount = None
+        if (data.get("discount_code") or "").strip():
+            discount = evaluate_for_staff(
+                garage,
+                data["discount_code"],
+                customer=customer,
+                appointment_type=appointment_type,
+                total=price_at_booking,
+                lock=True,
+            )
+
         appointment = Appointment(
             garage_id=garage_id,
             employee_id=data["employee_id"],
@@ -342,9 +384,17 @@ class AppointmentList(MethodView):
             appointment_type_name_at_booking=appointment_type.name,
             add_ons=[AppointmentAddOn(**snapshot_kwargs(row, garage_id)) for row in add_ons],
         )
+        if appointment.status == "COMPLETED":
+            appointment.completed_at = datetime.now(UTC)
+        if discount is not None:
+            apply_snapshot(appointment, discount)
+            appointment.price_at_booking = discount.new_total
 
         db.session.add(appointment)
         db.session.flush()
+        if discount is not None:
+            _redeem_or_abort(garage, discount, appointment)
+            sync_appointment_redemption(appointment)
         snapshot_checklist_for_appointment(appointment)
         db.session.commit()
 
@@ -352,6 +402,9 @@ class AppointmentList(MethodView):
         # validation abort() above or a failed commit never reaches here, so
         # a confirmation email never goes out for a booking that didn't happen.
         emit_event(APPOINTMENT_CREATED, garage=appointment.garage, appointment=appointment)
+        if appointment.status == "COMPLETED":
+            # Recording a visit as already done is still a completion.
+            issue_reward_safely(appointment)
 
         return appointment
 
@@ -433,8 +486,33 @@ class AppointmentResource(MethodView):
             )
 
         effective_customer_id = data.get("customer_id", appointment.customer_id)
+        effective_customer = appointment.customer
         if "customer_id" in data:
-            _get_owned_customer(data["customer_id"], garage_id)
+            effective_customer = _get_owned_customer(data["customer_id"], garage_id)
+
+        # discount_code: absent (or the code already applied) = unchanged;
+        # a different code replaces it; null/"" removes it.
+        discount_change = None  # None = unchanged, "" = remove, else the new code
+        if "discount_code" in data:
+            requested = (data.pop("discount_code") or "").strip()
+            if normalize_code(requested) != normalize_code(appointment.discount_code):
+                discount_change = requested
+        if (
+            discount_change is None
+            and appointment.discount_code_id is not None
+            and effective_customer_id != appointment.customer_id
+        ):
+            applied_code = db.session.get(DiscountCode, appointment.discount_code_id)
+            if (
+                applied_code is not None
+                and applied_code.source == DISCOUNT_SOURCE_LOYALTY
+                and applied_code.customer_id != effective_customer_id
+            ):
+                message = (
+                    "This appointment's loyalty code belongs to its current customer - "
+                    "remove the code before changing the customer."
+                )
+                abort(422, message=message, errors={"json": {"discount_code": [message]}})
 
         if "vehicle_id" in data and data["vehicle_id"] is not None:
             _get_owned_vehicle(data["vehicle_id"], garage_id, effective_customer_id)
@@ -495,17 +573,31 @@ class AppointmentResource(MethodView):
                 exclude_appointment_id=appointment.id,
             )
 
-        new_price = None
+        # The pre-discount total after this edit. A discounted appointment's
+        # price_at_booking is already discounted, so the base is recovered
+        # from price_before_discount (see booked_base_price) - otherwise an
+        # edit would quietly undo or compound the discount.
+        new_pre_total = pre_discount_total(appointment)
         if planned_add_ons is not None:
             if replacement_appointment_type is not None:
                 base = replacement_appointment_type.base_price
-            elif appointment.price_at_booking is not None:
+            else:
                 # Recover the booked base from the existing snapshot rather
                 # than today's catalogue price - see _plan_add_ons.
-                base = appointment.price_at_booking - price_delta(appointment.add_ons)
-            else:
-                base = None
-            new_price = total_price(base, price_delta(planned_add_ons))
+                base = booked_base_price(appointment)
+            new_pre_total = total_price(base, price_delta(planned_add_ons))
+
+        new_discount = None
+        if discount_change:
+            new_discount = evaluate_for_staff(
+                garage,
+                discount_change,
+                customer=effective_customer,
+                appointment_type=replacement_appointment_type or appointment.appointment_type,
+                total=new_pre_total,
+                appointment=appointment,
+                lock=True,
+            )
 
         previous_status = appointment.status
         previous_start = appointment.start_time
@@ -531,7 +623,28 @@ class AppointmentResource(MethodView):
 
         if planned_add_ons is not None:
             appointment.add_ons = planned_add_ons
-            appointment.price_at_booking = new_price
+
+        if discount_change is not None:
+            # Replacing or removing: give the old code's use back first.
+            if appointment.discount_code_id is not None:
+                release_appointment_discount(appointment)
+            clear_snapshot(appointment)
+            appointment.price_at_booking = new_pre_total
+            if new_discount is not None:
+                apply_snapshot(appointment, new_discount)
+                appointment.price_at_booking = new_discount.new_total
+                db.session.flush()
+                _redeem_or_abort(garage, new_discount, appointment)
+        elif planned_add_ons is not None:
+            # Re-apply the frozen discount to the new total (a no-op
+            # returning the total itself when there is none).
+            appointment.price_at_booking = reprice_snapshot(appointment, new_pre_total)
+
+        if appointment.status != previous_status:
+            appointment.completed_at = (
+                datetime.now(UTC) if appointment.status == "COMPLETED" else None
+            )
+            sync_appointment_redemption(appointment)
 
         db.session.commit()
 
@@ -542,6 +655,10 @@ class AppointmentResource(MethodView):
             emit_event(APPOINTMENT_CANCELLED, garage=appointment.garage, appointment=appointment)
         elif appointment.status == "COMPLETED" and previous_status != "COMPLETED":
             emit_event(APPOINTMENT_COMPLETED, garage=appointment.garage, appointment=appointment)
+            # An explicit, guarded call rather than an event handler:
+            # emit_event swallows handler failures, which would silently skip
+            # a reward (see app/loyalty/issuing.py).
+            issue_reward_safely(appointment)
         elif appointment.status != "CANCELLED" and (
             appointment.start_time != previous_start or appointment.end_time != previous_end
         ):
@@ -580,6 +697,7 @@ class AppointmentResource(MethodView):
         was_cancelled = appointment.status == "CANCELLED"
         _validate_status_transition(appointment.status, "CANCELLED", garage_id)
         appointment.status = "CANCELLED"
+        sync_appointment_redemption(appointment)
         db.session.commit()
         if not was_cancelled:
             emit_event(APPOINTMENT_CANCELLED, garage=appointment.garage, appointment=appointment)

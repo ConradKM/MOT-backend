@@ -40,6 +40,17 @@ class AppointmentSchema(Schema):
         fields.Nested(AppliedAddOnSchema), dump_only=True, attribute="add_ons"
     )
 
+    # Input: an optional discount code to apply (see app/loyalty/service.py).
+    # Output: the code as applied, frozen with the booking - with
+    # price_at_booking the *discounted* total and price_before_discount the
+    # total before it. All null when no code was used.
+    discount_code = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=60))
+    discount_type = fields.Str(dump_only=True, allow_none=True)
+    discount_value = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    discount_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    price_before_discount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    completed_at = fields.DateTime(dump_only=True, allow_none=True)
+
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
@@ -58,6 +69,10 @@ class AppointmentUpdateSchema(Schema):
     # The full new selection (omit to leave add-ons unchanged). Changing
     # appointment_type_id without this clears the old type's add-ons.
     add_ons = fields.List(fields.Nested(AddOnSelectionSchema))
+    # Omit to leave the discount as it is (re-sending the code already
+    # applied is the same as omitting it); a different code replaces it;
+    # null or "" removes it.
+    discount_code = fields.Str(allow_none=True, validate=validate.Length(max=60))
 
 
 class AppointmentQueryArgsSchema(Schema):

@@ -235,6 +235,12 @@ class BookingRequestCreateSchema(Schema):
     # it to return the same PENDING request on a network/browser retry.
     payment_attempt_id = fields.UUID(allow_none=True, load_default=None)
 
+    # Optional discount code. Only the code is ever accepted - never a price
+    # or a discount amount: the server re-checks it on every submission (see
+    # app/loyalty/service.py::evaluate_code) and is the only authority on
+    # what the booking costs. Part of an attempt's idempotency identity.
+    discount_code = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=60))
+
     # What the customer answered to this business's own configured questions.
     # Validated in the route against the workflow that actually applies to the
     # chosen service - nothing about them can be checked here, since which
@@ -280,6 +286,34 @@ class AnswerSubmitSchema(Schema):
     values = fields.List(fields.Str(), load_default=list)
 
 
+class DiscountValidateSchema(Schema):
+    """The checkout's "Apply" - advisory only; submission re-checks."""
+
+    class Meta:
+        unknown = EXCLUDE
+
+    code = fields.Str(required=True, validate=validate.Length(min=1, max=60))
+    appointment_type_id = fields.UUID(required=True)
+    add_ons = fields.List(fields.Nested(AddOnSelectionSchema), load_default=list)
+    # Loyalty codes are personal: they only apply to the customer they were
+    # issued to, matched by email exactly as the booking itself will be.
+    customer_email = fields.Email(required=True, validate=validate.Length(max=320))
+
+
+class DiscountValidationResultSchema(Schema):
+    code = fields.Str(dump_only=True)
+    discount_type = fields.Str(dump_only=True)
+    discount_value = fields.Decimal(dump_only=True, as_string=True)
+    original_total = fields.Decimal(dump_only=True, as_string=True)
+    discount_amount = fields.Decimal(dump_only=True, as_string=True)
+    new_total = fields.Decimal(dump_only=True, as_string=True)
+    # Whether this booking still takes a deposit once discounted - false for
+    # a service with no deposit, and for one the code makes free.
+    deposit_required = fields.Bool(dump_only=True)
+    deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+
+
 class BookingRequestCreatedSchema(Schema):
     id = fields.UUID(dump_only=True)
     status = fields.Str(dump_only=True)
@@ -306,6 +340,10 @@ class DepositIntentCreatedSchema(Schema):
     service_total = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    # service_total is already discounted; these say by what.
+    discount_code = fields.Str(dump_only=True, allow_none=True)
+    discount_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    price_before_discount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     # Which adapter is handling this payment, and how the frontend should
     # present it - see app/payments/providers/base.py's CHECKOUT_MODE_*.
     provider = fields.Str(dump_only=True, allow_none=True)
@@ -346,6 +384,10 @@ class DepositStatusSchema(Schema):
     service_total = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     deposit_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     remaining_balance = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    # service_total is already discounted; these say by what.
+    discount_code = fields.Str(dump_only=True, allow_none=True)
+    discount_amount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
+    price_before_discount = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     hold_expires_at = fields.DateTime(dump_only=True, allow_none=True)
 
 

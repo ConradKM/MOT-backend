@@ -1,8 +1,9 @@
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from hashlib import sha256
 from secrets import token_urlsafe
 
-from flask import current_app, g
+from flask import current_app, g, request
 from flask.views import MethodView
 from flask_smorest import Blueprint, abort
 
@@ -30,11 +31,27 @@ from app.booking_requests.service import auto_accept_booking_request, resolve_cu
 from app.communications.events import BOOKING_REQUEST_CREATED, emit_event
 from app.extensions import db, limiter
 from app.garages.timezones import local_slot_as_utc
+from app.loyalty.codes import normalize_code
+from app.loyalty.service import (
+    DiscountFailure,
+    DiscountResult,
+    apply_snapshot,
+    evaluate_code,
+    find_customer_by_email,
+    log_rejection,
+    redeem,
+)
 from app.models.appointments.applied_add_on import BookingRequestAddOn
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BOOKING_REQUEST_SOURCE_WEB, BookingRequest
 from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
-from app.payments.money import DepositConfigError, minor_to_decimal
+from app.models.loyalty.discount_redemption import REDEMPTION_CONSUMED, REDEMPTION_RESERVED
+from app.payments.money import (
+    PENCE_PER_POUND,
+    DepositConfigError,
+    calculate_deposit_minor,
+    minor_to_decimal,
+)
 from app.payments.providers.base import PaymentProviderError, ProviderNotConfigured
 from app.payments.service import (
     PaymentSubmissionError,
@@ -71,6 +88,8 @@ from .schemas import (
     DepositAttemptRecoverySchema,
     DepositIntentCreatedSchema,
     DepositStatusSchema,
+    DiscountValidateSchema,
+    DiscountValidationResultSchema,
     PaymentTokenSubmissionSchema,
     PublicBookingFlowSchema,
     PublicGarageDetailSchema,
@@ -131,6 +150,82 @@ def _selected_duration(garage, appt_type, add_ons) -> int | None:
     return total_duration(
         _slot_duration_for_type(appt_type, resolve_settings(garage)), duration_delta(add_ons)
     )
+
+
+def _pre_discount_total(appt_type, add_ons) -> Decimal | None:
+    if appt_type is None:
+        return None
+    return total_price(appt_type.base_price, price_delta(add_ons))
+
+
+def _abort_discount(garage, failure: DiscountFailure):
+    """One generic message for every reason a code could be probed by
+    (unknown, expired, used, disabled, someone else's) - see
+    app/loyalty/service.py::GENERIC_FAILURES."""
+    log_rejection(garage.id, failure, channel="public")
+    abort(
+        422,
+        message=failure.public_message,
+        errors={
+            "json": {"discount_code": [failure.public_message]},
+            "reason": "discount_code_invalid",
+        },
+    )
+
+
+def _evaluate_public_discount(garage, data, appt_type, add_ons, *, lock) -> DiscountResult | None:
+    """The authoritative check behind a submission's ``discount_code``, or
+    None when none was sent. The customer is the one this booking will
+    resolve to by email, without creating them."""
+    code = (data.get("discount_code") or "").strip()
+    if not code:
+        return None
+    result = evaluate_code(
+        garage,
+        code,
+        customer=find_customer_by_email(garage.id, data.get("customer_email")),
+        appointment_type=appt_type,
+        total=_pre_discount_total(appt_type, add_ons),
+        lock=lock,
+    )
+    if isinstance(result, DiscountFailure):
+        _abort_discount(garage, result)
+    assert isinstance(result, DiscountResult)
+    return result
+
+
+def _redeem_public(garage, discount, booking_request, status):
+    redemption = redeem(
+        garage,
+        discount,
+        customer_id=booking_request.customer_id,
+        status=status,
+        booking_request=booking_request,
+    )
+    if isinstance(redemption, DiscountFailure):
+        db.session.rollback()
+        _abort_discount(garage, redemption)
+
+
+def _same_discount_code(booking_request, data) -> bool:
+    return normalize_code(booking_request.discount_code) == normalize_code(
+        data.get("discount_code")
+    )
+
+
+def _deposit_preview(appt_type, total: Decimal) -> tuple[bool, Decimal | None]:
+    """(deposit still required?, deposit amount) for a discounted total -
+    the same calculation and cap as app/payments/service.py::create_deposit_hold."""
+    if appt_type is None or not appt_type.deposit_required or total <= 0:
+        return False, None
+    assert appt_type.deposit_type is not None and appt_type.deposit_value is not None
+    minor = calculate_deposit_minor(
+        deposit_type=appt_type.deposit_type,
+        deposit_value=appt_type.deposit_value,
+        base_price=total,
+    )
+    minor = min(minor, int(total * PENCE_PER_POUND))
+    return True, minor_to_decimal(minor)
 
 
 @public_booking_blp.route("/<slug>")
@@ -287,7 +382,9 @@ def _validate_answers_or_abort(garage, data, appointment_type_id):
         abort(422, message="Please check the highlighted answers.", errors={"json": exc.messages})
 
 
-def _build_booking_request(garage, data, appt_type, add_ons, preferred_time, *, status, answers):
+def _build_booking_request(
+    garage, data, appt_type, add_ons, preferred_time, *, status, answers, discount=None
+):
     """Construct (not yet added/committed) a BookingRequest snapshotting the
     public form's submission - shared by the plain submit path (status
     PENDING) and the deposit-intent path (status AWAITING_PAYMENT)."""
@@ -318,7 +415,7 @@ def _build_booking_request(garage, data, appt_type, add_ons, preferred_time, *, 
         vehicle_mileage=usage,
     )
 
-    return BookingRequest(
+    booking_request = BookingRequest(
         garage_id=garage.id,
         status=status,
         booking_reference=unique_booking_reference(db.session),
@@ -365,6 +462,20 @@ def _build_booking_request(garage, data, appt_type, add_ons, preferred_time, *, 
         preferred_employee_note=data.get("preferred_employee_note"),
         notes=data.get("notes"),
     )
+    if discount is not None:
+        # requested_price becomes the discounted total - what the deposit is
+        # taken from and what staff approve - with the original kept beside it.
+        apply_snapshot(booking_request, discount)
+        booking_request.requested_price = discount.new_total
+    return booking_request
+
+
+def _discount_fields(booking_request) -> dict:
+    return {
+        "discount_code": booking_request.discount_code,
+        "discount_amount": booking_request.discount_amount,
+        "price_before_discount": booking_request.price_before_discount,
+    }
 
 
 def _deposit_response(booking_request, payment, session, *, recovery_token=None):
@@ -390,6 +501,7 @@ def _deposit_response(booking_request, payment, session, *, recovery_token=None)
         "checkout_mode": session.checkout_mode,
         "provider_data": session.provider_data,
         "hold_expires_at": booking_request.payment_hold_expires_at,
+        **_discount_fields(booking_request),
     }
     # This capability is emitted only when an attempt is first created.  It
     # must not be reconstructable from the client-generated idempotency UUID,
@@ -422,6 +534,7 @@ def _recovery_response(booking_request, payment, session=None):
         "deposit_amount": deposit_amount,
         "remaining_balance": remaining_balance,
         "hold_expires_at": booking_request.payment_hold_expires_at,
+        **_discount_fields(booking_request),
         "appointment_type_id": booking_request.appointment_type_id,
         "appointment_type_name": (
             booking_request.requested_appointment_type_name
@@ -480,6 +593,7 @@ def _existing_deposit_attempt(garage, attempt_id, appt_type, add_ons, data):
         or selection_signature(booking_request.add_ons) != selection_signature(add_ons)
         or booking_request.preferred_date != data["preferred_date"]
         or booking_request.preferred_time != data.get("preferred_time")
+        or not _same_discount_code(booking_request, data)
     ):
         abort(
             409,
@@ -518,6 +632,7 @@ def _existing_plain_booking_attempt(garage, attempt_id, appt_type, add_ons, data
         or booking_request.preferred_date != data["preferred_date"]
         or booking_request.preferred_time != data.get("preferred_time")
         or booking_request.status == "AWAITING_PAYMENT"
+        or not _same_discount_code(booking_request, data)
     ):
         abort(
             409,
@@ -579,6 +694,8 @@ def _matching_active_plain_request(garage, appt_type, add_ons, data, answers):
         return None
     if selection_signature(candidate.add_ons) != selection_signature(add_ons):
         return None
+    if not _same_discount_code(candidate, data):
+        return None
 
     submitted_answers = [
         (str(row["field"].id), row["value"], tuple(row["value_list"])) for row in answers
@@ -588,6 +705,58 @@ def _matching_active_plain_request(garage, appt_type, add_ons, data, answers):
         for row in sorted(candidate.answers, key=lambda row: row.order)
     ]
     return candidate if stored_answers == submitted_answers else None
+
+
+@public_booking_blp.route("/<slug>/discount-codes/validate")
+class DiscountCodeValidate(MethodView):
+    """The checkout's "Apply": what a code would take off this booking and
+    the deposit that would then be due. Advisory - the booking submit and
+    deposit-intent endpoints re-check the code themselves.
+
+    Unauthenticated, so it is rate-limited strictly per IP *and* per
+    business, and every way a code can be wrong gets the same message, so
+    codes can't be probed or enumerated."""
+
+    @limiter.limit(lambda: current_app.config["PUBLIC_DISCOUNT_VALIDATE_RATELIMIT"])
+    @limiter.limit(
+        lambda: current_app.config["PUBLIC_DISCOUNT_VALIDATE_GARAGE_RATELIMIT"],
+        key_func=lambda: (
+            f"discount-validate:{request.view_args.get('slug') if request.view_args else ''}"
+        ),
+    )
+    @public_booking_blp.arguments(DiscountValidateSchema)
+    @public_booking_blp.response(200, DiscountValidationResultSchema)
+    def post(self, data, slug):
+        garage = _get_garage_by_slug(slug)
+        # Expired holds must give their codes back before limits are checked.
+        expire_stale_payment_holds(garage_id=garage.id)
+        appt_type = _get_active_appointment_type(garage, data["appointment_type_id"])
+        add_ons = _resolve_add_ons(appt_type, data.get("add_ons"))
+        result = _evaluate_public_discount(
+            garage,
+            {"discount_code": data["code"], "customer_email": data["customer_email"]},
+            appt_type,
+            add_ons,
+            lock=False,
+        )
+        assert result is not None
+        deposit_required, deposit_amount = _deposit_preview(appt_type, result.new_total)
+        response = {
+            "code": result.code.code,
+            "discount_type": result.code.discount_type,
+            "discount_value": result.code.discount_value,
+            "original_total": result.original_total,
+            "discount_amount": result.discount_amount,
+            "new_total": result.new_total,
+            "deposit_required": deposit_required,
+            "deposit_amount": deposit_amount,
+            "remaining_balance": (
+                result.new_total - deposit_amount if deposit_amount is not None else None
+            ),
+        }
+        # Evaluating may have released stale redemptions - keep that, it's true.
+        db.session.commit()
+        return response
 
 
 @public_booking_blp.route("/<slug>/booking-requests")
@@ -612,12 +781,18 @@ class BookingRequestSubmit(MethodView):
         appt_type = _get_active_appointment_type(garage, data.get("appointment_type_id"))
         add_ons = _resolve_add_ons(appt_type, data.get("add_ons"))
 
-        if appt_type is not None and appt_type.deposit_required:
-            abort(
-                422,
-                message="This service requires a deposit - start the deposit payment "
-                "flow instead of submitting directly.",
-            )
+        deposit_message = (
+            "This service requires a deposit - start the deposit payment "
+            "flow instead of submitting directly."
+        )
+        # A deposit service only comes this way when a discount code makes
+        # it free - re-checked below, once the code has been evaluated.
+        if (
+            appt_type is not None
+            and appt_type.deposit_required
+            and not (data.get("discount_code") or "").strip()
+        ):
+            abort(422, message=deposit_message)
 
         # Serialise the idempotency lookup, customer/vehicle resolution and
         # eventual insertion even for date-only requests (which do not take
@@ -639,6 +814,14 @@ class BookingRequestSubmit(MethodView):
             if existing_duplicate is not None:
                 return existing_duplicate
 
+        discount = _evaluate_public_discount(garage, data, appt_type, add_ons, lock=True)
+        if (
+            appt_type is not None
+            and appt_type.deposit_required
+            and (discount is None or discount.new_total > 0)
+        ):
+            abort(422, message=deposit_message)
+
         preferred_time = _lock_and_validate_slot(garage, data, appt_type, add_ons)
 
         # Create (or match, by email) the customer's account + vehicle right
@@ -655,12 +838,16 @@ class BookingRequestSubmit(MethodView):
             preferred_time,
             status="PENDING",
             answers=resolved_answers,
+            discount=discount,
         )
         stamp_acceptance(booking_request, terms_version)
 
         db.session.add(booking_request)
         db.session.flush()
         persist_answers(booking_request, resolved_answers)
+        if discount is not None:
+            # A plain booking is confirmed at submission, so the code is used now.
+            _redeem_public(garage, discount, booking_request, REDEMPTION_CONSUMED)
         db.session.commit()
 
         emit_event(BOOKING_REQUEST_CREATED, garage=garage, booking_request=booking_request)
@@ -718,6 +905,16 @@ class DepositIntentCreate(MethodView):
         if existing is not None:
             return existing
 
+        discount = _evaluate_public_discount(garage, data, appt_type, add_ons, lock=True)
+        if discount is not None and discount.new_total <= 0:
+            # Fully discounted: nothing to take a deposit on. The client
+            # submits it as an ordinary booking instead.
+            abort(
+                422,
+                message="Your discount code covers the whole booking, so no deposit is needed.",
+                errors={"reason": "deposit_not_required"},
+            )
+
         preferred_time = _lock_and_validate_slot(garage, data, appt_type, add_ons)
 
         booking_request = _build_booking_request(
@@ -728,6 +925,7 @@ class DepositIntentCreate(MethodView):
             preferred_time,
             status="AWAITING_PAYMENT",
             answers=resolved_answers,
+            discount=discount,
         )
         stamp_acceptance(booking_request, terms_version)
         booking_request.payment_hold_expires_at = payment_hold_deadline()
@@ -737,6 +935,10 @@ class DepositIntentCreate(MethodView):
         db.session.add(booking_request)
         db.session.flush()
         persist_answers(booking_request, resolved_answers)
+        if discount is not None:
+            # Held until the deposit succeeds (app/payments/service.py), and
+            # given back if the hold expires unpaid.
+            _redeem_public(garage, discount, booking_request, REDEMPTION_RESERVED)
 
         try:
             payment, session = create_deposit_hold(
@@ -870,6 +1072,7 @@ class DepositTokenSubmission(MethodView):
             "deposit_amount": deposit_amount,
             "remaining_balance": (base_price - deposit_amount) if base_price is not None else None,
             "hold_expires_at": booking_request.payment_hold_expires_at,
+            **_discount_fields(booking_request),
         }
 
 
@@ -916,6 +1119,7 @@ class DepositStatus(MethodView):
             "deposit_amount": deposit_amount,
             "remaining_balance": remaining_balance,
             "hold_expires_at": booking_request.payment_hold_expires_at,
+            **_discount_fields(booking_request),
         }
 
 

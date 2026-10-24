@@ -79,6 +79,12 @@ class CommunicationLog(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: igno
     booking_request_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("booking_requests.id", ondelete="SET NULL")
     )
+    # Set on a loyalty reward email: one email per issued code, so the
+    # "already sent?" guard (app/email/service.py::_already_sent) keys on the
+    # code rather than the customer, who may earn several over time.
+    discount_code_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("discount_codes.id", ondelete="SET NULL"), index=True
+    )
     # The staff member who placed this, for a browser (Voice SDK) outbound
     # call. Null for everything else - inbound calls, WhatsApp, automation.
     initiated_by_employee_id: Mapped[uuid.UUID | None] = mapped_column(

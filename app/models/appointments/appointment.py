@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
 
+from ..loyalty.snapshot import DiscountSnapshotMixin
 from ..mixins import PrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
@@ -34,7 +35,7 @@ APPOINTMENT_STATUSES = (
 )
 
 
-class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
+class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin, DiscountSnapshotMixin):  # type: ignore[name-defined]
     __tablename__ = "appointments"
     __table_args__ = (Index("ix_appointments_garage_id_start_time", "garage_id", "start_time"),)
 
@@ -96,6 +97,11 @@ class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[na
     # automated messages: the reminder sender skips these until staff
     # reschedule the appointment, which means the business has been in touch.
     imported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When staff marked this COMPLETED in the app (cleared if it is moved out
+    # of COMPLETED again). Null for completions that predate the column and
+    # for imported history - which still count as visits for loyalty, but
+    # can never be what triggers a reward (see app/loyalty/issuing.py).
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="appointments")
     employee: Mapped["Employee"] = relationship("Employee", back_populates="appointments")

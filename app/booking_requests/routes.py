@@ -12,6 +12,7 @@ from app.communications.events import (
 )
 from app.email.service import STATUS_SENT
 from app.extensions import db
+from app.loyalty.service import sync_booking_request_redemption
 from app.models.booking_request import BookingRequest
 from app.models.communications.communication_log import CHANNEL_EMAIL, CommunicationLog
 from app.payments.service import expire_stale_payment_holds, refund_deposit
@@ -155,6 +156,7 @@ class BookingRequestReject(MethodView):
 
         if booking_request.status == "PENDING" and is_request_stale(booking_request):
             booking_request.status = "EXPIRED"
+            sync_booking_request_redemption(booking_request)
             db.session.commit()
 
         if booking_request.status != "PENDING":
@@ -168,6 +170,8 @@ class BookingRequestReject(MethodView):
         booking_request.reviewed_at = datetime.now(UTC)
         booking_request.staff_notes = data.get("staff_notes")
         booking_request.customer_rejection_reason = data.get("customer_rejection_reason")
+        # A rejected booking gives its discount code back.
+        sync_booking_request_redemption(booking_request)
 
         db.session.commit()
 

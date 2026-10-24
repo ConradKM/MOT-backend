@@ -1,0 +1,28 @@
+{% extends "emails/_base.html" %}
+{% block content %}
+<p style="margin:0 0 16px; font-size:16px; color:#111827;">Hi {{ first_name or "there" }},</p>
+<p style="margin:0 0 16px; font-size:15px; color:#374151; line-height:1.5;">
+  Thank you for coming back to <strong>{{ business_name }}</strong>{% if visit_count %} - that's {{ visit_count }} visits{% endif %}.
+  As a thank-you, here is <strong>{{ discount_label }}</strong> your next booking.
+</p>
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 16px;">
+  <tr>
+    <td style="border:2px dashed #1f2937; border-radius:6px; padding:12px 20px; font-size:22px; font-weight:700; letter-spacing:2px; color:#111827; font-family:Menlo,Consolas,monospace;">{{ code }}</td>
+  </tr>
+</table>
+<p style="margin:0 0 16px; font-size:15px; color:#374151; line-height:1.5;">
+  Enter this code in the <strong>Discount code</strong> box when you book online, or mention it when you call.
+  It's just for you and can be used once{% if expires_at %}, until <strong>{{ expires_at.strftime("%-d %B %Y") }}</strong>{% endif %}.
+</p>
+{% if book_url %}
+<p style="margin:0 0 20px;">
+  <a href="{{ book_url }}" style="display:inline-block; background-color:#1f2937; color:#ffffff; text-decoration:none; padding:10px 20px; border-radius:6px; font-size:14px;">Book now</a>
+</p>
+{% endif %}
+{% if unsubscribe_url %}
+<p style="margin:0; font-size:12px; color:#6b7280;">
+  You're receiving this because you're a customer of {{ business_name }}.
+  <a href="{{ unsubscribe_url }}" style="color:#6b7280;">Unsubscribe from offers like this</a> - you'll still get booking confirmations and reminders.
+</p>
+{% endif %}
+{% endblock %}

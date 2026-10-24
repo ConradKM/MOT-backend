@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from flask.views import MethodView
 from flask_jwt_extended import jwt_required
 from flask_smorest import Blueprint, abort
@@ -82,6 +84,10 @@ class CustomerList(MethodView):
             email=data.get("email"),
             phone=data.get("phone"),
             notes=data.get("notes"),
+            marketing_email_opt_out=data.get("marketing_email_opt_out", False),
+            marketing_email_opt_out_at=(
+                datetime.now(UTC) if data.get("marketing_email_opt_out") else None
+            ),
         )
 
         db.session.add(customer)
@@ -123,6 +129,14 @@ class CustomerResource(MethodView):
 
         if not customer:
             abort(404, message="Customer not found")
+
+        if (
+            "marketing_email_opt_out" in data
+            and data["marketing_email_opt_out"] != customer.marketing_email_opt_out
+        ):
+            customer.marketing_email_opt_out_at = (
+                datetime.now(UTC) if data["marketing_email_opt_out"] else None
+            )
 
         for field, value in data.items():
             setattr(customer, field, value)
