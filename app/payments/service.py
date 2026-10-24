@@ -429,6 +429,70 @@ def expire_stale_payment_holds(garage_id=None, now: datetime | None = None) -> i
     return expired_count
 
 
+class HoldNotAbandonable(RuntimeError):
+    """The customer asked to give up a checkout that has already moved on -
+    paid, being confirmed, or no longer a hold. ``reason`` is a stable code."""
+
+    def __init__(self, message: str, *, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+def abandon_public_hold(booking_request: BookingRequest, now: datetime | None = None) -> None:
+    """Release an unpaid deposit hold at the customer's own request - the
+    browser changed something the hold is bound to (a discount code applied
+    or removed after the payment step opened) and is about to start a fresh
+    attempt. Exactly what the expiry sweep does to a timed-out hold, just
+    sooner: the slot and any discount code are released and the provider
+    session is cancelled.
+
+    Never abandons money: a payment the provider already took is reconciled
+    instead (and the booking goes ahead), and an attempt whose card details
+    were submitted and are awaiting confirmation is left alone. Commits.
+    """
+    now = now or datetime.now(UTC)
+    locked = BookingRequest.query.filter_by(id=booking_request.id).with_for_update().one()
+    if locked.status != "AWAITING_PAYMENT":
+        raise HoldNotAbandonable(
+            "This booking is no longer waiting for payment.", reason="not_awaiting_payment"
+        )
+    payment = _locked_active_payment(locked)
+    notifications: list[BookingRequest] = []
+    if payment is not None and _reconcile_if_already_succeeded(locked, payment, now, notifications):
+        db.session.commit()
+        for created in notifications:
+            emit_event(BOOKING_REQUEST_CREATED, garage=created.garage, booking_request=created)
+        raise HoldNotAbandonable("Your deposit has already been paid.", reason="already_paid")
+    if payment is not None and payment.status == "PENDING":
+        raise HoldNotAbandonable(
+            "Your payment is being confirmed - please wait a moment.", reason="payment_in_progress"
+        )
+
+    locked.status = "EXPIRED"
+    locked.payment_hold_expires_at = None
+    sync_booking_request_redemption(locked, now)
+    if payment is not None and payment.status == "REQUIRES_PAYMENT":
+        if payment.provider_payment_id:
+            try:
+                get_provider(
+                    payment.provider, connected_account_id=payment.provider_account_id
+                ).cancel_payment(payment.provider_payment_id)
+            except PaymentProviderError:
+                current_app.logger.warning(
+                    "Failed to cancel abandoned payment intent %s", payment.provider_payment_id
+                )
+        payment.status = "CANCELLED"
+        payment.cancelled_at = now
+        record_payment_event(
+            garage_id=locked.garage_id,
+            booking_request_id=locked.id,
+            payment_id=payment.id,
+            action="payment.deposit.abandoned",
+            summary="Customer restarted checkout before paying; slot released.",
+        )
+    db.session.commit()
+
+
 def _reconcile_if_already_succeeded(
     booking_request: BookingRequest,
     payment: BookingPayment,

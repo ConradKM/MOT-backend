@@ -1272,3 +1272,40 @@ def test_staff_can_set_the_opt_out(authenticated_user, customer):
     assert resp.status_code == 200
     assert resp.get_json()["marketing_email_opt_out"] is True
     assert Customer.query.get(customer.id).marketing_email_opt_out_at is not None
+
+
+def test_abandoning_an_unpaid_hold_releases_the_slot_and_code(
+    client, session, garage, deposit_type
+):
+    code = _code(session, garage, max_uses=1)
+    created = _deposit_intent(client, garage, deposit_type, discount_code="SUMMER10").get_json()
+    url = f"/api/public/{garage.slug}/booking-requests/deposit-attempt/abandon"
+
+    assert client.post(url, json={"recovery_token": "x" * 40}).status_code == 404
+    assert client.post(url, json={"recovery_token": created["recovery_token"]}).status_code == 204
+
+    booking = BookingRequest.query.filter_by(garage_id=garage.id).one()
+    assert booking.status == "EXPIRED"
+    assert booking.active_payment.status == "CANCELLED"
+    assert _redemption(code).status == "RELEASED"
+    # The same slot can be taken again straight away, now without the code.
+    again = _deposit_intent(client, garage, deposit_type, payment_attempt_id=str(uuid.uuid4()))
+    assert again.status_code == 201
+    assert client.post(url, json={"recovery_token": created["recovery_token"]}).status_code == 409
+
+
+def test_a_paid_hold_cannot_be_abandoned(client, session, garage, deposit_type):
+    from app.payments.providers.fake import FakePaymentProvider
+
+    created = _deposit_intent(client, garage, deposit_type).get_json()
+    booking = BookingRequest.query.filter_by(garage_id=garage.id).one()
+    FakePaymentProvider._sessions[booking.active_payment.provider_payment_id]["status"] = (
+        "SUCCEEDED"
+    )
+    resp = client.post(
+        f"/api/public/{garage.slug}/booking-requests/deposit-attempt/abandon",
+        json={"recovery_token": created["recovery_token"]},
+    )
+    assert resp.status_code == 409
+    assert resp.get_json()["errors"]["reason"] == "already_paid"
+    assert BookingRequest.query.get(booking.id).status == "PENDING"

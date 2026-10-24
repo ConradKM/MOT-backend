@@ -54,8 +54,10 @@ from app.payments.money import (
 )
 from app.payments.providers.base import PaymentProviderError, ProviderNotConfigured
 from app.payments.service import (
+    HoldNotAbandonable,
     PaymentSubmissionError,
     PaymentUnavailableError,
+    abandon_public_hold,
     create_deposit_hold,
     expire_stale_payment_holds,
     payment_hold_deadline,
@@ -1004,6 +1006,36 @@ class DepositAttemptRecovery(MethodView):
                 abort(502, message="Could not resume the deposit payment. Please try again.")
 
         return _recovery_response(booking_request, payment, session)
+
+
+@public_booking_blp.route("/<slug>/booking-requests/deposit-attempt/abandon")
+class DepositAttemptAbandon(MethodView):
+    """Give up this browser's own unpaid deposit hold so a fresh attempt can
+    start - used when the customer applies or removes a discount code after
+    the payment step has opened (the hold's price is fixed at creation).
+
+    Authorised by the same one-purpose recovery capability as recovery, in
+    the body; unknown and cross-tenant tokens get the same 404. Never
+    abandons a hold that has been paid or whose payment is being confirmed
+    (409, with ``errors.reason``)."""
+
+    @limiter.limit(lambda: current_app.config["PUBLIC_BOOKING_RATELIMIT"])
+    @public_booking_blp.arguments(DepositAttemptRecoverySchema)
+    @public_booking_blp.response(204)
+    def post(self, data, slug):
+        garage = _get_garage_by_slug(slug)
+        token_hash = sha256(data["recovery_token"].encode()).hexdigest()
+        booking_request = BookingRequest.query.filter_by(
+            garage_id=garage.id, payment_recovery_token_hash=token_hash
+        ).first()
+        if booking_request is None:
+            abort(404, message="Booking recovery attempt not found.")
+        try:
+            abandon_public_hold(booking_request)
+        except HoldNotAbandonable as exc:
+            db.session.rollback()
+            abort(409, message=str(exc), errors={"reason": exc.reason})
+        return ""
 
 
 @public_booking_blp.route("/<slug>/booking-requests/<reference>/payments/token", methods=["POST"])
