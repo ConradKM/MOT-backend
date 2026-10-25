@@ -67,3 +67,21 @@ def test_a_request_without_an_origin_is_never_granted_wildcard(client):
 
     assert resp.status_code == 200
     assert _acao(resp) != "*"
+
+
+@pytest.mark.parametrize("path", ["/api/queue", "/api/queue/settings"])
+def test_preflight_to_a_blueprint_with_a_jwt_before_request_hook_succeeds(client, path):
+    # The staff queue blueprint gates every request in a before_request hook.
+    # A preflight carries no token, so the hook must let OPTIONS through or the
+    # browser never sends the real request.
+    resp = client.options(
+        path,
+        headers={
+            "Origin": ALLOWED,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+
+    assert resp.status_code < 400
+    assert _acao(resp) == ALLOWED

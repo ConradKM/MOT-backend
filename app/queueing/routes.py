@@ -88,6 +88,11 @@ def _public_queue_entitlement():
 
 @queue_blp.before_request
 def _staff_queue_entitlement():
+    # CORS preflights carry no Authorization header; verify_jwt_in_request()
+    # exempts OPTIONS without loading a token, so get_current_employee()
+    # would raise and 500 the preflight - blocking the real request.
+    if request.method == "OPTIONS":
+        return
     verify_jwt_in_request()
     employee = get_current_employee()
     if employee is not None:
