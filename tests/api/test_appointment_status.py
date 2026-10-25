@@ -151,5 +151,11 @@ def test_concurrent_cancellation_and_completion_leave_one_terminal_outcome(
     with ThreadPoolExecutor(max_workers=2) as executor:
         statuses = list(executor.map(mutate, ("complete", "cancel")))
 
-    assert sorted(statuses) == [204, 409]
-    assert Appointment.query.get(appointment_id).status in {"COMPLETED", "CANCELLED"}
+    complete_status, cancel_status = statuses
+    # Exactly one wins, and the stored outcome is the winner's.
+    if complete_status == 200:
+        assert cancel_status == 409
+        assert Appointment.query.get(appointment_id).status == "COMPLETED"
+    else:
+        assert (complete_status, cancel_status) == (409, 204)
+        assert Appointment.query.get(appointment_id).status == "CANCELLED"

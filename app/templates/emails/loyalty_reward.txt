@@ -1,0 +1,14 @@
+Hi {{ first_name or "there" }},
+
+Thank you for coming back to {{ business_name }}{% if visit_count and visit_count > 1 %} - that's {{ visit_count }} visits{% endif %}. As a thank-you, here is {{ discount_label }} your next booking.
+
+Your code: {{ code }}
+
+Enter this code in the Discount code box when you book online, or mention it when you call. It's just for you and can be used once{% if expires_at %}, until {{ expires_at.strftime("%-d %B %Y") }}{% endif %}.
+{% if book_url %}
+Book now: {{ book_url }}
+{% endif %}
+{{ business_name }}{% if business_phone %} - {{ business_phone }}{% endif %}{% if business_email %} - {{ business_email }}{% endif %}
+{% if unsubscribe_url %}
+Unsubscribe from offers like this (you'll still get booking confirmations and reminders): {{ unsubscribe_url }}
+{% endif %}

@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -50,6 +51,15 @@ class Customer(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-
     sms_opt_out: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Promotional email only (the loyalty reward email - see
+    # app/email/service.py::send_loyalty_reward_email). Set by the customer
+    # through the signed unsubscribe link (app/loyalty/unsubscribe.py) or by
+    # staff on the customer record. Transactional email - confirmations,
+    # reminders, receipts - is unaffected.
+    marketing_email_opt_out: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    marketing_email_opt_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     garage: Mapped["Garage"] = relationship("Garage", back_populates="customers")
     vehicles: Mapped[list["Vehicle"]] = relationship(

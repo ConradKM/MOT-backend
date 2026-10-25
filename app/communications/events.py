@@ -54,6 +54,10 @@ ACCOUNT_CREATED = "ACCOUNT_CREATED"
 QUEUE_ENTRY_JOINED = "QUEUE_ENTRY_JOINED"
 # Staff (or the no-show auto-skip) called a walk-in forward - "you're next".
 QUEUE_ENTRY_CALLED = "QUEUE_ENTRY_CALLED"
+# Not emitted through emit_event (see app/loyalty/issuing.py for why issuing
+# is an explicit call); the constant names the reward email's trigger in
+# CommunicationLog.
+LOYALTY_REWARD_ISSUED = "LOYALTY_REWARD_ISSUED"
 
 EVENT_TYPES = (
     BOOKING_REQUEST_CREATED,
@@ -70,6 +74,7 @@ EVENT_TYPES = (
     ACCOUNT_CREATED,
     QUEUE_ENTRY_JOINED,
     QUEUE_ENTRY_CALLED,
+    LOYALTY_REWARD_ISSUED,
 )
 
 EventHandler = Callable[..., None]

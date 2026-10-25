@@ -20,6 +20,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
 
+from .loyalty.snapshot import DiscountSnapshotMixin
 from .mixins import PrimaryKeyMixin, TimestampMixin
 
 if TYPE_CHECKING:
@@ -82,7 +83,7 @@ BOOKING_REQUEST_SOURCE_CONVERSATION = "CONVERSATION"
 BOOKING_REQUEST_SOURCES = (BOOKING_REQUEST_SOURCE_WEB, BOOKING_REQUEST_SOURCE_CONVERSATION)
 
 
-class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin):  # type: ignore[name-defined]
+class BookingRequest(db.Model, PrimaryKeyMixin, TimestampMixin, DiscountSnapshotMixin):  # type: ignore[name-defined]
     """An unauthenticated public booking submission, held for staff review.
 
     Deliberately a flat snapshot of what the public form collected - it never

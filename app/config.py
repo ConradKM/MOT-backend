@@ -87,6 +87,16 @@ class Config:
     # The availability calendar is a read endpoint the wizard polls as the
     # customer clicks around - a much looser limit than the write path.
     PUBLIC_AVAILABILITY_RATELIMIT = os.getenv("PUBLIC_AVAILABILITY_RATELIMIT", "60 per minute")
+    # The checkout's discount-code check (app/public_booking/routes.py::
+    # DiscountCodeValidate) is unauthenticated and answers "is this a code?",
+    # so it is limited tightly per IP and, separately, per business - a
+    # distributed guess at one business's codes hits the second limit.
+    PUBLIC_DISCOUNT_VALIDATE_RATELIMIT = os.getenv(
+        "PUBLIC_DISCOUNT_VALIDATE_RATELIMIT", "10 per minute;30 per hour"
+    )
+    PUBLIC_DISCOUNT_VALIDATE_GARAGE_RATELIMIT = os.getenv(
+        "PUBLIC_DISCOUNT_VALIDATE_GARAGE_RATELIMIT", "300 per hour"
+    )
     # Walk-in queue (app/queueing/routes.py), keyed per client IP *per
     # business*. Join/leave are writes - same budget as a booking submit.
     # Status is polled by the customer's live page (every ~20s), so it needs

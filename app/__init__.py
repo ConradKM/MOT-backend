@@ -248,6 +248,7 @@ def create_app(config_class=Config):
     )
     from .dev.cli import dev_info_command, seed_dev_command
     from .garages.cli import onboard_garage_command, update_garage_details_command
+    from .loyalty.cli import loyalty_reconcile_command
     from .payments.cli import backfill_payment_method_domains_command, refresh_square_tokens_command
     from .platform_admin.cli import (
         create_platform_admin_command,
@@ -269,6 +270,7 @@ def create_app(config_class=Config):
     app.cli.add_command(refresh_square_tokens_command)
     app.cli.add_command(send_due_reminders_command)
     app.cli.add_command(sweep_walkin_queue_command)
+    app.cli.add_command(loyalty_reconcile_command)
 
     from .ai_voice.faqs.routes import voice_faqs_blp
     from .ai_voice.routes import openai_voice_blp
@@ -300,6 +302,7 @@ def create_app(config_class=Config):
     from .garages.routes import garages_blp, public_garages_blp
     from .garages.schedule.routes import garage_schedule_blp
     from .health.routes import health_blp
+    from .loyalty.routes import loyalty_blp, public_marketing_blp
     from .mot_records.routes import mot_records_blp
     from .mot_reminders.routes import mot_reminders_blp
     from .payments.routes import payments_blp
@@ -326,6 +329,8 @@ def create_app(config_class=Config):
     api.register_blueprint(garage_schedule_blp)
     api.register_blueprint(public_garages_blp)
     api.register_blueprint(public_booking_blp)
+    api.register_blueprint(public_marketing_blp)
+    api.register_blueprint(loyalty_blp)
     api.register_blueprint(terms_settings_blp)
     api.register_blueprint(public_terms_blp)
     api.register_blueprint(booking_requests_blp)
@@ -408,6 +413,11 @@ def create_app(config_class=Config):
         voice_call_metrics,
     )
     from .models.conversation import callback_request, conversation_session  # noqa: F401
+    from .models.loyalty import (  # noqa: F401
+        discount_code,
+        discount_redemption,
+        loyalty_settings,
+    )
     from .models.payments import audit_log as payment_audit_log  # noqa: F401
     from .models.payments import (  # noqa: F401
         garage_payment_account_history,
