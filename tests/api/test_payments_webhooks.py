@@ -15,12 +15,15 @@ network call or real account.
 
 import datetime
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from app.extensions import db
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
 from app.models.payments.payment import BookingPayment
 from app.models.payments.webhook_event import PaymentWebhookEvent
+from app.payments.service import expire_stale_payment_holds
 
 
 def _future_weekday(days_ahead=7):
@@ -237,6 +240,57 @@ def test_duplicate_webhook_event_is_a_no_op(client, session, garage):
 
     session.refresh(booking_request)
     assert booking_request.status == "PENDING"  # not double-processed into a broken state
+
+
+def test_concurrent_payment_success_and_hold_expiry_preserve_the_paid_booking(
+    app, client, session, garage
+):
+    """The expiry worker and webhook use separate transactions/connections.
+
+    The request is deliberately already beyond its hold deadline.  Whichever
+    worker wins the race, a real success must end up as a pending booking with
+    a successful payment; it must never remain an expired slot with a charge.
+    """
+    appt_type = _deposit_type(session, garage)
+    created = _start_deposit(client, garage, appt_type)
+    booking_request = BookingRequest.query.filter_by(
+        booking_reference=created["booking_reference"]
+    ).one()
+    payment = BookingPayment.query.filter_by(booking_request_id=booking_request.id).one()
+    booking_request.payment_hold_expires_at = datetime.datetime.now(
+        datetime.UTC
+    ) - datetime.timedelta(minutes=1)
+    session.commit()
+
+    start = Barrier(2)
+    event = {
+        "id": "evt_success_expiry_race",
+        "type": "payment.succeeded",
+        "provider_payment_id": payment.provider_payment_id,
+        "status": "SUCCEEDED",
+    }
+
+    def run_expiry():
+        with app.app_context():
+            start.wait(timeout=5)
+            return expire_stale_payment_holds(garage_id=garage.id)
+
+    def deliver_success():
+        with app.test_client() as worker_client:
+            start.wait(timeout=5)
+            return _webhook(worker_client, event).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        expiry, webhook = list(pool.map(lambda fn: fn(), (run_expiry, deliver_success)))
+
+    assert webhook == 200
+    assert expiry in (0, 1)
+    session.expire_all()
+    booking_request = BookingRequest.query.filter_by(id=booking_request.id).one()
+    payment = BookingPayment.query.filter_by(id=payment.id).one()
+    assert booking_request.status == "PENDING"
+    assert booking_request.payment_hold_expires_at is None
+    assert payment.status == "SUCCEEDED"
 
 
 def test_payment_failed_keeps_hold_open_for_retry(client, session, garage):
