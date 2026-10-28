@@ -706,6 +706,17 @@ class ProvisionServiceInputSchema(ServiceInputSchema):
     are created implicitly, as the onboarding spec does."""
 
     group = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
+    # Created with the service, in list order. Each entry is checked by the
+    # bulk import's add-on rules (app/bulk_import/services.py) when the spec is
+    # built, so the two can't disagree - hence only the shape here.
+    add_ons = fields.List(
+        fields.Dict(),
+        load_default=list,
+        metadata={
+            "description": "Add-ons as in a bulk service import: name, description, "
+            "price_delta, duration_delta_minutes, max_quantity, exclusivity_group, status."
+        },
+    )
 
 
 class ServiceUpdateSchema(Schema):
