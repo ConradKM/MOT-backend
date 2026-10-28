@@ -12,6 +12,7 @@ from app.garages.business_onboarding import (
     onboard_business,
     parse_business_spec,
 )
+from app.models.appointments.add_on import AddOn
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.appointments.appointment_type_group import AppointmentTypeGroup
@@ -80,6 +81,23 @@ def test_onboarding_imports_the_specs_appointments(session):
     assert (appointments[0].end_time - appointments[0].start_time).seconds == 45 * 60
     assert appointments[1].notes == "Silver Golf"
     assert session.query(Customer).count() == 2
+
+
+def test_onboarding_creates_the_specs_service_add_ons(session):
+    services = [{**SPEC["services"][0], "add_ons": [{"name": "Retest", "price_delta": "20"}]}]
+    result = onboard_business(
+        parse_business_spec({**SPEC, "services": services}), temp_password=TEMP_PW
+    )
+
+    add_on = session.query(AddOn).one()
+    assert (add_on.name, str(add_on.price_delta)) == ("Retest", "20.00")
+    assert add_on.garage_id == result.garage.id
+
+
+def test_a_bad_spec_add_on_names_its_path():
+    services = [{**SPEC["services"][0], "add_ons": [{"name": "Retest", "max_quantity": 0}]}]
+    with pytest.raises(BusinessSpecError, match=r"services\[0\]\.add_ons\[0\]\.max_quantity"):
+        parse_business_spec({**SPEC, "services": services})
 
 
 def test_an_appointment_error_fails_the_whole_onboarding(session):

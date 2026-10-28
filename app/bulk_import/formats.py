@@ -17,9 +17,11 @@ from typing import Any
 
 from app.appointments.statuses.defaults import DEFAULT_STATUS_KEYS
 from app.garages.timezones import DEFAULT_BUSINESS_TIMEZONE
+from app.models.appointments.add_on import ADD_ON_MAX_QUANTITY_LIMIT, ADD_ON_STATUSES
 from app.models.appointments.appointment_type import APPOINTMENT_TYPE_STATUSES
 
 from .result import MAX_APPOINTMENTS, MAX_BODY_BYTES, MAX_SERVICES
+from .services import MAX_ADD_ONS_PER_SERVICE
 
 _NULLABLE_STRING = {"type": ["string", "null"]}
 
@@ -40,6 +42,17 @@ SERVICES_EXAMPLE: dict[str, Any] = {
             "default_duration_minutes": 120,
             "status": "ACTIVE",
             "group": "Servicing",
+            "add_ons": [
+                {
+                    "name": "Air-con re-gas",
+                    "description": None,
+                    "price_delta": "45.00",
+                    "duration_delta_minutes": 30,
+                    "max_quantity": 1,
+                    "exclusivity_group": None,
+                    "status": "ACTIVE",
+                }
+            ],
         },
     ]
 }
@@ -71,6 +84,45 @@ SERVICES_SCHEMA: dict[str, Any] = {
                     },
                     "status": {"enum": [*APPOINTMENT_TYPE_STATUSES, None]},
                     "group": {"type": ["string", "null"], "maxLength": 100},
+                    "add_ons": {
+                        "type": ["array", "null"],
+                        "maxItems": MAX_ADD_ONS_PER_SERVICE,
+                        "description": "Optional extras for this service only, in display "
+                        "order. Ignored if the service already exists.",
+                        "items": {
+                            "type": "object",
+                            "required": ["name"],
+                            "properties": {
+                                "name": {"type": "string", "minLength": 1, "maxLength": 100},
+                                "description": {"type": ["string", "null"], "maxLength": 500},
+                                "price_delta": {
+                                    "type": ["string", "null"],
+                                    "pattern": r"^-?\d+(\.\d{1,2})?$",
+                                    "description": "Added to the service price, in pounds; "
+                                    'negative for a discount. Default "0.00".',
+                                },
+                                "duration_delta_minutes": {
+                                    "type": ["integer", "null"],
+                                    "minimum": -1440,
+                                    "maximum": 1440,
+                                    "description": "Added to the service duration; default 0.",
+                                },
+                                "max_quantity": {
+                                    "type": ["integer", "null"],
+                                    "minimum": 1,
+                                    "maximum": ADD_ON_MAX_QUANTITY_LIMIT,
+                                    "description": "How many times it can be picked; default 1.",
+                                },
+                                "exclusivity_group": {
+                                    "type": ["string", "null"],
+                                    "maxLength": 50,
+                                    "description": "At most one add-on with the same label "
+                                    "can be picked on one booking.",
+                                },
+                                "status": {"enum": [*ADD_ON_STATUSES, None]},
+                            },
+                        },
+                    },
                 },
             },
         }
@@ -84,7 +136,12 @@ explanation, no markdown code fences:
 
 {"services": [
   {"name": "...", "description": null, "base_price": "54.85",
-   "default_duration_minutes": 45, "status": "ACTIVE", "group": null}
+   "default_duration_minutes": 45, "status": "ACTIVE", "group": null,
+   "add_ons": [
+     {"name": "...", "description": null, "price_delta": "10.00",
+      "duration_delta_minutes": 15, "max_quantity": 1,
+      "exclusivity_group": null, "status": "ACTIVE"}
+   ]}
 ]}
 
 Rules:
@@ -97,6 +154,12 @@ mention the range in "description".
 says how long it takes.
 - "group": the heading or category the service is listed under, if any.
 - "status": always "ACTIVE".
+- "add_ons": optional extras listed with a service ("+ £10 for...", \
+"add ... for £15"), on that service only. "price_delta" is the extra cost \
+(negative for a discount) and "duration_delta_minutes" the extra time, 0 if \
+not shown. Use "exclusivity_group" with the same short label for extras where \
+only one can be chosen (e.g. sizes). Use [] when a service has none, and \
+never list a service's add-ons as services of their own.
 - Use null for anything you cannot read or that is not shown. Never invent \
 prices, durations or services.
 - Put anything useful that does not fit a field into "description".

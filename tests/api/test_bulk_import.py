@@ -16,6 +16,7 @@ from app.appointment_reminders.service import send_due_appointment_reminders
 from app.bulk_import.appointments import TimeError, parse_wall_clock
 from app.bulk_import.result import MAX_APPOINTMENTS, MAX_BODY_BYTES, MAX_SERVICES
 from app.communications import events
+from app.models.appointments.add_on import AddOn
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.appointments.appointment_type_group import AppointmentTypeGroup
@@ -383,6 +384,111 @@ def test_services_preview_matches_the_commit(owner, appointment_type):
     preview = _post(owner.client, SERVICES_URL, payload).get_json()
     commit = _post(owner.client, SERVICES_URL, payload, dry_run=False).get_json()
     assert _strip_volatile(preview) == _strip_volatile(commit)
+
+
+def test_add_ons_are_created_with_their_service(owner, session, garage):
+    payload = _services(
+        {
+            "name": "Full Service",
+            "add_ons": [
+                {"name": "Air-con re-gas", "price_delta": "45", "duration_delta_minutes": 30},
+                {
+                    "name": "Loyalty discount",
+                    "price_delta": "-10.50",
+                    "max_quantity": 2,
+                    "exclusivity_group": "Discount",
+                    "status": "hidden",
+                },
+            ],
+        },
+        {"name": "Tyres"},
+    )
+    body = _post(owner.client, SERVICES_URL, payload, dry_run=False).get_json()
+
+    assert body["committed"] is True
+    assert body["counts"] == {"new": 2, "exists": 0, "error": 0, "warning": 0}
+    assert body["items"][0]["normalised"]["add_ons"][0] == {
+        "name": "Air-con re-gas",
+        "description": None,
+        "price_delta": "45",
+        "duration_delta_minutes": 30,
+        "max_quantity": 1,
+        "exclusivity_group": None,
+        "status": "ACTIVE",
+    }
+    assert body["items"][1]["normalised"]["add_ons"] == []
+
+    service = session.query(GarageAppointmentType).filter_by(name="Full Service").one()
+    assert [(a.name, a.order) for a in service.add_ons] == [
+        ("Air-con re-gas", 0),
+        ("Loyalty discount", 1),
+    ]
+    discount = service.add_ons[1]
+    assert discount.garage_id == garage.id
+    assert str(discount.price_delta) == "-10.50"
+    assert (discount.duration_delta_minutes, discount.max_quantity) == (0, 2)
+    assert (discount.exclusivity_group, discount.status) == ("Discount", "HIDDEN")
+
+
+def test_add_ons_preview_writes_nothing(owner, session):
+    _post(owner.client, SERVICES_URL, _services({"name": "Tyres", "add_ons": [{"name": "Valve"}]}))
+    assert session.query(AddOn).count() == 0
+
+
+def test_an_existing_services_add_ons_are_not_imported(owner, appointment_type, session):
+    payload = _services({"name": "MOT", "add_ons": [{"name": "Retest"}]})
+    body = _post(owner.client, SERVICES_URL, payload).get_json()
+
+    item = body["items"][0]
+    assert item["status"] == "EXISTS"
+    assert item["normalised"]["add_ons"] == []
+    assert [w["path"] for w in item["warnings"]] == ["services[0].add_ons"]
+
+    _post(owner.client, SERVICES_URL, payload, dry_run=False, acknowledge_warnings=True)
+    assert session.query(AddOn).count() == 0
+
+
+@pytest.mark.parametrize(
+    ("add_ons", "path"),
+    [
+        ({"name": "x"}, "services[0].add_ons"),
+        ([{"name": "x"}] * 51, "services[0].add_ons"),
+        (["Valve"], "services[0].add_ons[0]"),
+        ([{}], "services[0].add_ons[0].name"),
+        ([{"name": "x" * 101}], "services[0].add_ons[0].name"),
+        ([{"name": "A", "price_delta": "£5"}], "services[0].add_ons[0].price_delta"),
+        ([{"name": "A", "price_delta": "1.005"}], "services[0].add_ons[0].price_delta"),
+        (
+            [{"name": "A", "duration_delta_minutes": 1441}],
+            "services[0].add_ons[0].duration_delta_minutes",
+        ),
+        (
+            [{"name": "A", "duration_delta_minutes": "5"}],
+            "services[0].add_ons[0].duration_delta_minutes",
+        ),
+        ([{"name": "A", "max_quantity": 0}], "services[0].add_ons[0].max_quantity"),
+        ([{"name": "A", "max_quantity": 100}], "services[0].add_ons[0].max_quantity"),
+        (
+            [{"name": "A", "exclusivity_group": "g" * 51}],
+            "services[0].add_ons[0].exclusivity_group",
+        ),
+        ([{"name": "A", "status": "LIVE"}], "services[0].add_ons[0].status"),
+        ([{"name": "Valve"}, {"name": " valve"}], "services[0].add_ons[1].name"),
+    ],
+)
+def test_add_on_errors_point_at_the_field(owner, add_ons, path):
+    body = _post(owner.client, SERVICES_URL, _services({"name": "Tyres", "add_ons": add_ons}))
+    item = body.get_json()["items"][0]
+
+    assert item["status"] == "ERROR"
+    assert path in [e["path"] for e in item["errors"]]
+
+
+def test_unknown_add_on_keys_warn(owner):
+    payload = _services({"name": "Tyres", "add_ons": [{"name": "Valve", "colour": "red"}]})
+    item = _post(owner.client, SERVICES_URL, payload).get_json()["items"][0]
+    assert item["status"] == "NEW"
+    assert [w["path"] for w in item["warnings"]] == ["services[0].add_ons[0].colour"]
 
 
 # --------------------------------------------------------------------------
