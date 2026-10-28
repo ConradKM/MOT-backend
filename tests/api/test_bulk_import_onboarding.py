@@ -195,6 +195,31 @@ def test_provisioning_creates_groups_named_by_services(platform_client, session)
     assert session.query(GarageAppointmentType).filter_by(group_id=group.id).count() == 1
 
 
+def test_provisioning_creates_a_services_add_ons(platform_client, session):
+    payload = provision_payload()
+    payload["services"][0]["add_ons"] = [
+        {"name": "Retest", "price_delta": "20"},
+        {"name": "Collection", "duration_delta_minutes": 30, "status": "HIDDEN"},
+    ]
+    assert platform_client.post(TENANTS, json=payload).status_code == 201
+
+    service = session.query(GarageAppointmentType).filter_by(name="MOT test").one()
+    assert [(a.name, str(a.price_delta), a.status) for a in service.add_ons] == [
+        ("Retest", "20.00", "ACTIVE"),
+        ("Collection", "0.00", "HIDDEN"),
+    ]
+
+
+def test_provisioning_refuses_a_bad_add_on_by_its_path(platform_client, session):
+    payload = provision_payload()
+    payload["services"][1]["add_ons"] = [{"name": "Retest", "max_quantity": 0}]
+
+    response = platform_client.post(TENANTS, json=payload)
+    assert response.status_code == 422
+    assert "services[1].add_ons[0].max_quantity" in response.get_json()["message"]
+    assert session.query(Garage).count() == 0
+
+
 # --------------------------------------------------------------------------
 # Tenant services/bulk
 # --------------------------------------------------------------------------

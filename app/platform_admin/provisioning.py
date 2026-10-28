@@ -56,8 +56,8 @@ from app.auth.reset import issue_reset_token
 from app.branding import PLATFORM_NAME
 from app.bulk_import.appointments import import_appointments
 from app.bulk_import.http import run_import
-from app.bulk_import.result import ImportPayloadError, ImportResult
-from app.bulk_import.services import import_services
+from app.bulk_import.result import ImportPayloadError, ImportResult, ItemResult
+from app.bulk_import.services import AddOnSpec, import_services, parse_add_on_rows
 from app.email import send_email
 from app.extensions import db
 from app.garages.business_onboarding import (
@@ -284,6 +284,17 @@ def tenant_configuration(garage: Garage) -> dict:
 # --------------------------------------------------------------------------
 
 
+def _add_ons_from_request(raw: list | None, index: int) -> list[AddOnSpec]:
+    """A wizard service's add-ons, through the bulk import's rules - the first
+    problem found becomes the error, as for the onboarding spec."""
+    item = ItemResult(index=index)
+    add_ons = parse_add_on_rows(raw, f"services[{index}].add_ons", item)
+    if item.errors:
+        issue = item.errors[0]
+        raise ProvisioningError(f"{issue.path}: {issue.message}")
+    return add_ons
+
+
 def _spec_from_request(data: dict) -> BusinessSpec:
     """Turn a validated request body into a :class:`BusinessSpec`.
 
@@ -332,8 +343,9 @@ def _spec_from_request(data: dict) -> BusinessSpec:
                 default_duration_minutes=service.get("default_duration_minutes"),
                 status=service.get("status") or "ACTIVE",
                 group=(service.get("group") or "").strip() or None,
+                add_ons=_add_ons_from_request(service.get("add_ons"), index),
             )
-            for service in data.get("services") or []
+            for index, service in enumerate(data.get("services") or [])
         ],
         appointments=list(data.get("appointments") or []),
         opening_hours=opening_hours,
