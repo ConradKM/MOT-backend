@@ -21,7 +21,7 @@ import math
 from datetime import date, datetime, time, timedelta
 
 from app.garages.schedule.defaults import DEFAULT_OPENING_HOURS, DEFAULT_SETTINGS
-from app.garages.timezones import local_day_for, local_slot_as_utc
+from app.garages.timezones import local_day_for, local_slot_as_utc, timezone_for
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_type import GarageAppointmentType
 from app.models.booking_request import BookingRequest
@@ -211,27 +211,54 @@ def _pending_request_duration(pending_request: BookingRequest, settings: "_Setti
     return settings.default_appointment_minutes
 
 
+def _peak_overlap(intervals, window_start: datetime, window_end: datetime) -> int:
+    """The most ``intervals`` in progress at any single instant of
+    ``[window_start, window_end)``.
+
+    Not the number that merely *touch* the window: a 10:00-14:00 candidate
+    overlapping 10:00-11:00 and 12:00-13:00 bookings only ever has one bay
+    busy alongside it, so with two bays it still fits. Counting overlaps
+    instead would call it full.
+    """
+    events = []
+    for start, end in intervals:
+        if start < window_end and end > window_start:
+            events.append((max(start, window_start), 1))
+            events.append((min(end, window_end), -1))
+    # Ends sort before starts at the same instant: back-to-back bookings
+    # (one ends at 11:00, the next starts at 11:00) never share a bay.
+    events.sort()
+    peak = current = 0
+    for _, delta in events:
+        current += delta
+        peak = max(peak, current)
+    return peak
+
+
 def _slot_usage(
     garage, appointments, pending, slot_start: datetime, duration_min: int, settings: "_Settings"
 ) -> int:
-    """How much of a candidate ``[slot_start, slot_start + duration_min)``
-    window is already used by real appointments or PENDING requests.
+    """Peak bays already in use during a candidate ``[slot_start, slot_start
+    + duration_min)`` window, by real appointments or PENDING requests.
 
-    Each existing item is checked for a genuine interval overlap against its
-    *own* full duration - a 90-minute existing booking or pending request
-    blocks every candidate slot it overlaps, not just the one starting at its
-    exact start time. This is what lets a PENDING request correctly reserve
-    its whole span (e.g. 10:00-11:30 for a 90-minute service), not just the
-    single instant 10:00.
+    Each existing item is checked against its *own* full duration - a
+    90-minute existing booking or pending request blocks every candidate slot
+    it overlaps, not just the one starting at its exact start time. This is
+    what lets a PENDING request correctly reserve its whole span (e.g.
+    10:00-11:30 for a 90-minute service), not just the single instant 10:00.
+
+    The calendar, public submit and deposit holds, and staff scheduling all
+    come through here (via :func:`slot_capacity_usage` for the latter), so
+    what the calendar offers and what a booking is allowed always agree.
     """
     slot_end = slot_start + timedelta(minutes=duration_min)
-    used = sum(1 for a in appointments if a.start_time < slot_end and a.end_time > slot_start)
+    intervals = [(a.start_time, a.end_time) for a in appointments]
     for r in pending:
         p_start = local_slot_as_utc(garage, r.preferred_date, r.preferred_time)
-        p_end = p_start + timedelta(minutes=_pending_request_duration(r, settings))
-        if p_start < slot_end and p_end > slot_start:
-            used += 1
-    return used
+        intervals.append(
+            (p_start, p_start + timedelta(minutes=_pending_request_duration(r, settings)))
+        )
+    return _peak_overlap(intervals, slot_start, slot_end)
 
 
 def day_slots(
@@ -261,6 +288,7 @@ def day_slots(
 
     appointments, pending = _load_day_usage(garage, day)
     windows = _load_reserved_windows(garage, day)
+    tz = timezone_for(garage)
 
     slots = []
     m = _minutes(opens_at)
@@ -281,6 +309,11 @@ def day_slots(
             slots.append(
                 {
                     "start": slot_time.strftime("%H:%M"),
+                    # Wall-clock end of the whole job, from the real elapsed
+                    # span - so a clock change mid-appointment is reflected
+                    # and the customer is never shown a browser-side guess.
+                    "end": slot_end.astimezone(tz).strftime("%H:%M"),
+                    "duration_minutes": duration,
                     "status": status,
                     "remaining": max(0, remaining),
                     "capacity": capacity,
@@ -431,6 +464,8 @@ def availability_range(
 
 
 def _type_duration(appointment_type: "GarageAppointmentType | None", settings: _Settings) -> int:
+    """The length availability uses for a service: its own default, else
+    the garage's generic appointment length."""
     if appointment_type is not None and appointment_type.default_duration_minutes is not None:
         return appointment_type.default_duration_minutes
     return settings.default_appointment_minutes
@@ -466,6 +501,7 @@ def single_day(
         "date": day,
         "is_open": summary["is_open"],
         "level": summary["level"],
+        "duration_minutes": duration,
         "slots": slots,
     }
 
