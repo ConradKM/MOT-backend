@@ -15,6 +15,8 @@ from app.appointments.add_ons.schemas import (
     AppliedAddOnSchema,
     PublicAddOnSchema,
 )
+from app.extensions import db
+from app.models.garage import Garage
 from app.phone import InvalidPhoneNumberError, normalize_uk_mobile
 from app.storage.images import image_url
 
@@ -50,6 +52,10 @@ class PublicAppointmentTypeSchema(Schema):
     description = fields.Str(dump_only=True, allow_none=True)
     base_price = fields.Decimal(dump_only=True, as_string=True, allow_none=True)
     default_duration_minutes = fields.Int(dump_only=True, allow_none=True)
+    # The length availability actually checks - default_duration_minutes, or
+    # the garage's generic default when that is null - so the wizard can show
+    # the real total time without reimplementing the fallback.
+    effective_duration_minutes = fields.Method("_get_effective_duration", dump_only=True)
     # NULL for an ungrouped service. The client groups on this and orders
     # within a group by `order`, rather than the groups carrying id lists -
     # one source of truth for membership, no chance of the two disagreeing.
@@ -74,6 +80,12 @@ class PublicAppointmentTypeSchema(Schema):
 
     def _get_image_url(self, appointment_type):
         return image_url(appointment_type.image_storage_key)
+
+    def _get_effective_duration(self, appointment_type) -> int:
+        from app.public_booking.availability import _type_duration, resolve_settings
+
+        garage = db.session.get(Garage, appointment_type.garage_id)
+        return _type_duration(appointment_type, resolve_settings(garage))
 
     def _get_add_ons(self, appointment_type):
         active = [a for a in appointment_type.add_ons if a.status == "ACTIVE"]
@@ -509,6 +521,9 @@ class AvailabilityRangeSchema(Schema):
 
 class SlotSchema(Schema):
     start = fields.Str(dump_only=True)  # "HH:MM"
+    # "HH:MM", business-local: when the whole appointment would finish.
+    end = fields.Str(dump_only=True)
+    duration_minutes = fields.Int(dump_only=True)
     # available | limited | booked
     status = fields.Str(dump_only=True)
     remaining = fields.Int(dump_only=True)
@@ -519,4 +534,7 @@ class DaySlotsSchema(Schema):
     date = fields.Date(dump_only=True)
     is_open = fields.Bool(dump_only=True)
     level = fields.Str(dump_only=True)
+    # The appointment length these slots were computed for (service plus
+    # any add-ons, or the garage default when none was chosen).
+    duration_minutes = fields.Int(dump_only=True)
     slots = fields.List(fields.Nested(SlotSchema), dump_only=True)

@@ -130,7 +130,7 @@ def test_day_slots_listed_for_an_open_weekday(client, garage):
     assert len(body["slots"]) == 85
     first = body["slots"][0]
     assert first["start"] == "09:00"
-    assert set(first) == {"start", "status", "remaining", "capacity"}
+    assert set(first) == {"start", "end", "duration_minutes", "status", "remaining", "capacity"}
     assert {s["status"] for s in body["slots"]} == {"available"}
 
 
