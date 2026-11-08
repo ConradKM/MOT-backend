@@ -302,6 +302,7 @@ def create_app(config_class=Config):
     from .garages.routes import garages_blp, public_garages_blp
     from .garages.schedule.routes import garage_schedule_blp
     from .health.routes import health_blp
+    from .insights.routes import insights_blp
     from .loyalty.routes import loyalty_blp, public_marketing_blp
     from .mot_records.routes import mot_records_blp
     from .mot_reminders.routes import mot_reminders_blp
@@ -359,6 +360,7 @@ def create_app(config_class=Config):
     api.register_blueprint(calendar_export_blp)
     api.register_blueprint(public_calendar_feeds_blp)
     api.register_blueprint(checklist_item_media_blp)
+    api.register_blueprint(insights_blp)
 
     # The internal operator console (app/platform_admin). A separate namespace
     # (/api/platform-admin/*) behind a separate account table - no garage or

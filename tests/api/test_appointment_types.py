@@ -471,3 +471,60 @@ def test_user_a_cannot_delete_garage_b_appointment_type(
 
     resp = authenticated_user.client.delete(f"/api/appointment-types/{created['id']}")
     assert resp.status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Due-back settings (app/insights/due_back.py)
+# --------------------------------------------------------------------------
+
+
+def test_due_back_settings_default_off(authenticated_user):
+    body = authenticated_user.client.post("/api/appointment-types/", json={"name": "Cut"}).json
+
+    assert body["return_interval_days"] is None
+    assert body["due_back_uses_mot_expiry"] is False
+
+
+def test_owner_sets_and_clears_due_back_settings(authenticated_user):
+    created = authenticated_user.client.post(
+        "/api/appointment-types/",
+        json={"name": "Cut", "return_interval_days": 42, "due_back_uses_mot_expiry": False},
+    ).json
+    assert created["return_interval_days"] == 42
+
+    url = f"/api/appointment-types/{created['id']}"
+    patched = authenticated_user.client.patch(url, json={"due_back_uses_mot_expiry": True}).json
+    assert patched["due_back_uses_mot_expiry"] is True
+    assert patched["return_interval_days"] == 42
+
+    cleared = authenticated_user.client.patch(url, json={"return_interval_days": None}).json
+    assert cleared["return_interval_days"] is None
+
+
+def test_return_interval_must_be_positive_and_sensible(authenticated_user):
+    for days in (0, -7, 5 * 366 + 1):
+        resp = authenticated_user.client.post(
+            "/api/appointment-types/", json={"name": "Cut", "return_interval_days": days}
+        )
+        assert resp.status_code == 422, days
+
+
+def test_staff_cannot_change_due_back_settings(
+    client, session, garage, staff_role, appointment_type
+):
+    from flask_jwt_extended import create_access_token
+
+    from app.models.employee import Employee
+
+    staff = Employee(garage_id=garage.id, email="s@garage-a.example", password_hash="x")
+    staff.roles = [staff_role]
+    session.add(staff)
+    session.commit()
+    token = create_access_token(identity=str(staff.id))
+
+    resp = client.patch(
+        f"/api/appointment-types/{appointment_type.id}",
+        json={"return_interval_days": 30},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403

@@ -2,6 +2,10 @@ from marshmallow import Schema, fields, validate
 
 from app.models.appointments.appointment_type import APPOINTMENT_TYPE_STATUSES, DEPOSIT_TYPES
 
+#: Five years: comfortably beyond any real return cycle (an annual MOT, a
+#: two-yearly service), short enough to catch a value typed in the wrong unit.
+MAX_RETURN_INTERVAL_DAYS = 5 * 366
+
 
 class AppointmentTypeSchema(Schema):
     id = fields.UUID(dump_only=True)
@@ -32,6 +36,14 @@ class AppointmentTypeSchema(Schema):
     deposit_value = fields.Decimal(allow_none=True, load_default=None, as_string=True, places=2)
     deposit_currency = fields.Str(load_default="GBP", validate=validate.Equal("GBP"))
 
+    # --- due back (see app/insights/due_back.py) ---------------------------
+    return_interval_days = fields.Int(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Range(min=1, max=MAX_RETURN_INTERVAL_DAYS),
+    )
+    due_back_uses_mot_expiry = fields.Bool(load_default=False)
+
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True)
 
@@ -54,6 +66,11 @@ class AppointmentTypeUpdateSchema(Schema):
     deposit_type = fields.Str(allow_none=True, validate=validate.OneOf(DEPOSIT_TYPES))
     deposit_value = fields.Decimal(allow_none=True, as_string=True, places=2)
     deposit_currency = fields.Str(validate=validate.Equal("GBP"))
+
+    return_interval_days = fields.Int(
+        allow_none=True, validate=validate.Range(min=1, max=MAX_RETURN_INTERVAL_DAYS)
+    )
+    due_back_uses_mot_expiry = fields.Bool()
 
 
 class AppointmentTypeQueryArgsSchema(Schema):

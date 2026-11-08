@@ -15,10 +15,12 @@ never had a deliberate exception.
 
 **Scope, stated plainly:** this module is the source of truth for what a
 tenant's feature set *is*, and Platform Admin manages it end to end (read,
-override, clear, audited). No existing product behaviour is gated on it yet -
-adopting :func:`feature_enabled` at each feature's entry point is a separate,
-deliberate change per feature, so that turning a flag off can be reviewed
-against what that feature already does for live tenants.
+override, clear, audited). Adopting :func:`feature_enabled` at a feature's
+entry point is a separate, deliberate change per feature, so that turning a
+flag off can be reviewed against what that feature already does for live
+tenants. Gated so far: ``walk_in_queue`` (app/queueing/routes.py) and
+``insights_advanced`` (app/insights/routes.py). Staff read their business's
+effective flags from ``GET /api/garage/features``.
 """
 
 from __future__ import annotations
@@ -83,6 +85,13 @@ FEATURES: tuple[Feature, ...] = (
         key="loyalty",
         label="Loyalty",
         description="Visit-based customer loyalty for this business.",
+    ),
+    Feature(
+        key="insights_advanced",
+        label="Advanced insights",
+        description="Trend charts, busy days and times, staff performance, customer "
+        "retention and due-back list, and CSV export on the Insights page. Basic "
+        "insights (headline figures and top services) are on every plan.",
     ),
 )
 

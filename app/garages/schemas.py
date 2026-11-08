@@ -111,3 +111,8 @@ class CapacitySummarySchema(Schema):
 
     today = fields.Nested(TodayCapacitySchema, dump_only=True)
     week = fields.Nested(WeekCapacitySchema, dump_only=True)
+
+
+class GarageFeaturesSchema(Schema):
+    plan = fields.Str()
+    features = fields.Dict(keys=fields.Str(), values=fields.Bool())
