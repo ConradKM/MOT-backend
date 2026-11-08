@@ -19,7 +19,25 @@ from app.models.booking_request import BookingRequest
 from app.models.customer import Customer
 from app.models.vehicle import Vehicle
 
-START = "2026-11-03T09:00:00+00:00"
+
+def _future_weekday(days_ahead=7):
+    """A Mon-Fri date safely inside the default schedule's booking window
+    (24h lead, 60-day horizon), relative to today so it never goes stale."""
+    day = datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=days_ahead)
+    while day.weekday() >= 5:
+        day += datetime.timedelta(days=1)
+    return day
+
+
+SLOT_DAY = _future_weekday()
+
+
+def _slot(hhmm):
+    """ISO-8601 UTC timestamp on SLOT_DAY, e.g. _slot("09:30")."""
+    return f"{SLOT_DAY.isoformat()}T{hhmm}:00+00:00"
+
+
+START = _slot("09:00")
 
 
 def _concurrently(callables):
@@ -127,7 +145,7 @@ def test_approve_creates_and_links_customer_vehicle_appointment(
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
 
@@ -171,7 +189,7 @@ def test_approval_preserves_requested_duration_after_service_edit(
 
     assert resp.status_code == 200
     appointment = db.session.get(Appointment, resp.get_json()["appointment_id"])
-    assert appointment.end_time == datetime.datetime.fromisoformat("2026-11-03T10:30:00+00:00")
+    assert appointment.end_time == datetime.datetime.fromisoformat(_slot("10:30"))
 
 
 def test_approve_triggers_appointment_confirmation_email(
@@ -195,7 +213,7 @@ def test_approve_triggers_appointment_confirmation_email(
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
 
@@ -214,7 +232,7 @@ def test_approve_snapshots_the_types_price_onto_the_appointment(
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
 
@@ -239,7 +257,7 @@ def test_approve_preserves_the_request_price_when_the_service_was_edited(
         json={
             "employee_id": str(authenticated_user.user.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
     assert resp.status_code == 200
@@ -262,7 +280,7 @@ def test_approve_preserves_the_request_service_name_when_the_type_is_renamed(
         json={
             "employee_id": str(authenticated_user.user.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
 
@@ -289,7 +307,7 @@ def test_approve_creates_the_appointments_checklist_instance(
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
     appointment_id = resp.get_json()["appointment_id"]
@@ -318,7 +336,7 @@ def test_approve_reuses_an_existing_customer_matched_by_email(
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
 
@@ -399,7 +417,7 @@ def test_approving_twice_conflicts(authenticated_user, session, garage, booking_
         "employee_id": str(authenticated_user.user.id),
         "appointment_type_id": str(appt_type.id),
         "start_time": START,
-        "end_time": "2026-11-03T09:45:00+00:00",
+        "end_time": _slot("09:45"),
     }
     authenticated_user.client.post(f"/api/booking-requests/{booking_request.id}/approve", json=body)
     resp = authenticated_user.client.post(
@@ -479,7 +497,7 @@ def test_reject_after_approve_conflicts(authenticated_user, session, garage, boo
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
 
@@ -675,7 +693,7 @@ def test_approved_request_reports_the_reviewers_name(
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
 
@@ -866,8 +884,8 @@ def test_approved_and_rejected_history_is_untouched_by_the_sweep(
         json={
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
-            "start_time": "2026-11-05T09:00:00+00:00",
-            "end_time": "2026-11-05T09:30:00+00:00",
+            "start_time": _slot("09:00"),
+            "end_time": _slot("09:30"),
         },
     )
     old_reviewed_at = approved.reviewed_at
@@ -907,7 +925,7 @@ def test_approval_rejected_when_capacity_per_slot_is_already_full(
         session,
         garage,
         customer_email="other-request@example.com",
-        preferred_date=datetime.date(2026, 11, 3),
+        preferred_date=SLOT_DAY,
         preferred_time=datetime.time(9, 0),
     )
     authenticated_user.client.post(
@@ -916,7 +934,7 @@ def test_approval_rejected_when_capacity_per_slot_is_already_full(
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:30:00+00:00",
+            "end_time": _slot("09:30"),
         },
     )
 
@@ -924,7 +942,7 @@ def test_approval_rejected_when_capacity_per_slot_is_already_full(
         session,
         garage,
         customer_email="second-request@example.com",
-        preferred_date=datetime.date(2026, 11, 3),
+        preferred_date=SLOT_DAY,
         preferred_time=datetime.time(9, 0),
     )
     resp = authenticated_user.client.post(
@@ -935,7 +953,7 @@ def test_approval_rejected_when_capacity_per_slot_is_already_full(
             "employee_id": str(second_employee.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:30:00+00:00",
+            "end_time": _slot("09:30"),
         },
     )
     assert resp.status_code == 409
@@ -967,7 +985,7 @@ def test_concurrent_approvals_competing_for_last_capacity_commit_once(
             session,
             garage,
             customer_email=f"concurrent-{number}@example.com",
-            preferred_date=datetime.date(2026, 11, 3),
+            preferred_date=SLOT_DAY,
             # A date-only request has not already reserved this exact slot.
             # The competing, staff-selected slot below is the race under test.
             preferred_time=None,
@@ -991,7 +1009,7 @@ def test_concurrent_approvals_competing_for_last_capacity_commit_once(
                         "employee_id": str(employee_id),
                         "appointment_type_id": str(type_id),
                         "start_time": START,
-                        "end_time": "2026-11-03T09:30:00+00:00",
+                        "end_time": _slot("09:30"),
                     },
                     headers={"Authorization": f"Bearer {token}"},
                 )
@@ -1034,7 +1052,7 @@ def test_concurrent_auto_accepts_leave_unassignable_request_pending(
             session,
             garage,
             customer_email=f"auto-race-{number}@example.com",
-            preferred_date=datetime.date(2026, 11, 3),
+            preferred_date=SLOT_DAY,
             preferred_time=datetime.time(9, 0),
             appointment_type_id=appt_type.id,
             requested_duration_minutes=30,
@@ -1099,7 +1117,7 @@ def test_approval_rejects_a_deactivated_employee(
             "employee_id": str(deactivated.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
     assert resp.status_code == 422
@@ -1130,7 +1148,7 @@ def test_approve_reactivates_an_archived_customer_matched_by_email(
             "employee_id": str(authenticated_user.user.id),
             "appointment_type_id": str(appt_type.id),
             "start_time": START,
-            "end_time": "2026-11-03T09:45:00+00:00",
+            "end_time": _slot("09:45"),
         },
     )
 
