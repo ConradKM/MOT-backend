@@ -92,6 +92,18 @@ class GarageAppointmentType(db.Model, PrimaryKeyMixin, TimestampMixin):  # type:
     # anyway so a future multi-currency garage doesn't need a schema change.
     deposit_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="GBP")
 
+    # --- "due back" (see app/insights/due_back.py) ---------------------------
+    # How long customers usually leave between visits for this service. NULL
+    # means the service never produces due-back entries - a one-off job has
+    # no natural return date, and guessing one would nag customers.
+    return_interval_days: Mapped[int | None] = mapped_column(Integer)
+    # Opt-in for vehicle businesses: take the due date from the vehicle's
+    # stored MOT expiry instead of last visit + interval. Explicit rather than
+    # inferred from the service's name, which is free text.
+    due_back_uses_mot_expiry: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+
     garage: Mapped["Garage"] = relationship("Garage", back_populates="appointment_types")
     group: Mapped["AppointmentTypeGroup | None"] = relationship(
         "AppointmentTypeGroup", back_populates="appointment_types"

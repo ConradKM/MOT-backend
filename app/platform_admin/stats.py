@@ -30,6 +30,16 @@ from typing import cast as type_cast
 
 from sqlalchemy import Date, case, cast, func, select
 
+from app.analytics.queries import (
+    DEFAULT_PERIOD_DAYS,
+    appointment_status_counts,
+    booking_request_status_counts,
+    clamp_days,
+    summarise_appointment_statuses,
+    summarise_booking_requests,
+)
+from app.analytics.queries import grouped as _grouped
+from app.analytics.queries import rate as _rate
 from app.extensions import db
 from app.models.appointments.appointment import Appointment
 from app.models.appointments.appointment_checklist import AppointmentChecklist
@@ -45,9 +55,6 @@ from app.models.garage import (
 )
 from app.models.reminder import Reminder
 from app.models.vehicle import Vehicle
-
-DEFAULT_PERIOD_DAYS = 30
-MAX_PERIOD_DAYS = 730
 
 #: A communication row in one of these states did not reach the recipient.
 #: Free text at the DB level (see CommunicationLog), so this is a *set of
@@ -67,86 +74,21 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def clamp_days(days: int | None) -> int:
-    if not days:
-        return DEFAULT_PERIOD_DAYS
-    return max(1, min(int(days), MAX_PERIOD_DAYS))
-
-
-def _rate(numerator: int, denominator: int) -> float | None:
-    """A percentage, or ``None`` when there is nothing to divide by."""
-    if not denominator:
-        return None
-    return round(100 * numerator / denominator, 1)
-
-
-def _grouped(column, *filters) -> dict:
-    """``{column value: count}`` for one grouped query."""
-    query = select(column, func.count())
-    if filters:
-        query = query.where(*filters)
-    rows = db.session.execute(query.group_by(column)).all()
-    return {key: count for key, count in rows}
-
-
 # --------------------------------------------------------------------------
 # Per-tenant
 # --------------------------------------------------------------------------
 
 
 def _booking_request_stats(garage_id: uuid.UUID, since: datetime) -> dict:
-    by_status = _grouped(
-        BookingRequest.status,
-        BookingRequest.garage_id == garage_id,
-        BookingRequest.created_at >= since,
-    )
-    approved = by_status.get("APPROVED", 0)
-    rejected = by_status.get("REJECTED", 0)
-    expired = by_status.get("EXPIRED", 0)
-    pending = by_status.get("PENDING", 0)
-    reviewed = approved + rejected
-
-    return {
-        "total": sum(by_status.values()),
-        "pending": pending,
-        "approved": approved,
-        "rejected": rejected,
-        "expired": expired,
-        # Of the requests staff actually made a decision on. Expired requests
-        # are excluded - nobody decided them, so counting them as rejections
-        # would blame staff for a queue they never saw.
-        "approval_rate": _rate(approved, reviewed),
-        "rejection_rate": _rate(rejected, reviewed),
-        # Of everything received: how much was left to time out.
-        "expiry_rate": _rate(expired, sum(by_status.values())),
-    }
+    return summarise_booking_requests(booking_request_status_counts(garage_id, start=since))
 
 
 def _appointment_stats(garage_id: uuid.UUID, since: datetime) -> dict:
-    by_status = _grouped(
-        Appointment.status,
-        Appointment.garage_id == garage_id,
-        Appointment.start_time >= since,
+    # Bucketed by start_time, open-ended: an upcoming booking made in the
+    # window still counts, as it always has on this page.
+    return summarise_appointment_statuses(
+        appointment_status_counts(garage_id, start=since, basis="start_time")
     )
-    total = sum(by_status.values())
-    completed = by_status.get("COMPLETED", 0)
-    no_show = by_status.get("NO_SHOW", 0)
-    cancelled = by_status.get("CANCELLED", 0)
-    # Appointments whose outcome is known. An upcoming BOOKED slot isn't a
-    # missed one, so it must not drag the no-show rate down.
-    concluded = completed + no_show + cancelled
-
-    return {
-        "total": total,
-        "by_status": by_status,
-        "completed": completed,
-        "no_show": no_show,
-        "cancelled": cancelled,
-        "upcoming": by_status.get("BOOKED", 0) + by_status.get("REQUESTED", 0),
-        "completion_rate": _rate(completed, concluded),
-        "no_show_rate": _rate(no_show, completed + no_show),
-        "cancellation_rate": _rate(cancelled, concluded),
-    }
 
 
 def _customer_stats(garage_id: uuid.UUID, since: datetime) -> dict:

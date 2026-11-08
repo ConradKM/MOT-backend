@@ -133,6 +133,8 @@ class AppointmentTypeList(MethodView):
             deposit_type=deposit_type,
             deposit_value=deposit_value,
             deposit_currency=data.get("deposit_currency") or "GBP",
+            return_interval_days=data.get("return_interval_days"),
+            due_back_uses_mot_expiry=data.get("due_back_uses_mot_expiry", False),
         )
 
         db.session.add(appointment_type)

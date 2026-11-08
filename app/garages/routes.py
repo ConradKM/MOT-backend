@@ -6,6 +6,7 @@ from app.auth.decorators import owner_required
 from app.auth.utils import get_current_employee
 from app.extensions import db
 from app.models.garage import GARAGE_STATUS_ACTIVE, GARAGE_STATUS_TRIAL, Garage
+from app.platform_admin.features import feature_summary
 from app.public_booking.payload import public_garage_payload
 from app.public_booking.schemas import PublicGarageDetailSchema
 
@@ -18,6 +19,7 @@ from .schemas import (
     BookingRequestSettingsSchema,
     CapacitySummarySchema,
     GarageDetailsUpdateSchema,
+    GarageFeaturesSchema,
     GarageSchema,
 )
 
@@ -64,6 +66,22 @@ class GarageResource(MethodView):
         except ValueError as exc:
             abort(422, message=str(exc))
         return garage
+
+
+@garages_blp.route("/features")
+class GarageFeatures(MethodView):
+    @jwt_required()
+    @garages_blp.response(200, GarageFeaturesSchema)
+    def get(self):
+        """Which plan features are on for the caller's business - its plan's
+        defaults with Platform Admin's per-tenant overrides applied. Any
+        employee may read it, so the staff app can show "Not on your plan"
+        instead of a broken page. Managing flags stays in Platform Admin."""
+        garage = get_current_employee().garage
+        return {
+            "plan": garage.plan,
+            "features": {flag["key"]: flag["enabled"] for flag in feature_summary(garage)},
+        }
 
 
 @garages_blp.route("/booking-appearance")

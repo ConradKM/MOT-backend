@@ -37,7 +37,25 @@ APPOINTMENT_STATUSES = (
 
 class Appointment(db.Model, PrimaryKeyMixin, TimestampMixin, DiscountSnapshotMixin):  # type: ignore[name-defined]
     __tablename__ = "appointments"
-    __table_args__ = (Index("ix_appointments_garage_id_start_time", "garage_id", "start_time"),)
+    __table_args__ = (
+        Index("ix_appointments_garage_id_start_time", "garage_id", "start_time"),
+        # Insights: a staff member's own appointments in a period, and each
+        # customer's visit history per service (first visit, last visit of a
+        # service for due-back) - see app/insights/service.py.
+        Index(
+            "ix_appointments_garage_id_employee_id_start_time",
+            "garage_id",
+            "employee_id",
+            "start_time",
+        ),
+        Index(
+            "ix_appointments_garage_customer_type_start",
+            "garage_id",
+            "customer_id",
+            "appointment_type_id",
+            "start_time",
+        ),
+    )
 
     garage_id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
